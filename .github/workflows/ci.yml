@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: lint + types + tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # asimov-protocol is a PRIVATE repo pulled by git URL. The default GITHUB_TOKEN
+      # cannot read it, so the org-level ASIMOV_REPOS_TOKEN (the same one the firmware's
+      # CI uses to fetch its proto submodule) is handed to git for github.com only.
+      # It never reaches a build artefact: it lives in the runner's git config.
+      - name: Grant git read access to menloresearch repos
+        env:
+          TOKEN: ${{ secrets.ASIMOV_REPOS_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::ASIMOV_REPOS_TOKEN is not available to this workflow; uv sync will fail on asimov-protocol"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      - name: Sync (locked)
+        run: uv sync --python ${{ matrix.python }} --locked --all-groups
+
+      - name: Ruff (lint)
+        run: uv run ruff check .
+
+      - name: Ruff (format)
+        run: uv run ruff format --check .
+
+      - name: Mypy (strict)
+        run: uv run mypy
+
+      - name: Unit tests
+        run: uv run pytest -m "not integration and not live"
+
+      - name: Package builds
+        run: uv build && ls -l dist/
+
+  # The real edge connector, in-process: proves the wire, not just the fake. Clones
+  # asimov-edge at the commit the SDK is developed against; skipped only when the
+  # token is missing, and then LOUDLY.
+  integration:
+    name: real UdpConnector (asimov-edge)
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Grant git read access to menloresearch repos
+        env:
+          TOKEN: ${{ secrets.ASIMOV_REPOS_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "::error::ASIMOV_REPOS_TOKEN missing"; exit 1; }
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+      - name: Check out asimov-edge at the pinned commit
+        run: |
+          EDGE_REF="$(sed -nE 's/^ASIMOV_EDGE_REF=(.*)$/\1/p' tests/integration/edge.pin)"
+          git clone --depth 1 https://github.com/menloresearch/asimov-edge.git /tmp/asimov-edge
+          git -C /tmp/asimov-edge fetch --depth 1 origin "$EDGE_REF"
+          git -C /tmp/asimov-edge checkout "$EDGE_REF"
+      - name: Sync + install the edge into the same environment
+        run: |
+          uv sync --locked --all-groups
+          uv pip install /tmp/asimov-edge
+      - name: Integration tests
+        env:
+          ASIMOV_EDGE_SRC: /tmp/asimov-edge/src
+        run: uv run pytest -m integration
