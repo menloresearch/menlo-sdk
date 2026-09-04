@@ -99,6 +99,8 @@ class Robot:
         self._stop = threading.Event()
         self._keepalive: threading.Thread | None = None
         self._pending: collections.OrderedDict[int, Sent] = collections.OrderedDict()
+        self._last_mode: Sent | None = None  # the stand/damp/trajectory a wait may be waiting on
+        self._subscribed = False
         self._refusals: collections.deque[Refused] = collections.deque(maxlen=256)
         self._closed = True
         self._link_lost: LinkLost | None = None
@@ -134,9 +136,11 @@ class Robot:
     def open(self, *, timeout: float = 5.0, allow_version_skew: bool = False) -> None:
         if not self._closed:
             raise AsimovError("this Robot is already open")
-        self._tx.subscribe_state(self._on_state)
-        self._tx.subscribe_outcome(self._on_outcome)
-        self._tx.subscribe_controller_change(self._on_controller)
+        if not self._subscribed:  # a failed open() followed by a retry must not double-subscribe
+            self._tx.subscribe_state(self._on_state)
+            self._tx.subscribe_outcome(self._on_outcome)
+            self._tx.subscribe_controller_change(self._on_controller)
+            self._subscribed = True
         self._tx.open()
         self._closed = False
         self._stop.clear()
@@ -186,7 +190,10 @@ class Robot:
             self._generation += 1
         self._stop.set()
         if self._keepalive is not None:
-            self._keepalive.join(timeout=2.0)
+            # close() may run on the keepalive thread itself (an on_link_lost handler that
+            # closes the robot); a thread cannot join itself, and it is exiting anyway.
+            if self._keepalive is not threading.current_thread():
+                self._keepalive.join(timeout=2.0)
             self._keepalive = None
         if had_velocity:
             try:
@@ -237,6 +244,9 @@ class Robot:
         v = asked.clamped(self.limits)
         if duration is not None and duration <= 0:
             raise ValueError("duration must be positive")
+        # Bump and send under ONE lock hold: a verb issued by the caller must never be
+        # dropped as "superseded" by a concurrent verb. The generation fence exists for the
+        # keepalive's re-sends, which are the only sends that may legitimately go stale.
         with self._lock:
             self._generation += 1
             gen = self._generation
@@ -244,7 +254,8 @@ class Robot:
             self._latch_deadline = (
                 time.monotonic() + duration if (duration is not None and not v.is_zero) else None
             )
-        return self._send("set_velocity", v, gen, clamped=(v != asked))
+            self._last_mode = None  # a new drive supersedes whatever posture change preceded it
+            return self._send("set_velocity", v, gen, clamped=(v != asked))
 
     def stop(self) -> Sent:
         """Zero velocity. The firmware stays in MOVE at zero speed (standing in place under
@@ -295,7 +306,8 @@ class Robot:
 
         Ends early, with a typed error, when the answer can no longer come: the stream
         went quiet (:class:`StateStale`), the firmware fault-DAMPed (:class:`RobotFaulted`),
-        or the most recent ``stand``/``damp`` was refused (:class:`CommandRefusedError`).
+        or the ``stand``/``damp``/``trajectory`` still in force — the last verb sent, when
+        it was one of those — was refused (:class:`CommandRefusedError`).
         """
         stale = self.link_timeout if stale_after is None else stale_after
         deadline = time.monotonic() + timeout
@@ -313,7 +325,7 @@ class Robot:
                     )
                 if predicate(s):
                     return s
-                if s.faulted and s.mode is Mode.DAMP:
+                if s.faulted and s.mode in (Mode.DAMP, Mode.UNKNOWN):
                     raise RobotFaulted(
                         "the firmware fault-DAMPed; the wait cannot succeed "
                         f"(error_flags={s.error_flags}, critical alerts="
@@ -321,9 +333,9 @@ class Robot:
                         state=s,
                     )
                 last = s
-            refused = self._last_mode_refusal()
-            if refused is not None:
-                raise CommandRefusedError(refused)
+            pending_mode = self._last_mode  # only the command still in force can refuse a wait
+            if pending_mode is not None and isinstance(pending_mode.outcome, Refused):
+                raise CommandRefusedError(pending_mode.outcome)
             if time.monotonic() >= deadline:
                 raise WaitTimedOut(
                     f"condition not met after {timeout:.1f}s"
@@ -350,12 +362,14 @@ class Robot:
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _once(self, name: str, command: Command) -> Sent:
-        with self._lock:
+        with self._lock:  # bump + send atomically; see set_velocity
             self._generation += 1
             gen = self._generation
             self._latched = None  # a posture change ends whatever drive was in force
             self._latch_deadline = None
-        return self._send(name, command, gen)
+            sent = self._send(name, command, gen)
+            self._last_mode = sent
+            return sent
 
     def _send(self, name: str, command: Command, gen: int, *, clamped: bool = False) -> Sent:
         if self._closed:
@@ -417,32 +431,57 @@ class Robot:
                 self._send("set_velocity", v, gen)
             except (LinkLost, NotConnected):
                 return
+            except Exception as exc:  # a transport bug must not silently end the hold
+                log.exception("keepalive send failed; declaring the link lost")
+                self._mark_link_lost(LinkLost(f"keepalive send failed: {exc!r}"))
+                return
 
     def _mark_link_lost(self, exc: LinkLost) -> None:
-        self._link_lost = exc
         with self._lock:
-            self._latched = None
+            if self._link_lost is not None:
+                return
+            self._link_lost = exc
+            had_velocity = self._latched is not None
+            self._latched, self._latch_deadline = None, None
+            self._generation += 1
+        if had_velocity:
+            # The STATE stream died; the COMMAND path may well still reach the edge. Do not
+            # leave a nonzero velocity as the last word — send the zero, best effort.
+            try:
+                self._tx.send(Velocity())
+            except Exception:
+                log.debug("link lost: the zero-velocity frame did not go out", exc_info=True)
         if self.on_link_lost is not None:
             try:
                 self.on_link_lost(exc)
             except Exception:
                 log.exception("on_link_lost raised")
 
-    def _last_mode_refusal(self) -> Refused | None:
-        """A refusal for the most recent stand/damp, if one has landed."""
-        for sent in reversed(self._pending.values()):
-            if sent.name in ("stand", "damp"):
-                o = sent.outcome
-                return o if isinstance(o, Refused) else None
-        return None
-
     # transport callbacks (any thread) ──────────────────────────────────────
     def _on_state(self, state: State) -> None:
+        # The lane is plain UDP: anyone on the LAN can hit the state port, and protobuf
+        # decodes an empty or foreign datagram as a default RobotState. A sample that does
+        # not look like THIS robot (no joints; or, once connected, a different protocol
+        # version or joint count) must not refresh liveness or become `robot.state`.
+        if not state.joints:
+            log.debug("dropped a state sample with no joints")
+            return
+        info = self._info
+        if info is not None and (
+            state.protocol_version != info.protocol_version or len(state.joints) != info.dof
+        ):
+            log.debug(
+                "dropped a state sample that does not match this robot (proto v%d, %d joints)",
+                state.protocol_version,
+                len(state.joints),
+            )
+            return
         self._state = state
         self._state_seen.set()
 
     def _on_outcome(self, outcome: Applied | Refused) -> None:
-        sent = self._pending.get(outcome.sequence)
+        with self._lock:
+            sent = self._pending.get(outcome.sequence)
         if sent is not None:
             sent._resolve(outcome)
         if isinstance(outcome, Refused):

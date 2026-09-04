@@ -72,7 +72,7 @@ def state_from_robot_state(msg: Any, joint_names: tuple[str, ...] | None) -> Sta
         Joint(
             name=names[i] if names else "",
             pos=float(msg.joint_pos[i]),
-            vel=float(vel[i]) if i < len(vel) else 0.0,
+            vel=float(vel[i]) if i < len(vel) else None,
             current=float(cur[i]) if i < len(cur) else None,
             temp=float(temp[i]) if i < len(temp) else None,
         )
@@ -118,7 +118,8 @@ class UdpTransport:
         state_bind: tuple[str, int] = ("0.0.0.0", STATE_PORT),
         joint_names: Callable[[int], tuple[str, ...] | None] = robots.joint_names_for,
     ) -> None:
-        self._addr = (host, int(command_port))
+        self._host, self._port = host, int(command_port)
+        self._addr: tuple[str, int] | None = None  # resolved once, in open()
         self._bind = (state_bind[0], int(state_bind[1]))
         self._joint_names = joint_names
         self.endpoint = f"{host}:{command_port}"
@@ -134,6 +135,13 @@ class UdpTransport:
     # ── lifecycle ────────────────────────────────────────────────────────────
     def open(self) -> None:
         _pb()  # fail here, with the install hint, not in the reader thread
+        # Resolve the robot's name ONCE. sendto() with a hostname re-resolves on every
+        # datagram — ten mDNS lookups a second under the keepalive, each able to stall
+        # damp()/stop() behind a slow resolver.
+        try:
+            self._addr = (socket.gethostbyname(self._host), self._port)
+        except OSError as exc:
+            raise ConnectFailed(f"cannot resolve {self._host!r}: {exc}") from exc
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.bind(self._bind)
@@ -190,10 +198,10 @@ class UdpTransport:
             msg = st.RobotState()
             try:
                 msg.ParseFromString(data)
-            except Exception:
-                log.debug("dropped an undecodable datagram (%d bytes)", len(data))
+                state = state_from_robot_state(msg, self._joint_names(len(msg.joint_pos)))
+            except Exception:  # a bad datagram (or joint table) must not kill the reader
+                log.debug("dropped an undecodable datagram (%d bytes)", len(data), exc_info=True)
                 continue
-            state = state_from_robot_state(msg, self._joint_names(len(msg.joint_pos)))
             for cb in tuple(self._on_state):
                 try:
                     cb(state)
@@ -202,8 +210,8 @@ class UdpTransport:
 
     # ── out ──────────────────────────────────────────────────────────────────
     def send(self, command: Command) -> int:
-        sock = self._sock
-        if sock is None:
+        sock, addr = self._sock, self._addr
+        if sock is None or addr is None:
             raise LinkLost("transport is closed")
         cmd, common, _ = _pb()
         msg = cmd.RobotCommand(protocol_version=robots.PROTOCOL_VERSION)
@@ -235,7 +243,7 @@ class UdpTransport:
         # Load-bearing when the robot's RSL gate is on (5 s freshness window); harmless off.
         msg.timestamp_us = int(time.time() * 1_000_000)
         try:
-            sock.sendto(msg.SerializeToString(), self._addr)
+            sock.sendto(msg.SerializeToString(), addr)
         except OSError as exc:
             raise LinkLost(f"send to {self.endpoint} failed: {exc}") from exc
         return seq

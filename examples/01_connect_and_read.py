@@ -20,7 +20,8 @@ with Robot.connect_direct(host) as robot:
     print(f"faulted   {s.faulted}   alerts={len(s.alerts)}")
     print(f"{len(s.joints)} joints, firmware order:")
     for j in s.joints[:6]:
-        print(f"  {j.name:18} {j.pos:+.3f} rad   {j.vel:+.3f} rad/s")
+        vel = f"{j.vel:+.3f} rad/s" if j.vel is not None else "vel n/a"
+        print(f"  {j.name:18} {j.pos:+.3f} rad   {vel}")
     print("  …")
     knee = s.joint("L_Knee")  # by name; a typo raises KeyError rather than indexing the wrong joint
     print(f"L_Knee via name lookup: {knee.pos:+.3f} rad")

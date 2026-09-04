@@ -98,3 +98,10 @@ def test_state_is_immutable():
     s = State(Mode.DAMP, (), None, None, None, 0, (), 0, 0, 1)
     with pytest.raises(AttributeError):  # dataclasses.FrozenInstanceError
         s.mode = Mode.STAND  # type: ignore[misc]
+
+
+def test_a_missing_joint_velocity_is_None_not_zero():
+    msg = _robot_state(protocol_version=1)
+    msg.joint_pos.extend([0.1] * 25)  # no joint_vel on the wire
+    s = state_from_robot_state(msg, joint_names_for(25))
+    assert s.joints[0].vel is None, "an unreported velocity must not read as 'stationary'"

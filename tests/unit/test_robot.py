@@ -297,3 +297,169 @@ def test_with_block_closes_and_the_state_names_joints(edge):
             r.state.joint("left_knee")
         assert r.info.joint_index("Waist_Yaw") == 22
     assert not r.connected
+
+
+# ── review round 1: concurrency, liveness, and trust in the state stream ──────
+
+
+def test_damp_is_never_dropped_by_a_racing_set_velocity(edge, robot):
+    """A verb the caller issued must go out even while another thread drives. The
+    generation fence is for the keepalive's re-sends only."""
+    import sys
+    import threading
+
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        stop = threading.Event()
+
+        def drive() -> None:
+            while not stop.is_set():
+                robot.set_velocity(vx=0.1)
+
+        t = threading.Thread(target=drive, daemon=True)
+        t.start()
+        try:
+            dropped = sum(robot.damp().sequence == -1 for _ in range(1500))
+        finally:
+            stop.set()
+            t.join(timeout=2.0)
+    finally:
+        sys.setswitchinterval(old)
+    assert dropped == 0, f"{dropped} damp() calls were dropped as 'superseded'"
+
+
+def test_wait_until_survives_the_pending_table_churning_under_it(edge, robot):
+    import sys
+    import threading
+
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        stop = threading.Event()
+
+        def churn() -> None:
+            while not stop.is_set():
+                robot.stand()  # every send inserts into (and trims) the pending table
+
+        t = threading.Thread(target=churn, daemon=True)
+        t.start()
+        try:
+            # Must end with the promised typed error, never RuntimeError from a dict
+            # mutated during iteration.
+            with pytest.raises(WaitTimedOut):
+                robot.wait_until(lambda s: False, timeout=0.6, poll=0.0)
+        finally:
+            stop.set()
+            t.join(timeout=2.0)
+    finally:
+        sys.setswitchinterval(old)
+
+
+def test_close_from_the_link_lost_callback_really_closes(edge, robot):
+    """`on_link_lost` runs on the keepalive thread; the obvious handler closes the robot.
+    That must not blow up on a self-join and leave the socket (and port) held."""
+    robot.link_timeout = 0.3
+    robot.on_link_lost = lambda exc: robot.close()
+    edge.pushing = False
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and robot._tx._sock is not None:
+        time.sleep(0.02)
+    assert robot._tx._sock is None, "transport still open after close() from the callback"
+    assert robot._keepalive is None and not robot.connected
+
+
+def test_link_lost_zeroes_a_held_velocity(edge, robot):
+    """State went quiet but the command path may still reach the edge: the last frame the
+    robot hears from us must be zero, not the velocity we were holding."""
+    robot.link_timeout = 0.3
+    robot.set_velocity(vx=0.3)
+    assert edge.wait_for(lambda r: any(c.HasField("policy") and c.policy.vx > 0 for c in r))
+    edge.pushing = False
+    time.sleep(0.8)
+    assert not robot.connected
+    assert edge.velocities()[-1] == (0.0, 0.0, 0.0)
+    n = len(edge.received)
+    time.sleep(3 / KEEPALIVE_HZ)
+    assert len(edge.received) == n, "nothing may follow the zero"
+
+
+def _spam_state_port(port: int, payload: bytes, stop) -> None:
+    import socket
+
+    out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    while not stop.is_set():
+        out.sendto(payload, ("127.0.0.1", port))
+        time.sleep(0.01)
+    out.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(b"", id="empty datagram decodes as a default RobotState"),
+        pytest.param(
+            __import__("asimov_protocol.v1.asimov_state_pb2", fromlist=["RobotState"])
+            .RobotState(protocol_version=1, joint_pos=[0.0, 0.0, 0.0])
+            .SerializeToString(),
+            id="right protocol, wrong robot (3 joints)",
+        ),
+    ],
+)
+def test_a_foreign_state_datagram_does_not_keep_the_link_alive(edge, robot, payload):
+    import threading
+
+    robot.link_timeout = 0.3
+    edge.pushing = False
+    stop = threading.Event()
+    t = threading.Thread(target=_spam_state_port, args=(edge.state_port, payload, stop))
+    t.start()
+    try:
+        time.sleep(0.9)
+        assert not robot.connected, "foreign datagrams refreshed liveness"
+        assert len(robot.state.joints) == 25, "a foreign sample became robot.state"
+    finally:
+        stop.set()
+        t.join(timeout=1.0)
+
+
+def test_a_refused_stand_does_not_poison_a_later_drive(edge, robot):
+    from asimov_sdk import CommandRefusedError
+
+    sent = robot.stand()
+    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    with pytest.raises(CommandRefusedError):
+        robot.wait_for(Mode.STAND, timeout=1.0)
+    robot.set_velocity(vx=0.1)  # a new verb is in force; the old refusal is history
+    edge.set_mode("move")
+    assert robot.wait_for(Mode.MOVE, timeout=2.0).mode is Mode.MOVE
+
+
+def test_a_fault_in_an_unknown_mode_still_fails_fast(edge, robot):
+    edge.state.current_mode = 99
+    edge.state.error_flags = 0x4
+    with pytest.raises(RobotFaulted):
+        robot.wait_for(Mode.STAND, timeout=3.0)
+
+
+def test_the_host_is_resolved_once_at_open(edge):
+    from asimov_sdk.transport.udp import UdpTransport
+    from tests.conftest import _free_port
+
+    tx = UdpTransport(
+        "localhost", command_port=edge.command_port, state_bind=("127.0.0.1", _free_port())
+    )
+    assert tx._addr is None
+    tx.open()
+    try:
+        assert tx._addr == ("127.0.0.1", edge.command_port), "sendto() must get an IP, not a name"
+    finally:
+        tx.close()
+
+
+def test_an_unresolvable_host_fails_at_connect():
+    from asimov_sdk.transport.udp import UdpTransport
+
+    tx = UdpTransport("no-such-robot.invalid", command_port=8850, state_bind=("127.0.0.1", 0))
+    with pytest.raises(ConnectFailed):
+        tx.open()

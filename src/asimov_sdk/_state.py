@@ -59,7 +59,7 @@ class Alert:
 class Joint:
     name: str  # firmware name, or "" when the SDK has no table for this robot
     pos: float  # rad
-    vel: float  # rad/s
+    vel: float | None  # rad/s; None when the robot did not report it (never guessed)
     current: float | None  # A
     temp: float | None  # °C
 
