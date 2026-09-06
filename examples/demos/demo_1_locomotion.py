@@ -13,6 +13,12 @@ import time
 
 from asimov_sdk import Mode, Robot
 
+
+def gz(state) -> str:
+    """Gravity z as text; a robot that does not report gravity shows n/a, not a crash."""
+    return f"{state.gravity[2]:+.2f}" if state.gravity is not None else "n/a"
+
+
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 t0 = time.monotonic()
 
@@ -27,7 +33,7 @@ with Robot.connect_direct(host) as robot:
     say("stand()")
     robot.stand()
     s = robot.wait_for(Mode.STAND, timeout=15.0)
-    say(f"  firmware reports STAND  upright={s.upright}  gravity_z={s.gravity[2]:+.2f}")
+    say(f"  firmware reports STAND  upright={s.upright}  gravity_z={gz(s)}")
 
     say("set_velocity(vx=0.25, duration=4.0)  — forward, held at 10 Hz, then zero")
     sent = robot.set_velocity(vx=0.25, duration=4.0)
@@ -40,7 +46,7 @@ with Robot.connect_direct(host) as robot:
     say("set_velocity(vyaw=0.6, duration=3.0)  — turn in place")
     robot.set_velocity(vyaw=0.6, duration=3.0)
     time.sleep(3.2)
-    say(f"  turn over: upright={robot.state.upright}  gravity_z={robot.state.gravity[2]:+.2f}")
+    say(f"  turn over: upright={robot.state.upright}  gravity_z={gz(robot.state)}")
 
     say("stand()  — back to the STAND posture")
     robot.stand()

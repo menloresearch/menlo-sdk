@@ -13,6 +13,12 @@ import time
 
 from asimov_sdk import Mode, Robot, StateStale
 
+
+def gz(state) -> str:
+    """Gravity z as text; a robot that does not report gravity shows n/a, not a crash."""
+    return f"{state.gravity[2]:+.2f}" if state.gravity is not None else "n/a"
+
+
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 6.0
 
@@ -36,7 +42,7 @@ with Robot.connect_direct(host) as robot:
         knees = f"{s.joint('L_Knee').pos:+8.3f} {s.joint('R_Knee').pos:+8.3f}"
         hot = f"{hottest.name:>10}{(hottest.temp or 0):4.0f}"
         print(
-            f"{time.monotonic() - t0:5.1f}  {s.mode.name:<5} {s.upright!s:<5} {s.gravity[2]:+7.2f} "
+            f"{time.monotonic() - t0:5.1f}  {s.mode.name:<5} {s.upright!s:<5} {gz(s):>7} "
             f"{knees} {hot} {len(s.alerts):>6} {s.age_s * 1000:5.1f}ms",
             flush=True,
         )

@@ -46,11 +46,12 @@ class NotConnected(AsimovError):
 
 
 class LinkLost(AsimovError):
-    """The robot stopped talking. Terminal for this ``Robot``; there is no auto-reconnect,
-    because reconnecting would re-latch a velocity across a gap the caller never saw.
+    """The robot stopped talking (no state for ``link_timeout`` seconds).
 
-    The robot is not left running: the edge's own velocity watchdog zero-and-STANDs it
-    about two seconds after the last command, independently of this process.
+    The session is over: every verb and wait on this ``Robot`` raises this error until the
+    caller reconnects with ``close()`` followed by ``open()``, which starts a clean session.
+    There is no automatic reconnect — the edge's own watchdog has already stopped the robot,
+    and whether to try again is the caller's decision.
     """
 
 
