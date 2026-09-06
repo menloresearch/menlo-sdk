@@ -522,5 +522,23 @@ def test_an_older_reordered_state_sample_never_overwrites_a_newer_one(edge, robo
     robot._on_state(sample(high, 1))  # STAND, newest
     robot._on_state(sample(high - 7, 0))  # an older DAMP sample arriving late
     assert robot.state.sequence == high and robot.state.mode is Mode.STAND
-    robot._on_state(sample(3, 2))  # the counter wrapped: this is NEWER, not older
-    assert robot.state.sequence == 3 and robot.state.mode is Mode.MOVE
+    robot._on_state(sample(0, 2))  # the counter wrapped to exactly 0: NEWER, not older
+    assert robot.state.sequence == 0 and robot.state.mode is Mode.MOVE
+    robot._on_state(sample(high, 0))  # and a pre-wrap straggler after that is dropped
+    assert robot.state.sequence == 0 and robot.state.mode is Mode.MOVE
+
+
+def test_reopen_after_link_lost_is_a_working_reconnect(edge, robot):
+    robot.link_timeout = 0.3
+    robot.set_velocity(vx=0.1)
+    edge.pushing = False
+    time.sleep(0.8)
+    assert not robot.connected
+    robot.close()
+    edge.pushing = True
+    robot.open(timeout=2.0)
+    assert robot.connected, "the old LinkLost must not outlive the session that produced it"
+    robot.set_velocity(vx=0.1)  # would raise the stale LinkLost before the fix
+    assert edge.wait_for(lambda r: sum(c.HasField("policy") for c in r) >= 3)
+    robot.wait_for(Mode.DAMP, timeout=1.0)  # waits work too (edge is DAMP by default)
+    robot.close()

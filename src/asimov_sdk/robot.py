@@ -152,6 +152,7 @@ class Robot:
         # Every open() waits for a FRESH sample: a Robot reopened after close() must not
         # pass the protocol check on what the previous session left behind.
         self._forget_state()
+        self._link_lost = None  # a reopen after LinkLost is the reconnect path; start clean
         self._tx.open()
         self._closed = False
         self._stop.clear()
@@ -496,14 +497,10 @@ class Robot:
             return
         # UDP reorders and duplicates. An OLDER sample must never overwrite a newer one,
         # or the caller reads the robot going backwards in time (seen at 20% reorder:
-        # 196 backwards steps in one demo). Sequence 0 means "not stamped": let it through.
+        # 196 backwards steps in one demo). Half-range compare: a counter that wrapped
+        # to 0 is NEWER (difference > 2**31); an unstamped stream (all zeros) differs by 0.
         prev = self._state
-        if (
-            prev is not None
-            and state.sequence
-            and prev.sequence
-            and 0 < (prev.sequence - state.sequence) < 2**31  # older, not a wraparound
-        ):
+        if prev is not None and 0 < (prev.sequence - state.sequence) < 2**31:
             return
         self._state = state
         self._state_seen.set()
@@ -516,7 +513,8 @@ class Robot:
             if isinstance(outcome, Refused):
                 outcome = dataclasses.replace(outcome, verb=sent.name)
         if isinstance(outcome, Refused):
-            self._refusals.append(outcome)
+            with self._lock:  # outcomes() snapshots+clears under the same lock
+                self._refusals.append(outcome)
             if self.on_refused is not None:
                 try:
                     self.on_refused(outcome)
