@@ -519,6 +519,7 @@ def test_an_older_reordered_state_sample_never_overwrites_a_newer_one(edge, robo
         return state_from_robot_state(m, None)
 
     high = 2**32 - 10
+    robot._forget_state()  # start the stream near the wrap; from seq 1 a jump there IS "older"
     robot._on_state(sample(high, 1))  # STAND, newest
     robot._on_state(sample(high - 7, 0))  # an older DAMP sample arriving late
     assert robot.state.sequence == high and robot.state.mode is Mode.STAND

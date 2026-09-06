@@ -500,7 +500,7 @@ class Robot:
         # 196 backwards steps in one demo). Half-range compare: a counter that wrapped
         # to 0 is NEWER (difference > 2**31); an unstamped stream (all zeros) differs by 0.
         prev = self._state
-        if prev is not None and 0 < (prev.sequence - state.sequence) < 2**31:
+        if prev is not None and 0 < (prev.sequence - state.sequence) % 2**32 < 2**31:
             return
         self._state = state
         self._state_seen.set()
