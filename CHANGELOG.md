@@ -19,6 +19,7 @@ tokamak-pm round 1 (approved; two Important items, both fixed):
 - A `Robot` reopened after `LinkLost` (close, then open) is a real reconnect: the previous
   session's `LinkLost` is cleared, so `connected` and the verbs work again.
   The previous session's pending outcomes, refusals and last mode command are dropped too.
+  The robot's identity (`info`) is learned again, so a reopen against a different unit works.
 
 Review round 1 (Fable + codex, independent) — safety and concurrency fixes, each with a
 regression test that fails on the previous code:

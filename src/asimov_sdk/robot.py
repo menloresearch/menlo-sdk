@@ -153,6 +153,7 @@ class Robot:
         # pass the protocol check on what the previous session left behind.
         self._forget_state()
         with self._lock:  # nothing from the previous session may leak into this one
+            self._info = None  # or _on_state would filter the NEW robot's samples as foreign
             self._link_lost = None
             self._last_mode = None
             self._pending.clear()

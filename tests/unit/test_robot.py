@@ -557,3 +557,15 @@ def test_a_refusal_from_the_previous_session_does_not_haunt_a_reopen(edge, robot
     assert robot.wait_for(Mode.DAMP, timeout=2.0).mode is Mode.DAMP  # raised before the fix
     assert list(robot.outcomes()) == [], "old-session refusals must not surface in the new one"
     robot.close()
+
+
+def test_reopen_learns_the_robot_again_instead_of_filtering_it_as_foreign(edge, robot):
+    assert robot.info.dof == 25
+    robot.close()
+    del edge.state.joint_pos[:]
+    edge.state.joint_pos.extend([0.0] * 12)  # a different unit (or firmware) on the same address
+    robot.open(
+        timeout=2.0
+    )  # would time out before the fix: every sample dropped as "not this robot"
+    assert robot.info.dof == 12 and len(robot.state.joints) == 12
+    robot.close()
