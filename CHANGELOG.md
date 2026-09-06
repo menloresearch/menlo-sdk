@@ -16,6 +16,9 @@ tokamak-pm round 1 (approved; two Important items, both fixed):
 - A reordered (older-sequence) state datagram no longer overwrites a newer `robot.state`;
   measured 196 backwards steps in one run through a 20 %-reordering proxy before the fix.
 - CI: the git credential rewrite is scoped to `github.com/menloresearch/`, not all of GitHub.
+- A `Robot` reopened after `LinkLost` (close, then open) is a real reconnect: the previous
+  session's `LinkLost` is cleared, so `connected` and the verbs work again.
+  The previous session's pending outcomes, refusals and last mode command are dropped too.
 
 Review round 1 (Fable + codex, independent) — safety and concurrency fixes, each with a
 regression test that fails on the previous code:

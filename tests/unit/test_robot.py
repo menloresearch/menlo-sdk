@@ -543,3 +543,17 @@ def test_reopen_after_link_lost_is_a_working_reconnect(edge, robot):
     assert edge.wait_for(lambda r: sum(c.HasField("policy") for c in r) >= 3)
     robot.wait_for(Mode.DAMP, timeout=1.0)  # waits work too (edge is DAMP by default)
     robot.close()
+
+
+def test_a_refusal_from_the_previous_session_does_not_haunt_a_reopen(edge, robot):
+    from asimov_sdk import CommandRefusedError
+
+    sent = robot.stand()
+    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    with pytest.raises(CommandRefusedError):
+        robot.wait_for(Mode.STAND, timeout=1.0)
+    robot.close()
+    robot.open(timeout=2.0)
+    assert robot.wait_for(Mode.DAMP, timeout=2.0).mode is Mode.DAMP  # raised before the fix
+    assert list(robot.outcomes()) == [], "old-session refusals must not surface in the new one"
+    robot.close()

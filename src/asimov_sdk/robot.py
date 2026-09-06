@@ -152,7 +152,11 @@ class Robot:
         # Every open() waits for a FRESH sample: a Robot reopened after close() must not
         # pass the protocol check on what the previous session left behind.
         self._forget_state()
-        self._link_lost = None  # a reopen after LinkLost is the reconnect path; start clean
+        with self._lock:  # nothing from the previous session may leak into this one
+            self._link_lost = None
+            self._last_mode = None
+            self._pending.clear()
+            self._refusals.clear()
         self._tx.open()
         self._closed = False
         self._stop.clear()
