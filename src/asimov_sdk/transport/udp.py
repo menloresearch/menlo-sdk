@@ -117,8 +117,11 @@ class UdpTransport:
         command_port: int = COMMAND_PORT,
         state_bind: tuple[str, int] = ("0.0.0.0", STATE_PORT),
         joint_names: Callable[[int], tuple[str, ...] | None] = robots.joint_names_for,
+        state_source: str | None = None,
     ) -> None:
         self._host, self._port = host, int(command_port)
+        self._state_source = state_source  # optional allowlist: the one address state may come from
+        self._state_source_ip: str | None = None
         self._addr: tuple[str, int] | None = None  # resolved once, in open()
         self._bind = (state_bind[0], int(state_bind[1]))
         self._joint_names = joint_names
@@ -140,6 +143,8 @@ class UdpTransport:
         # damp()/stop() behind a slow resolver.
         try:
             self._addr = (socket.gethostbyname(self._host), self._port)
+            if self._state_source is not None:
+                self._state_source_ip = socket.gethostbyname(self._state_source)
         except OSError as exc:
             raise ConnectFailed(f"cannot resolve {self._host!r}: {exc}") from exc
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -188,12 +193,15 @@ class UdpTransport:
         sock = self._sock
         while sock is not None and not self._stop.is_set():
             try:
-                data, _ = sock.recvfrom(65535)
+                data, sender = sock.recvfrom(65535)
             except TimeoutError:
                 continue
             except OSError:
                 if self._stop.is_set():
                     return
+                continue
+            if self._state_source_ip is not None and sender[0] != self._state_source_ip:
+                log.debug("dropped a state datagram from %s (not the robot)", sender[0])
                 continue
             msg = st.RobotState()
             try:

@@ -4,6 +4,16 @@ All notable changes to asimov-sdk. Pre-1.0: minor versions may break the API.
 
 ## Unreleased
 
+tokamak-pm round 1 (approved; two Important items, both fixed):
+
+- A `Robot` reopened after `close()` waits for a fresh state sample instead of passing the
+  protocol check on the previous session's last sample.
+- `Refused` and `Unknown` name the verb that produced them (`stand refused: FAULT_DAMPED`),
+  not the literal word "command".
+- `connect_direct(..., state_source=)` / `UdpTransport(state_source=)`: optional allowlist
+  for the one address state may arrive from; everyone else is dropped before decoding.
+- Resolved outcomes leave the pending table immediately; `outcomes()` drains under the lock.
+
 Review round 1 (Fable + codex, independent) — safety and concurrency fixes, each with a
 regression test that fails on the previous code:
 

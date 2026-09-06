@@ -17,6 +17,7 @@ four seconds to come true; that second question is answered from state, by
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import threading
 import time
@@ -75,10 +76,11 @@ class Refused:
     sequence: int
     reason: Refusal
     detail: str = ""  # free text from the robot; never branch on it
+    verb: str = "command"  # filled in by the Sent that owns this outcome
 
     @property
     def name(self) -> str:
-        return "command"
+        return self.verb
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,10 +89,11 @@ class Unknown:
 
     sequence: int
     waited_s: float
+    verb: str = "command"
 
     @property
     def name(self) -> str:
-        return "command"
+        return self.verb
 
 
 Outcome = Applied | Refused | Unknown
@@ -142,6 +145,8 @@ class Sent:
     # ── written by the Robot when the transport reports back ─────────────────
     def _resolve(self, outcome: Applied | Refused) -> None:
         if self._outcome is None:
+            if isinstance(outcome, Refused) and outcome.verb != self._name:
+                outcome = dataclasses.replace(outcome, verb=self._name)
             self._outcome = outcome
             self._event.set()
 
@@ -161,7 +166,7 @@ class Sent:
         t = self.default_timeout if timeout is None else timeout
         if self._event.wait(t) and self._outcome is not None:
             return self._outcome
-        return Unknown(self.sequence, waited_s=t)
+        return Unknown(self.sequence, waited_s=t, verb=self._name)
 
     def require(self, timeout: float | None = None, *, unknown_ok: bool = True) -> Outcome:
         """Like ``wait_outcome`` but raise on refusal.

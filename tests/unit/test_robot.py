@@ -463,3 +463,44 @@ def test_an_unresolvable_host_fails_at_connect():
     tx = UdpTransport("no-such-robot.invalid", command_port=8850, state_bind=("127.0.0.1", 0))
     with pytest.raises(ConnectFailed):
         tx.open()
+
+
+# ── tokamak-pm round 1 (approved with two Important items) ────────────────────
+
+
+def test_reopen_waits_for_fresh_state_instead_of_the_last_session(edge, robot):
+    robot.close()
+    edge.pushing = False
+    with pytest.raises(ConnectFailed):
+        robot.open(timeout=0.4)  # the old session's sample must not satisfy this wait
+    edge.pushing = True
+    robot.open(timeout=2.0)
+    assert robot.connected and robot.state.age_s < 1.0
+    robot.close()
+
+
+def test_a_refusal_names_the_verb_that_was_refused(edge, robot):
+    from asimov_sdk import CommandRefusedError
+
+    sent = robot.stand()
+    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    with pytest.raises(CommandRefusedError) as info:
+        sent.require()
+    assert str(info.value).startswith("stand refused: FAULT_DAMPED")
+    assert next(robot.outcomes()).name == "stand"
+    assert robot.damp().wait_outcome(0.01).name == "damp"
+
+
+def test_a_resolved_outcome_leaves_the_pending_table(edge, robot):
+    sent = robot.stand()
+    assert sent.sequence in robot._pending
+    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    assert sent.sequence not in robot._pending and sent.outcome is not None
+
+
+def test_state_source_allowlist_drops_everyone_else(edge):
+    kw = dict(command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port))
+    with pytest.raises(ConnectFailed):
+        Robot.connect_direct("127.0.0.1", timeout=0.5, state_source="10.255.255.1", **kw)
+    with Robot.connect_direct("127.0.0.1", timeout=2.0, state_source="localhost", **kw) as r:
+        assert r.connected

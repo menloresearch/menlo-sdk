@@ -41,6 +41,7 @@ Behaviours worth knowing before the first script:
 from __future__ import annotations
 
 import collections
+import dataclasses
 import logging
 import threading
 import time
@@ -120,6 +121,7 @@ class Robot:
         timeout: float = 5.0,
         allow_version_skew: bool = False,
         limits: Limits | None = None,
+        state_source: str | None = None,
     ) -> Robot:
         """Attach to a robot over its LAN UDP lane.
 
@@ -127,8 +129,14 @@ class Robot:
         (``--udp-state-host <this ip>``). Returns once the first state sample has arrived
         and its protocol version matches; raises :class:`ConnectFailed` otherwise, because
         a UDP socket that hears nothing is talking to nobody.
+
+        ``state_source`` pins the address state may arrive from; datagrams from anyone else
+        are dropped before decoding. Leave it ``None`` when the robot's state leaves from a
+        different address than it listens on (the studio container does this).
         """
-        tx = UdpTransport(host, command_port=command_port, state_bind=state_bind)
+        tx = UdpTransport(
+            host, command_port=command_port, state_bind=state_bind, state_source=state_source
+        )
         robot = cls(tx, limits=limits)
         robot.open(timeout=timeout, allow_version_skew=allow_version_skew)
         return robot
@@ -141,6 +149,9 @@ class Robot:
             self._tx.subscribe_outcome(self._on_outcome)
             self._tx.subscribe_controller_change(self._on_controller)
             self._subscribed = True
+        # Every open() waits for a FRESH sample: a Robot reopened after close() must not
+        # pass the protocol check on what the previous session left behind.
+        self._forget_state()
         self._tx.open()
         self._closed = False
         self._stop.clear()
@@ -356,9 +367,12 @@ class Robot:
             ) from None
 
     def outcomes(self) -> Iterator[Refused]:
-        """Drain refusals received so far, oldest first."""
-        while self._refusals:
-            yield self._refusals.popleft()
+        """Drain refusals received so far, oldest first. Each refusal is handed to exactly
+        one caller; the drain itself is taken under the lock."""
+        with self._lock:
+            drained = tuple(self._refusals)
+            self._refusals.clear()
+        yield from drained
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _once(self, name: str, command: Command) -> Sent:
@@ -457,6 +471,10 @@ class Robot:
             except Exception:
                 log.exception("on_link_lost raised")
 
+    def _forget_state(self) -> None:
+        self._state = None
+        self._state_seen.clear()
+
     # transport callbacks (any thread) ──────────────────────────────────────
     def _on_state(self, state: State) -> None:
         # The lane is plain UDP: anyone on the LAN can hit the state port, and protobuf
@@ -481,9 +499,11 @@ class Robot:
 
     def _on_outcome(self, outcome: Applied | Refused) -> None:
         with self._lock:
-            sent = self._pending.get(outcome.sequence)
+            sent = self._pending.pop(outcome.sequence, None)  # resolved: no reason to keep it
         if sent is not None:
             sent._resolve(outcome)
+            if isinstance(outcome, Refused):
+                outcome = dataclasses.replace(outcome, verb=sent.name)
         if isinstance(outcome, Refused):
             self._refusals.append(outcome)
             if self.on_refused is not None:
