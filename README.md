@@ -98,6 +98,9 @@ builtins: a non-finite velocity is a `ValueError`, an unknown joint name a `KeyE
 - `close()` (and the `with` block) sends zero velocity if one is held, then drops the
   link. It never damps: damping a standing biped collapses it.
 - `damp()` **is** the emergency stop, and it raises on a dead link like every other verb.
+- The state port is plain UDP: samples that do not look like this robot are dropped, and
+  `connect_direct(..., state_source="<robot ip>")` pins the one address state may arrive
+  from. Leave it unset on the simulator, whose state leaves from the container address.
 - Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s) and the clamp is
   visible on `Sent.clamped`.
 - Lose the state stream for two seconds and the `Robot` is `LinkLost`: terminal, no

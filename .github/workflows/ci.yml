@@ -40,7 +40,7 @@ jobs:
             echo "::error::ASIMOV_REPOS_TOKEN is not available to this workflow; uv sync will fail on asimov-protocol"
             exit 1
           fi
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${TOKEN}@github.com/menloresearch/".insteadOf "https://github.com/menloresearch/"
 
       - name: Sync (locked)
         run: uv sync --python ${{ matrix.python }} --locked --all-groups
@@ -78,7 +78,7 @@ jobs:
           TOKEN: ${{ secrets.ASIMOV_REPOS_TOKEN }}
         run: |
           [ -n "$TOKEN" ] || { echo "::error::ASIMOV_REPOS_TOKEN missing"; exit 1; }
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${TOKEN}@github.com/menloresearch/".insteadOf "https://github.com/menloresearch/"
       - name: Check out asimov-edge at the pinned commit
         run: |
           EDGE_REF="$(sed -nE 's/^ASIMOV_EDGE_REF=(.*)$/\1/p' tests/integration/edge.pin)"

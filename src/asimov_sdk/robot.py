@@ -494,6 +494,17 @@ class Robot:
                 len(state.joints),
             )
             return
+        # UDP reorders and duplicates. An OLDER sample must never overwrite a newer one,
+        # or the caller reads the robot going backwards in time (seen at 20% reorder:
+        # 196 backwards steps in one demo). Sequence 0 means "not stamped": let it through.
+        prev = self._state
+        if (
+            prev is not None
+            and state.sequence
+            and prev.sequence
+            and 0 < (prev.sequence - state.sequence) < 2**31  # older, not a wraparound
+        ):
+            return
         self._state = state
         self._state_seen.set()
 

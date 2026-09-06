@@ -13,6 +13,9 @@ tokamak-pm round 1 (approved; two Important items, both fixed):
 - `connect_direct(..., state_source=)` / `UdpTransport(state_source=)`: optional allowlist
   for the one address state may arrive from; everyone else is dropped before decoding.
 - Resolved outcomes leave the pending table immediately; `outcomes()` drains under the lock.
+- A reordered (older-sequence) state datagram no longer overwrites a newer `robot.state`;
+  measured 196 backwards steps in one run through a 20 %-reordering proxy before the fix.
+- CI: the git credential rewrite is scoped to `github.com/menloresearch/`, not all of GitHub.
 
 Review round 1 (Fable + codex, independent) — safety and concurrency fixes, each with a
 regression test that fails on the previous code:

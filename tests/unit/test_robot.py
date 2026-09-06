@@ -504,3 +504,23 @@ def test_state_source_allowlist_drops_everyone_else(edge):
         Robot.connect_direct("127.0.0.1", timeout=0.5, state_source="10.255.255.1", **kw)
     with Robot.connect_direct("127.0.0.1", timeout=2.0, state_source="localhost", **kw) as r:
         assert r.connected
+
+
+def test_an_older_reordered_state_sample_never_overwrites_a_newer_one(edge, robot):
+    from asimov_sdk.transport.udp import state_from_robot_state
+
+    edge.pushing = False
+    time.sleep(0.05)
+
+    def sample(seq: int, mode: int):
+        m = edge.state.__class__()
+        m.CopyFrom(edge.state)
+        m.sequence, m.current_mode = seq, mode
+        return state_from_robot_state(m, None)
+
+    high = 2**32 - 10
+    robot._on_state(sample(high, 1))  # STAND, newest
+    robot._on_state(sample(high - 7, 0))  # an older DAMP sample arriving late
+    assert robot.state.sequence == high and robot.state.mode is Mode.STAND
+    robot._on_state(sample(3, 2))  # the counter wrapped: this is NEWER, not older
+    assert robot.state.sequence == 3 and robot.state.mode is Mode.MOVE
