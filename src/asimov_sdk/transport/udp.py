@@ -35,7 +35,7 @@ from asimov_sdk import _proto, robots
 from asimov_sdk._command import Command, ModeCommand, Trajectory, Velocity
 from asimov_sdk._errors import ConnectError, LinkLostError, NotConnectedError, UnsupportedError
 from asimov_sdk._media import AudioChunk
-from asimov_sdk._state import Alert, Battery, Joint, Mode, State, TransportKind
+from asimov_sdk._state import Alert, Battery, BatteryProtection, Joint, Mode, State, TransportKind
 from asimov_sdk.transport.base import (
     AudioCallback,
     ControllerCallback,
@@ -97,6 +97,7 @@ def state_from_robot_state(msg: Any, joint_names: tuple[str, ...] | None) -> Sta
                 value=float(a.value),
                 threshold=float(a.threshold),
                 source_id=int(a.source_id),
+                first_set_us=int(a.first_set_us),
             )
             for a in msg.active_alerts
         ),
@@ -120,7 +121,7 @@ def _battery_from(msg: Any) -> Battery | None:
         current_a=float(b.current_a),
         soc_percent=float(b.soc_percent),
         max_cell_temp_c=float(b.max_cell_temp_c),
-        protection_flags=int(b.protection_flags),
+        protection=BatteryProtection(int(b.protection_flags)),
     )
 
 

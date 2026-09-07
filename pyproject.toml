@@ -77,7 +77,7 @@ files = ["src/asimov_sdk"]
 exclude = ["src/asimov_sdk/_vendor/"]
 
 [[tool.mypy.overrides]]
-module = ["asimov_protocol.*", "asimov_sdk._vendor.*"]
+module = ["asimov_protocol.*", "asimov_sdk._vendor.*", "numpy"]
 ignore_missing_imports = true
 follow_imports = "skip"
 

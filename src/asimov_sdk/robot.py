@@ -44,14 +44,16 @@ import collections
 import dataclasses
 import logging
 import math
+import os
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from typing import Self
+from typing import Literal, Self
 
 from asimov_sdk import robots
 from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity
 from asimov_sdk._errors import (
+    AsimovError,
     CommandRefusedError,
     ConnectError,
     LinkLostError,
@@ -59,11 +61,13 @@ from asimov_sdk._errors import (
     ProtocolMismatchError,
     RobotFaultedError,
     StateStaleError,
+    UnsupportedError,
     WaitTimeoutError,
 )
 from asimov_sdk._media import Camera, Microphone, Speaker
 from asimov_sdk._outcome import Applied, Refused, Sent
-from asimov_sdk._state import Capability, Mode, RobotInfo, State
+from asimov_sdk._state import Alert, Capability, Mode, RobotInfo, State
+from asimov_sdk.recording import Recording
 from asimov_sdk.transport.base import Transport
 from asimov_sdk.transport.udp import UdpTransport
 
@@ -127,6 +131,13 @@ class Robot:
         self._microphone = Microphone("microphone", transport)
         self._speaker = Speaker(transport)
         self.on_refused: Callable[[Refused], None] | None = None
+        #: Every accepted state sample, on the transport's reader thread. Keep it short.
+        self.on_state: Callable[[State], None] | None = None
+        #: An alert appearing ("raised") or disappearing ("cleared") between samples.
+        self.on_alert: Callable[[Alert, Literal["raised", "cleared"]], None] | None = None
+        #: The reported mode changed: (previous, current).
+        self.on_mode_change: Callable[[Mode, Mode], None] | None = None
+        self._on_sent: Callable[[Sent], None] | None = None  # recording hook
         self.on_controller_change: Callable[[str | None, str | None, str], None] | None = None
         self.on_link_lost: Callable[[LinkLostError], None] | None = None
 
@@ -266,6 +277,18 @@ class Robot:
         """Does this robot, over this transport, provide ``capability``? See ``Capability``."""
         return self.info.has(capability)
 
+    def require(self, *capabilities: Capability | str) -> None:
+        """Raise :class:`UnsupportedError` for the first capability this robot lacks. For the
+        top of a script that cannot degrade."""
+        for c in capabilities:
+            if not self.has(c):
+                raise UnsupportedError(str(c), self._tx.kind)
+
+    def record(self, path: str | os.PathLike[str], **kw: bool) -> Recording:
+        """``with robot.record("run.jsonl"): ...`` writes every state sample and every
+        command sent to a JSON-lines file. See :mod:`asimov_sdk.recording`."""
+        return Recording(self, path, **kw)
+
     @property
     def camera(self) -> Camera:
         """Frames from the robot's camera. Raises ``UnsupportedError`` on first use when this
@@ -358,6 +381,70 @@ class Robot:
             tuple(float(x) for x in kd) if kd is not None else None,
         )
         return self._once("trajectory", t)
+
+    def goto(
+        self,
+        positions: Iterable[float],
+        *,
+        duration: float = 2.0,
+        hz: float = 50.0,
+        kp: Iterable[float] | None = None,
+        kd: Iterable[float] | None = None,
+        wait: bool = True,
+        tolerance: float = 0.05,
+        timeout: float | None = None,
+    ) -> Sent:
+        """Move every joint from where it IS to ``positions`` over ``duration`` seconds.
+
+        Interpolates (minimum-jerk) from the current reported joint positions and clocks
+        ``trajectory()`` setpoints at ``hz`` from a background thread — the edge stops
+        driving a trajectory two seconds after the last setpoint, so a single ``trajectory()``
+        call cannot hold a pose; this can. Any other verb cancels the motion. With ``wait``,
+        blocks until every joint is within ``tolerance`` radians of the target (or raises
+        :class:`WaitTimeoutError` after ``timeout``, default ``duration + 2``). Returns the
+        ``Sent`` of the first setpoint.
+        """
+        target = tuple(float(p) for p in positions)
+        _positive_finite("duration", duration)
+        _positive_finite("hz", hz)
+        start = self.state.joint_pos
+        if len(target) != len(start):
+            raise ValueError(f"goto has {len(target)} positions; this robot reports {len(start)}")
+        kp_t = tuple(float(x) for x in kp) if kp is not None else None
+        kd_t = tuple(float(x) for x in kd) if kd is not None else None
+        steps = max(1, round(duration * hz))
+        period = 1.0 / hz
+
+        def blend(i: int) -> tuple[float, ...]:
+            t = i / steps
+            a = 10 * t**3 - 15 * t**4 + 6 * t**5  # minimum jerk, 0→1
+            return tuple(s0 + (s1 - s0) * a for s0, s1 in zip(start, target, strict=True))
+
+        first = self.trajectory(blend(1), kp=kp_t, kd=kd_t)
+        with self._lock:
+            gen = self._generation  # the verb above bumped it; another verb bumps again
+
+        def run() -> None:
+            for i in range(2, steps + 1):
+                time.sleep(period)
+                with self._lock:
+                    if self._generation != gen or self._closed:
+                        return  # cancelled by another verb, or closed
+                try:
+                    self._send("trajectory", Trajectory(blend(i), kp_t, kd_t), gen)
+                except AsimovError:
+                    return
+
+        threading.Thread(target=run, name="asimov-sdk-goto", daemon=True).start()
+        if wait:
+            limit = duration + 2.0 if timeout is None else timeout
+            self.wait_until(
+                lambda st: all(
+                    abs(p - q) <= tolerance for p, q in zip(st.joint_pos, target, strict=False)
+                ),
+                timeout=limit,
+            )
+        return first
 
     # ── waits: the robot's own report ────────────────────────────────────────
     def wait_until(
@@ -473,7 +560,7 @@ class Robot:
                 seq = self._tx.send(command)
             except LinkLostError as exc:
                 lost = exc
-            else:
+            if lost is None:
                 sent = Sent(
                     name=name,
                     sequence=seq,
@@ -484,10 +571,14 @@ class Robot:
                 self._pending[seq] = sent
                 while len(self._pending) > 512:
                     self._pending.popitem(last=False)
-                return sent
-        # Outside the lock: on_link_lost may block on things that need a verb.
-        self._mark_link_lost(lost)
-        raise lost
+                hook = self._on_sent
+        if lost is not None:
+            # Outside the lock: on_link_lost may block on things that need a verb.
+            self._mark_link_lost(lost)
+            raise lost
+        if hook is not None:
+            self._call(hook, sent)
+        return sent
 
     def _keepalive_loop(self) -> None:
         interval = 1.0 / KEEPALIVE_HZ
@@ -582,8 +673,32 @@ class Robot:
                         for j, n in zip(state.joints, names, strict=True)
                     ),
                 )
+        prev = self._state
         self._state = state
         self._state_seen.set()
+        self._fire_state_callbacks(prev, state)
+
+    def _fire_state_callbacks(self, prev: State | None, state: State) -> None:
+        if self.on_state is not None:
+            self._call(self.on_state, state)
+        if self.on_mode_change is not None and prev is not None and prev.mode is not state.mode:
+            self._call(self.on_mode_change, prev.mode, state.mode)
+        if self.on_alert is not None:
+            before = {a.id: a for a in prev.alerts} if prev is not None else {}
+            after = {a.id: a for a in state.alerts}
+            for aid, alert in after.items():
+                if aid not in before:
+                    self._call(self.on_alert, alert, "raised")
+            for aid, alert in before.items():
+                if aid not in after:
+                    self._call(self.on_alert, alert, "cleared")
+
+    @staticmethod
+    def _call(cb: Callable[..., None], *args: object) -> None:
+        try:
+            cb(*args)
+        except Exception:
+            log.exception("%s raised", getattr(cb, "__name__", "callback"))
 
     def _on_outcome(self, outcome: Applied | Refused) -> None:
         with self._lock:

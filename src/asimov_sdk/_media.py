@@ -11,14 +11,24 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal
 
 from asimov_sdk._errors import UnsupportedError, WaitTimeoutError
 
 if TYPE_CHECKING:
     from asimov_sdk.transport.base import Transport
+
+
+def _numpy() -> Any:
+    try:
+        import numpy
+    except ImportError as exc:  # pragma: no cover - environment
+        raise ImportError("to_numpy() needs numpy: pip install numpy") from exc
+    return numpy
+
 
 ImageEncoding = Literal["rgb8", "bgr8", "gray8", "yuv420", "jpeg", "h264", "unknown"]
 AudioEncoding = Literal["pcm_s16le", "pcm_f32le", "opus", "unknown"]
@@ -39,9 +49,30 @@ class Frame:
     timestamp_ns: int = 0  # edge clock at capture; 0 when the transport did not carry one
     sequence: int = 0
 
+    received_at: float = field(default_factory=time.monotonic)
+
     @property
     def shape(self) -> tuple[int, int]:
         return (self.height, self.width)
+
+    @property
+    def age_s(self) -> float:
+        return time.monotonic() - self.received_at
+
+    def to_numpy(self) -> Any:
+        """Raw encodings as an ``ndarray`` of shape (height, width[, channels]), zero-copy where
+        the stride allows. Encoded frames (jpeg, h264) raise ``ValueError``: decode them with
+        your imaging library. Needs ``numpy`` installed."""
+        channels = {"rgb8": 3, "bgr8": 3, "gray8": 1, "yuv420": None}.get(self.encoding)
+        if channels is None:
+            raise ValueError(f"{self.encoding} frames are not a pixel array; decode them first")
+        np = _numpy()
+        row = self.stride_bytes or self.width * channels
+        arr = np.frombuffer(self.data, dtype=np.uint8)[: row * self.height].reshape(
+            self.height, row
+        )
+        arr = arr[:, : self.width * channels]
+        return arr.reshape(self.height, self.width, channels) if channels > 1 else arr
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,9 +88,20 @@ class AudioChunk:
     timestamp_ns: int = 0
     sequence: int = 0
 
+    received_at: float = field(default_factory=time.monotonic)
+
     @property
     def duration_s(self) -> float:
         return self.samples_per_channel / self.sample_rate_hz if self.sample_rate_hz else 0.0
+
+    def to_numpy(self) -> Any:
+        """PCM as an ``ndarray`` of shape (samples, channels); int16 or float32 by encoding.
+        Encoded audio (opus) raises ``ValueError``. Needs ``numpy`` installed."""
+        dtype = {"pcm_s16le": "<i2", "pcm_f32le": "<f4"}.get(self.encoding)
+        if dtype is None:
+            raise ValueError(f"{self.encoding} audio is not a sample array; decode it first")
+        np = _numpy()
+        return np.frombuffer(self.data, dtype=dtype).reshape(-1, self.channels)
 
 
 class _Stream[T]:
@@ -137,14 +179,38 @@ class Camera(_Stream[Frame]):
 
 
 class Microphone(_Stream[AudioChunk]):
-    """``robot.microphone``: the robot's microphone as :class:`AudioChunk` objects."""
+    """``robot.microphone``: the robot's microphone as :class:`AudioChunk` objects.
+
+    Unlike frames, audio must not skip: :meth:`chunks` hands out every chunk in order from a
+    bounded queue and counts what a slow consumer lost in :attr:`dropped`."""
+
+    QUEUE = 256  # chunks (2.5 s of 10 ms audio)
+
+    def __init__(self, capability: str, transport: Transport) -> None:
+        super().__init__(capability, transport)
+        self._queue: deque[AudioChunk] = deque(maxlen=self.QUEUE)
+        self.dropped = 0
 
     def _attach(self) -> None:
         self._tx.subscribe_audio(self._on_item)
 
+    def _on_item(self, item: AudioChunk) -> None:
+        with self._cv:
+            if len(self._queue) == self._queue.maxlen:
+                self.dropped += 1
+            self._queue.append(item)
+        super()._on_item(item)
+
     def chunks(self, *, timeout: float = 5.0) -> Iterator[AudioChunk]:
-        """Audio as it arrives; see :meth:`_Stream.stream`."""
-        return self.stream(timeout=timeout)
+        """Every chunk, in order. Raises :class:`WaitTimeoutError` after ``timeout`` seconds
+        without audio."""
+        self._ensure()
+        while True:
+            with self._cv:
+                if not self._cv.wait_for(lambda: bool(self._queue), timeout):
+                    raise WaitTimeoutError(f"no microphone audio for {timeout:.1f}s", last=None)
+                item = self._queue.popleft()
+            yield item
 
 
 class Speaker:

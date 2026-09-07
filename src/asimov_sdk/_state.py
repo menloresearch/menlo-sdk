@@ -11,6 +11,7 @@ deliberately no ``pose``: the firmware has no odometry and neither lane carries 
 from __future__ import annotations
 
 import enum
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Literal
@@ -53,6 +54,7 @@ class Alert:
     value: float
     threshold: float
     source_id: int
+    first_set_us: int = 0  # firmware clock when the alert was raised; 0 when not reported
 
     @property
     def critical(self) -> bool:
@@ -105,6 +107,24 @@ ALERT_NAMES: dict[int, str] = {
 }
 
 
+class BatteryProtection(enum.IntFlag):
+    """BMS protection bits, as the firmware defines them (``bms_driver.h`` ``BMS_PROT_*``)."""
+
+    CELL_OVERVOLT = 1 << 0
+    CELL_UNDERVOLT = 1 << 1
+    PACK_OVERVOLT = 1 << 2
+    PACK_UNDERVOLT = 1 << 3
+    CHARGE_OVERTEMP = 1 << 4
+    CHARGE_LOWTEMP = 1 << 5
+    DISCHARGE_OVERTEMP = 1 << 6
+    DISCHARGE_LOWTEMP = 1 << 7
+    CHARGE_OVERCURRENT = 1 << 8
+    DISCHARGE_OVERCURRENT = 1 << 9
+    SHORT_CIRCUIT = 1 << 10
+    FRONTEND_IC_ERROR = 1 << 11
+    SOFTWARE_MOS_LOCK = 1 << 12
+
+
 @dataclass(frozen=True, slots=True)
 class Battery:
     """Pack summary from the robot's battery management system."""
@@ -113,11 +133,15 @@ class Battery:
     current_a: float  # positive charging, negative discharging
     soc_percent: float  # 0-100
     max_cell_temp_c: float
-    protection_flags: int  # BMS protection bitfield; nonzero means the BMS is protecting
+    protection: BatteryProtection  # zero when the BMS is not protecting
 
     @property
     def protecting(self) -> bool:
-        return self.protection_flags != 0
+        return self.protection != 0
+
+    @property
+    def charging(self) -> bool:
+        return self.current_a > 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +174,17 @@ class State:
     def age_s(self) -> float:
         """Seconds since this sample arrived. A wait treats a large value as absence."""
         return time.monotonic() - self.received_at
+
+    @property
+    def euler(self) -> tuple[float, float, float] | None:
+        """(roll, pitch, yaw) in radians from ``quat`` (w, x, y, z); ``None`` without a quat."""
+        if self.quat is None:
+            return None
+        w, x, y, z = self.quat
+        roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+        pitch = math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))
+        yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+        return (roll, pitch, yaw)
 
     @property
     def upright(self) -> bool | None:
