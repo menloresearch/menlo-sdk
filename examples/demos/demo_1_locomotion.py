@@ -27,7 +27,7 @@ def say(msg: str) -> None:
     print(f"[{time.monotonic() - t0:5.1f}s] {msg}", flush=True)
 
 
-with Robot.connect_direct(host) as robot:
+with Robot.connect(host) as robot:
     say(f"connected: {robot.info}")
 
     say("stand()")

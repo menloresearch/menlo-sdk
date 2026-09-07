@@ -29,16 +29,13 @@ import logging
 import socket
 import threading
 import time
-from collections.abc import Callable
 from typing import Any
 
 from asimov_sdk import _proto, robots
 from asimov_sdk._command import Command, ModeCommand, Trajectory, Velocity
-from asimov_sdk._errors import ConnectFailed, LinkLost, Unsupported
+from asimov_sdk._errors import ConnectError, LinkLostError, NotConnectedError, UnsupportedError
 from asimov_sdk._media import AudioChunk
-from asimov_sdk._outcome import Applied, Refused
-from asimov_sdk._state import Alert, Battery, Joint, Mode, State
-from asimov_sdk._state import Transport as TransportKind
+from asimov_sdk._state import Alert, Battery, Joint, Mode, State, TransportKind
 from asimov_sdk.transport.base import (
     AudioCallback,
     ControllerCallback,
@@ -61,7 +58,7 @@ def _pb() -> tuple[Any, Any, Any]:
     try:
         b = _proto.load()
     except ImportError as exc:  # pragma: no cover - environment, not logic
-        raise ConnectFailed(
+        raise ConnectError(
             "protobuf is not installed; it is the SDK's only runtime dependency "
             "(`pip install protobuf>=5.29.3`)."
         ) from exc
@@ -142,7 +139,6 @@ class UdpTransport:
         *,
         command_port: int = COMMAND_PORT,
         state_bind: tuple[str, int] = ("0.0.0.0", STATE_PORT),
-        joint_names: Callable[[int], tuple[str, ...] | None] = robots.joint_names_for,
         state_source: str | None = None,
     ) -> None:
         self._host, self._port = host, int(command_port)
@@ -150,7 +146,6 @@ class UdpTransport:
         self._state_source_ip: str | None = None
         self._addr: tuple[str, int] | None = None  # resolved once, in open()
         self._bind = (state_bind[0], int(state_bind[1]))
-        self._joint_names = joint_names
         self.endpoint = f"{host}:{command_port}"
         self._sock: socket.socket | None = None
         self._reader: threading.Thread | None = None
@@ -164,7 +159,7 @@ class UdpTransport:
     # ── lifecycle ────────────────────────────────────────────────────────────
     def open(self) -> None:
         if self._sock is not None:
-            raise ConnectFailed("this UdpTransport is already open")  # never leak a socket+thread
+            raise ConnectError("this UdpTransport is already open")  # never leak a socket+thread
         _pb()  # fail here, with the install hint, not in the reader thread
         # Resolve the robot's name ONCE. sendto() with a hostname re-resolves on every
         # datagram — ten mDNS lookups a second under the keepalive, each able to stall
@@ -176,13 +171,13 @@ class UdpTransport:
                 resolving = self._state_source
                 self._state_source_ip = socket.gethostbyname(self._state_source)
         except OSError as exc:
-            raise ConnectFailed(f"cannot resolve {resolving!r}: {exc}") from exc
+            raise ConnectError(f"cannot resolve {resolving!r}: {exc}") from exc
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.bind(self._bind)
         except OSError as exc:
             sock.close()
-            raise ConnectFailed(
+            raise ConnectError(
                 f"could not bind the state port {self._bind[0]}:{self._bind[1]}: {exc}. "
                 "Another SDK process on this machine is already listening, or a stale one "
                 "is still running. Pass a different state_bind and start the edge with the "
@@ -199,7 +194,8 @@ class UdpTransport:
     def close(self) -> None:
         self._stop.set()
         if self._reader is not None:
-            self._reader.join(timeout=2.0)
+            if self._reader is not threading.current_thread():
+                self._reader.join(timeout=2.0)
             self._reader = None
         if self._sock is not None:
             with contextlib.suppress(OSError):
@@ -236,7 +232,7 @@ class UdpTransport:
             msg = st.RobotState()
             try:
                 msg.ParseFromString(data)
-                state = state_from_robot_state(msg, self._joint_names(len(msg.joint_pos)))
+                state = state_from_robot_state(msg, None)  # Robot names the joints
             except Exception:  # a bad datagram (or joint table) must not kill the reader
                 log.debug("dropped an undecodable datagram (%d bytes)", len(data), exc_info=True)
                 continue
@@ -250,7 +246,7 @@ class UdpTransport:
     def send(self, command: Command) -> int:
         sock, addr = self._sock, self._addr
         if sock is None or addr is None:
-            raise LinkLost("transport is closed")
+            raise NotConnectedError("this UdpTransport is not open")
         cmd, common, _ = _pb()
         msg = cmd.RobotCommand(protocol_version=robots.PROTOCOL_VERSION)
         if isinstance(command, Velocity):
@@ -266,6 +262,9 @@ class UdpTransport:
                 common.CONTROL_MODE_STAND if command.mode == "stand" else common.CONTROL_MODE_DAMP
             )
         elif isinstance(command, Trajectory):
+            msg.mode = (
+                common.CONTROL_MODE_MOVE
+            )  # a trajectory drives; the datagram must not say DAMP
             msg.command_control = common.COMMAND_CONTROL_TRAJECTORY
             msg.all_trajectory.positions.extend(command.positions)
             if command.kp is not None:
@@ -283,20 +282,15 @@ class UdpTransport:
         try:
             sock.sendto(msg.SerializeToString(), addr)
         except OSError as exc:
-            raise LinkLost(f"send to {self.endpoint} failed: {exc}") from exc
+            raise LinkLostError(f"send to {self.endpoint} failed: {exc}") from exc
         return seq
 
     # ── media: not carried on this wire ──────────────────────────────────────
     def subscribe_frames(self, callback: FrameCallback) -> None:
-        raise Unsupported("camera", self.kind)
+        raise UnsupportedError("camera", self.kind)
 
     def subscribe_audio(self, callback: AudioCallback) -> None:
-        raise Unsupported("microphone", self.kind)
+        raise UnsupportedError("microphone", self.kind)
 
     def play_audio(self, chunk: AudioChunk) -> None:
-        raise Unsupported("speaker", self.kind)
-
-    # Test seam: a fake edge delivers verdicts here.
-    def _deliver_outcome(self, outcome: Applied | Refused) -> None:
-        for cb in tuple(self._on_outcome):
-            cb(outcome)
+        raise UnsupportedError("speaker", self.kind)

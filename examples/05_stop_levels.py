@@ -16,7 +16,7 @@ from asimov_sdk import Mode, Robot
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect_direct(host) as robot:
+with Robot.connect(host) as robot:
     robot.stand()
     robot.wait_for(Mode.STAND, timeout=15.0)
 

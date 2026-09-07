@@ -5,7 +5,7 @@ Drive an Asimov robot from Python.
 ```python
 from asimov_sdk import Robot, Mode
 
-with Robot.connect_direct("asimov.local") as robot:
+with Robot.connect("asimov.local") as robot:
     robot.stand()
     robot.wait_for(Mode.STAND, timeout=10.0)
     robot.set_velocity(vx=0.25, duration=4.0)  # m/s, held for 4 s, then zero
@@ -52,12 +52,12 @@ DAMPed, STAND is suppressed on a fault-DAMP, and two seconds without a velocity 
 STANDs the robot. The SDK does not bypass any of that; it is a client of it.
 
 No robot handy? The simulator is the same edge and the same firmware:
-`menlo-studio up --container --sdk`, then `Robot.connect_direct("127.0.0.1")`.
+`menlo-studio up --container --sdk`, then `Robot.connect("127.0.0.1")`.
 
 ## The API in one screen
 
 ```python
-robot = Robot.connect_direct(host)      # returns when the first state sample arrives
+robot = Robot.connect(host)      # returns when the first state sample arrives
 robot.info                              # RobotInfo: dof, joint names, protocol version, limits
 
 sent = robot.set_velocity(vx, vy, vyaw, duration=None)   # held at 10 Hz until superseded
@@ -84,8 +84,8 @@ Two questions are deliberately separate:
   Today's edge does not report verdicts, so it returns `Unknown`. `Unknown` is never
   treated as success and never as refusal.
 - **Did it take effect?** `wait_for` / `wait_until` read the robot's state stream. They
-  raise typed errors when the answer cannot come: `StateStale` (the stream went quiet),
-  `RobotFaulted` (the firmware fault-DAMPed), `WaitTimedOut`.
+  raise typed errors when the answer cannot come: `StateStaleError` (the stream went quiet),
+  `RobotFaultedError` (the firmware fault-DAMPed), `WaitTimeoutError`.
 
 Errors that concern the robot or the link subclass `AsimovError`. Caller mistakes stay
 builtins: a non-finite velocity is a `ValueError`, an unknown joint name a `KeyError`.
@@ -101,11 +101,11 @@ builtins: a non-finite velocity is a `ValueError`, an unknown joint name a `KeyE
   link. It never damps: damping a standing biped collapses it.
 - `damp()` **is** the emergency stop, and it raises on a dead link like every other verb.
 - The state port is plain UDP: samples that do not look like this robot are dropped, and
-  `connect_direct(..., state_source="<robot ip>")` pins the one address state may arrive
+  `connect(..., state_source="<robot ip>")` pins the one address state may arrive
   from. Leave it unset on the simulator, whose state leaves from the container address.
 - Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s) and the clamp is
   visible on `Sent.clamped`.
-- Lose the state stream for two seconds and the `Robot` is `LinkLost`: terminal, no
+- Lose the state stream for two seconds and the `Robot` is `LinkLostError`: terminal, no
   auto-reconnect (reconnecting would re-latch a velocity across a gap you never saw).
 
 ## Layout

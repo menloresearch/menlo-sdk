@@ -20,7 +20,7 @@ pytestmark = pytest.mark.live
 
 
 def test_stand_walk_stop_damp(live_host):
-    with Robot.connect_direct(live_host, timeout=5.0) as robot:
+    with Robot.connect(live_host, timeout=5.0) as robot:
         print(robot.info)
         assert robot.info.dof == 25
         assert robot.state.age_s < 0.5, "state should be streaming"

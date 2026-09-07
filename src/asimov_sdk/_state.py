@@ -17,7 +17,7 @@ from typing import Literal
 
 from asimov_sdk._command import Limits
 
-Transport = Literal["direct"]
+TransportKind = str  # a transport names its wire: UdpTransport says "direct"
 
 #: What a robot, over a given transport, can do for a script. ``drive`` and ``state`` are
 #: what every transport must carry; the rest depend on the robot and the wire.
@@ -57,6 +57,52 @@ class Alert:
     @property
     def critical(self) -> bool:
         return self.severity == 0
+
+    @property
+    def name(self) -> str:
+        """The firmware's name for this alert id, or ``"ALERT_<id>"`` when the SDK has none."""
+        return ALERT_NAMES.get(self.id, f"ALERT_{self.id}")
+
+
+#: Alert ids as named in the firmware's ``lib/alert_types.h``. Severity is 0 (critical)
+#: for ids 0-15, 1 (warning) for 16-31, 2 (info) for 32-47.
+ALERT_NAMES: dict[int, str] = {
+    0: "MOTOR_COMM_LOSS",
+    1: "MOTOR_OVERCURRENT",
+    2: "MOTOR_OVERTEMP",
+    3: "IMU_FAILURE",
+    4: "WATCHDOG_TIMEOUT",
+    5: "MOTOR_ENCODER_ERROR",
+    7: "FALL_DETECTED",
+    8: "POLICY_SPAZ",
+    9: "TUMBLE_DETECTED",
+    10: "MOTOR_PARTIAL_LOSS",
+    11: "JOINT_OUT_OF_RANGE",
+    12: "BMS_COMM_LOSS",
+    13: "BMS_PROTECTION",
+    16: "MOTOR_DRV_FAULT",
+    17: "MOTOR_TEMP_HIGH",
+    18: "IMU_DEGRADED",
+    19: "CAN_ERRORS",
+    20: "POLICY_LATE",
+    21: "CAN_TIMEOUT",
+    22: "CAN_BUS_OFF",
+    23: "CAN_TX_FAILURE",
+    24: "MOTOR_UNDERVOLTAGE",
+    25: "MOTOR_BRAKE_OVERVOLT",
+    26: "CAN_UTILIZATION_HIGH",
+    27: "BMS_LOW_SOC",
+    28: "INVALID_GAINS",
+    32: "MODE_CHANGE",
+    34: "IMU_STALE",
+    35: "IMU_CALIBRATION_LOW",
+    36: "POLICY_INFERENCE_TIMEOUT",
+    37: "POLICY_DEADLINE_MISS",
+    38: "MOTOR_MISSING",
+    39: "INFERENCE_JITTER",
+    40: "IMU_RATE_DROP",
+    41: "BMS_CELL_TEMP_HIGH",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,15 +187,13 @@ class RobotInfo:
     ``None`` rather than guessed.
     """
 
-    transport: Transport
+    transport: TransportKind
     endpoint: str
     dof: int
     joint_names: tuple[str, ...] | None
     protocol_version: int
     limits: Limits
     capabilities: frozenset[str] = frozenset({"drive", "state"})
-    model: str | None = None
-    robot_id: str | None = None
 
     def has(self, capability: Capability | str) -> bool:
         return capability in self.capabilities
@@ -165,8 +209,8 @@ class RobotInfo:
             ) from None
 
     def __str__(self) -> str:
-        model = self.model or "asimov"
+        caps = ",".join(sorted(self.capabilities))
         return (
-            f"{model} via {self.transport} ({self.endpoint}) "
-            f"dof={self.dof} proto=v{self.protocol_version}"
+            f"asimov via {self.transport} ({self.endpoint}) "
+            f"dof={self.dof} proto=v{self.protocol_version} caps={caps}"
         )

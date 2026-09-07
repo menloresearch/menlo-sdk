@@ -2,7 +2,7 @@
 
     from asimov_sdk import Robot, Mode
 
-    with Robot.connect_direct("asimov.local") as robot:
+    with Robot.connect("asimov.local") as robot:
         robot.stand()
         robot.wait_for(Mode.STAND)
         robot.set_velocity(vx=0.25, duration=4.0)
@@ -11,19 +11,19 @@ One ``Robot``, one API, pluggable transports. The direct LAN lane ships today; t
 cloud lane plugs into the same ``Transport`` seam later.
 """
 
-from asimov_sdk._command import Limits, ModeCommand, Trajectory, Velocity
+from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity
 from asimov_sdk._errors import (
     AsimovError,
     CommandRefusedError,
-    ConnectFailed,
-    LinkLost,
-    NotConnected,
+    ConnectError,
+    LinkLostError,
+    NotConnectedError,
     OutcomeUnknownError,
-    ProtocolMismatch,
-    RobotFaulted,
-    StateStale,
-    Unsupported,
-    WaitTimedOut,
+    ProtocolMismatchError,
+    RobotFaultedError,
+    StateStaleError,
+    UnsupportedError,
+    WaitTimeoutError,
 )
 from asimov_sdk._media import AudioChunk, Camera, Frame, Microphone, Speaker
 from asimov_sdk._outcome import Applied, Outcome, Refusal, Refused, Sent, Unknown
@@ -41,34 +41,35 @@ __all__ = [
     "Battery",
     "Camera",
     "Capability",
+    "Command",
     "CommandRefusedError",
-    "ConnectFailed",
+    "ConnectError",
     "Frame",
     "Joint",
     "Limits",
-    "LinkLost",
+    "LinkLostError",
     "Microphone",
     "Mode",
     "ModeCommand",
-    "NotConnected",
+    "NotConnectedError",
     "Outcome",
     "OutcomeUnknownError",
-    "ProtocolMismatch",
+    "ProtocolMismatchError",
     "Refusal",
     "Refused",
     "Robot",
-    "RobotFaulted",
+    "RobotFaultedError",
     "RobotInfo",
     "Sent",
     "Speaker",
     "State",
-    "StateStale",
+    "StateStaleError",
     "Trajectory",
     "Transport",
     "UdpTransport",
     "Unknown",
-    "Unsupported",
+    "UnsupportedError",
     "Velocity",
-    "WaitTimedOut",
+    "WaitTimeoutError",
     "__version__",
 ]

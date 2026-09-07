@@ -91,6 +91,10 @@ class Trajectory:
     kd: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
+        if (self.kp is None) != (self.kd is None):
+            # The edge uses firmware defaults for BOTH unless both are given; sending one
+            # would be silently ignored, so refuse it here.
+            raise ValueError("give both kp and kd, or neither (exactly one of kp/kd was given)")
         if not self.positions:
             raise ValueError("trajectory needs at least one position")
         for name in ("positions", "kp", "kd"):

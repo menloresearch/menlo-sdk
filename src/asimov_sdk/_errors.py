@@ -27,11 +27,11 @@ class AsimovError(Exception):
 # ── the link ─────────────────────────────────────────────────────────────────
 
 
-class ConnectFailed(AsimovError):
+class ConnectError(AsimovError):
     """No robot answered within the connect timeout, or the transport could not open."""
 
 
-class ProtocolMismatch(ConnectFailed):
+class ProtocolMismatchError(ConnectError):
     """The robot speaks a different ``asimov.io`` protocol version than this SDK was built
     against. Commands would be silently misread; refuse to start instead."""
 
@@ -41,7 +41,7 @@ class ProtocolMismatch(ConnectFailed):
         self.observed = observed
 
 
-class Unsupported(AsimovError):
+class UnsupportedError(AsimovError):
     """This robot, over this transport, does not provide the capability. Check
     ``robot.has(...)`` first when a script should degrade instead of fail."""
 
@@ -53,11 +53,11 @@ class Unsupported(AsimovError):
         self.transport = transport
 
 
-class NotConnected(AsimovError):
-    """A verb was called before ``connect`` or after ``close``."""
+class NotConnectedError(AsimovError):
+    """A verb was called before ``open()`` / ``Robot.connect()`` or after ``close``."""
 
 
-class LinkLost(AsimovError):
+class LinkLostError(AsimovError):
     """The robot stopped talking (no state for ``link_timeout`` seconds).
 
     The session is over: every verb and wait on this ``Robot`` raises this error until the
@@ -70,7 +70,7 @@ class LinkLost(AsimovError):
 # ── waits ────────────────────────────────────────────────────────────────────
 
 
-class WaitTimedOut(AsimovError, TimeoutError):
+class WaitTimeoutError(AsimovError, TimeoutError):
     """``wait_until``/``wait_for`` gave up. Also a builtin ``TimeoutError``, so callers who
     reach for that name still catch it."""
 
@@ -79,12 +79,12 @@ class WaitTimedOut(AsimovError, TimeoutError):
         self.last = last
 
 
-class StateStale(WaitTimedOut):
+class StateStaleError(WaitTimeoutError):
     """The state stream went quiet, so a cached snapshot is no longer an observation and
     the wait refused to succeed on it."""
 
 
-class RobotFaulted(AsimovError):
+class RobotFaultedError(AsimovError):
     """The firmware fault-DAMPed (a fall, a critical alert) while a wait was in progress.
     Fault authority outranks every client; retrying the same command will not help."""
 

@@ -21,7 +21,7 @@ nothing in `robot.py` may know which wire it is on.
 - **Caller bugs are builtins** (`ValueError`, `KeyError`); robot/link errors subclass
   `AsimovError`.
 - **Nothing is guessed.** A field the robot does not report is `None`. A joint table
-  carries its provenance (`robots.py`). A protocol version mismatch is a `ProtocolMismatch`,
+  carries its provenance (`robots.py`). A protocol version mismatch is a `ProtocolMismatchError`,
   not a warning.
 - **Tests fail without the fix.** Every behavioural change ships a test that goes red when
   the change is reverted. The fake edge in `tests/conftest.py` speaks the real wire; if you

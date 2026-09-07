@@ -86,3 +86,34 @@ print('wholesale fallback ok')
     )
     assert r.returncode == 0, r.stderr
     assert "wholesale fallback ok" in r.stdout
+
+
+def test_an_installed_package_that_differs_from_the_pin_is_not_used(tmp_path):
+    """Same module names, different bytes (another protocol release): the vendored tree wins
+    and a warning says so, instead of silently decoding with the wrong descriptors."""
+    import shutil
+
+    other = tmp_path / "site"
+    shutil.copytree(VENDOR / "asimov_protocol", other / "asimov_protocol")
+    common = other / "asimov_protocol" / "v1" / "asimov_common_pb2.py"
+    common.write_text(common.read_text() + "\n# a different release\n")
+    code = """
+import logging, os, sys
+logging.basicConfig(level=logging.WARNING)
+sys.path.insert(0, os.environ['OTHER_SITE'])
+from asimov_sdk import _proto
+b = _proto.load()
+assert b.source == 'vendored', b.source
+assert not any(k == 'asimov_protocol' or k.startswith('asimov_protocol.') for k in sys.modules)
+print('pinned bindings kept')
+"""
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={**os.environ, "OTHER_SITE": str(other)},
+    )
+    assert r.returncode == 0, r.stderr
+    assert "pinned bindings kept" in r.stdout and "differs from the bindings" in r.stderr

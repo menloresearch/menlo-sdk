@@ -2,7 +2,7 @@
 
 The robot's edge owns the sensors; the SDK owns the shape a script sees. A transport
 that carries a stream delivers it through ``subscribe_frames`` / ``subscribe_audio`` and
-accepts ``play_audio``; one that does not raises :class:`Unsupported` from
+accepts ``play_audio``; one that does not raises :class:`UnsupportedError` from
 :meth:`Camera.latest` and friends with the reason in the message. Check
 ``robot.has("camera")`` first when a script should degrade instead of fail.
 """
@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from asimov_sdk._errors import Unsupported, WaitTimedOut
+from asimov_sdk._errors import UnsupportedError, WaitTimeoutError
 
 if TYPE_CHECKING:
     from asimov_sdk.transport.base import Transport
@@ -76,7 +76,7 @@ class _Stream[T]:
 
     def _require(self) -> None:
         if self._capability not in self._tx.capabilities:
-            raise Unsupported(self._capability, self._tx.kind)
+            raise UnsupportedError(self._capability, self._tx.kind)
 
     def _attach(self) -> None:
         raise NotImplementedError
@@ -113,14 +113,14 @@ class _Stream[T]:
             return self._latest
 
     def stream(self, *, timeout: float = 5.0) -> Iterator[T]:
-        """Yield items as they arrive. Raises :class:`WaitTimedOut` when ``timeout`` seconds
+        """Yield items as they arrive. Raises :class:`WaitTimeoutError` when ``timeout`` seconds
         pass without one — a stream that has gone quiet is a fact, not an idle loop."""
         self._ensure()
         seen = self._count
         while True:
             item = self._wait_past(seen, timeout)
             if item is None:
-                raise WaitTimedOut(f"no {self._capability} data for {timeout:.1f}s", last=None)
+                raise WaitTimeoutError(f"no {self._capability} data for {timeout:.1f}s", last=None)
             seen = self._count
             yield item
 
@@ -154,10 +154,10 @@ class Speaker:
         self._tx = transport
 
     def play(self, chunk: AudioChunk) -> None:
-        """Send one chunk to the robot's speaker. Raises :class:`Unsupported` when this
+        """Send one chunk to the robot's speaker. Raises :class:`UnsupportedError` when this
         transport does not carry audio to the robot."""
         if "speaker" not in self._tx.capabilities:
-            raise Unsupported("speaker", self._tx.kind)
+            raise UnsupportedError("speaker", self._tx.kind)
         self._tx.play_audio(chunk)
 
     def play_pcm(

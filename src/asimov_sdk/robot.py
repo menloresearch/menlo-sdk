@@ -4,7 +4,7 @@
 
     from asimov_sdk import Robot, Mode
 
-    with Robot.connect_direct("asimov.local") as robot:
+    with Robot.connect("asimov.local") as robot:
         robot.stand()
         robot.wait_for(Mode.STAND, timeout=8.0)
         robot.set_velocity(vx=0.25, duration=4.0)   # held for 4 s, then zero
@@ -43,23 +43,23 @@ from __future__ import annotations
 import collections
 import dataclasses
 import logging
+import math
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Self
 
 from asimov_sdk import robots
 from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity
 from asimov_sdk._errors import (
-    AsimovError,
     CommandRefusedError,
-    ConnectFailed,
-    LinkLost,
-    NotConnected,
-    ProtocolMismatch,
-    RobotFaulted,
-    StateStale,
-    WaitTimedOut,
+    ConnectError,
+    LinkLostError,
+    NotConnectedError,
+    ProtocolMismatchError,
+    RobotFaultedError,
+    StateStaleError,
+    WaitTimeoutError,
 )
 from asimov_sdk._media import Camera, Microphone, Speaker
 from asimov_sdk._outcome import Applied, Refused, Sent
@@ -67,7 +67,20 @@ from asimov_sdk._state import Capability, Mode, RobotInfo, State
 from asimov_sdk.transport.base import Transport
 from asimov_sdk.transport.udp import UdpTransport
 
-log = logging.getLogger("asimov_sdk.robot")
+log = logging.getLogger(__name__)
+
+
+def _positive_finite(name: str, value: float) -> float:
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError(f"{name} must be a positive finite number of seconds, got {value!r}")
+    return value
+
+
+def _nonnegative_finite(name: str, value: float) -> float:
+    if not (math.isfinite(value) and value >= 0):
+        raise ValueError(f"{name} must be a finite number of seconds >= 0, got {value!r}")
+    return value
+
 
 #: How often a held velocity is re-sent. The edge zero-and-STANDs ~2 s after the last
 #: velocity it saw; 10 Hz leaves 20 misses of margin and is what the edge's other
@@ -91,7 +104,7 @@ class Robot:
         classmethods; this is the seam a new transport plugs into."""
         self._tx = transport
         self.limits = limits if limits is not None else Limits()
-        self.link_timeout = link_timeout
+        self.link_timeout = _positive_finite("link_timeout", link_timeout)
         self._lock = threading.RLock()
         # `_state` and `_info` are single reference assignments read from several threads
         # without the lock. That is safe because reading/replacing one attribute is atomic
@@ -108,18 +121,18 @@ class Robot:
         self._subscribed = False
         self._refusals: collections.deque[Refused] = collections.deque(maxlen=256)
         self._closed = True
-        self._link_lost: LinkLost | None = None
+        self._link_lost: LinkLostError | None = None
         self._info: RobotInfo | None = None
         self._camera = Camera("camera", transport)
         self._microphone = Microphone("microphone", transport)
         self._speaker = Speaker(transport)
         self.on_refused: Callable[[Refused], None] | None = None
         self.on_controller_change: Callable[[str | None, str | None, str], None] | None = None
-        self.on_link_lost: Callable[[LinkLost], None] | None = None
+        self.on_link_lost: Callable[[LinkLostError], None] | None = None
 
     # ── constructors ─────────────────────────────────────────────────────────
     @classmethod
-    def connect_direct(
+    def connect(
         cls,
         host: str,
         *,
@@ -135,7 +148,7 @@ class Robot:
 
         The edge must be running with ``--udp-control`` and pushing state to this machine
         (``--udp-state-host <this ip>``). Returns once the first state sample has arrived
-        and its protocol version matches; raises :class:`ConnectFailed` otherwise, because
+        and its protocol version matches; raises :class:`ConnectError` otherwise, because
         a UDP socket that hears nothing is talking to nobody.
 
         ``state_source`` pins the address state may arrive from; datagrams from anyone else
@@ -151,7 +164,7 @@ class Robot:
 
     def open(self, *, timeout: float = 5.0, allow_version_skew: bool = False) -> None:
         if not self._closed:
-            raise AsimovError("this Robot is already open")
+            raise RuntimeError("this Robot is already open")
         if not self._subscribed:  # a failed open() followed by a retry must not double-subscribe
             self._tx.subscribe_state(self._on_state)
             self._tx.subscribe_outcome(self._on_outcome)
@@ -163,16 +176,17 @@ class Robot:
         with self._lock:  # nothing from the previous session may leak into this one
             self._info = None  # or _on_state would filter the NEW robot's samples as foreign
             self._link_lost = None
+            self._latched, self._latch_deadline = None, None  # a drive never survives a session
+            self._generation += 1
             self._last_mode = None
             self._pending.clear()
             self._refusals.clear()
         self._tx.open()
-        self._closed = False
         self._stop.clear()
+        # Verbs stay refused (NotConnectedError) until the handshake below has passed.
         if not self._state_seen.wait(timeout):
             self._tx.close()
-            self._closed = True
-            raise ConnectFailed(
+            raise ConnectError(
                 f"no state from the robot at {self._tx.endpoint} within {timeout:.1f}s. "
                 "Is the edge running with --udp-control, and is its --udp-state-host "
                 "pointing at this machine?"
@@ -181,8 +195,7 @@ class Robot:
         assert first is not None
         if first.protocol_version != robots.PROTOCOL_VERSION and not allow_version_skew:
             self._tx.close()
-            self._closed = True
-            raise ProtocolMismatch(
+            raise ProtocolMismatchError(
                 f"the robot reports asimov.io protocol v{first.protocol_version}; this SDK "
                 f"was built against v{robots.PROTOCOL_VERSION}. Commands would be misread. "
                 "Update the SDK (or the robot), or pass allow_version_skew=True to proceed "
@@ -203,6 +216,7 @@ class Robot:
             limits=self.limits,
             capabilities=frozenset(capabilities),
         )
+        self._closed = False
         self._keepalive = threading.Thread(
             target=self._keepalive_loop, name="asimov-sdk-keepalive", daemon=True
         )
@@ -241,7 +255,7 @@ class Robot:
     @property
     def info(self) -> RobotInfo:
         if self._info is None:
-            raise NotConnected("not connected")
+            raise NotConnectedError("not connected")
         return self._info
 
     @property
@@ -254,7 +268,7 @@ class Robot:
 
     @property
     def camera(self) -> Camera:
-        """Frames from the robot's camera. Raises ``Unsupported`` on first use when this
+        """Frames from the robot's camera. Raises ``UnsupportedError`` on first use when this
         transport does not carry them."""
         return self._camera
 
@@ -265,7 +279,7 @@ class Robot:
 
     @property
     def speaker(self) -> Speaker:
-        """Audio to the robot's speaker. ``play`` raises ``Unsupported`` when this transport
+        """Audio to the robot's speaker. ``play`` raises ``UnsupportedError`` when this transport
         cannot carry it."""
         return self._speaker
 
@@ -274,7 +288,7 @@ class Robot:
         """The latest sample the robot pushed. Check ``state.age_s`` before trusting it."""
         s = self._state
         if s is None:
-            raise NotConnected("no state received yet")
+            raise NotConnectedError("no state received yet")
         return s
 
     # ── verbs: each returns a Sent immediately ───────────────────────────────
@@ -294,8 +308,8 @@ class Robot:
 
     def _drive(self, name: str, asked: Velocity, duration: float | None) -> Sent:
         v = asked.clamped(self.limits)
-        if duration is not None and duration <= 0:
-            raise ValueError("duration must be positive")
+        if duration is not None:
+            _positive_finite("duration", duration)
         # Bump and send under ONE lock hold: a verb issued by the caller must never be
         # dropped as "superseded" by a concurrent verb. The generation fence exists for the
         # keepalive's re-sends, which are the only sends that may legitimately go stale.
@@ -326,7 +340,7 @@ class Robot:
 
     def trajectory(
         self,
-        positions: Iterator[float] | tuple[float, ...] | list[float],
+        positions: Iterable[float],
         *,
         kp: tuple[float, ...] | list[float] | None = None,
         kd: tuple[float, ...] | list[float] | None = None,
@@ -357,41 +371,48 @@ class Robot:
         """Block until the robot's OWN state satisfies ``predicate``.
 
         Ends early, with a typed error, when the answer can no longer come: the stream
-        went quiet (:class:`StateStale`), the firmware fault-DAMPed (:class:`RobotFaulted`),
-        or the ``stand``/``damp``/``trajectory`` still in force — the last verb sent, when
-        it was one of those — was refused (:class:`CommandRefusedError`).
+        went quiet (:class:`StateStaleError`); the firmware fault-DAMPed
+        (:class:`RobotFaultedError`, checked before the predicate, so a fault is never read
+        as success); or the ``stand``/``damp``/``trajectory`` still in force — the last verb
+        sent, when it was one of those — was refused (:class:`CommandRefusedError`).
         """
-        stale = self.link_timeout if stale_after is None else stale_after
+        _nonnegative_finite("timeout", timeout)
+        _nonnegative_finite("poll", poll)
+        stale = (
+            self.link_timeout
+            if stale_after is None
+            else _positive_finite("stale_after", stale_after)
+        )
         deadline = time.monotonic() + timeout
         last: State | None = None
         while True:
             if self._closed:  # a cached sample from a closed session must not satisfy a wait
-                raise NotConnected("this Robot is closed")
+                raise NotConnectedError("this Robot is closed")
             if self._link_lost is not None:
                 raise self._link_lost
             s = self._state
             if s is not None:
                 if s.age_s > stale:
-                    raise StateStale(
+                    raise StateStaleError(
                         f"the robot has not reported for {s.age_s:.2f}s (limit {stale:.2f}s); "
                         "treating it as absent, not slow",
                         last=s,
                     )
-                if predicate(s):
-                    return s
                 if s.faulted and s.mode in (Mode.DAMP, Mode.UNKNOWN):
-                    raise RobotFaulted(
+                    raise RobotFaultedError(
                         "the firmware fault-DAMPed; the wait cannot succeed "
                         f"(error_flags={s.error_flags}, critical alerts="
                         f"{[a.id for a in s.alerts if a.critical]})",
                         state=s,
                     )
+                if predicate(s):
+                    return s
                 last = s
             pending_mode = self._last_mode  # only the command still in force can refuse a wait
             if pending_mode is not None and isinstance(pending_mode.outcome, Refused):
                 raise CommandRefusedError(pending_mode.outcome)
             if time.monotonic() >= deadline:
-                raise WaitTimedOut(
+                raise WaitTimeoutError(
                     f"condition not met after {timeout:.1f}s"
                     + (f" (mode={last.mode.name})" if last else ""),
                     last=last,
@@ -402,8 +423,8 @@ class Robot:
         """``wait_until(lambda s: s.mode is mode)`` with a readable name."""
         try:
             return self.wait_until(lambda s: s.mode is mode, timeout=timeout)
-        except WaitTimedOut as exc:
-            raise WaitTimedOut(
+        except WaitTimeoutError as exc:
+            raise WaitTimeoutError(
                 f"the robot did not reach {mode.name} within {timeout:.1f}s"
                 + (f" (still {exc.last.mode.name})" if exc.last else ""),
                 last=exc.last,
@@ -430,11 +451,12 @@ class Robot:
             return sent
 
     def _send(self, name: str, command: Command, gen: int, *, clamped: bool = False) -> Sent:
+        lost: LinkLostError | None = None
         with self._lock:
             # Checked under the lock so a close() racing on another thread cannot slip a
             # command onto a transport that is being torn down.
             if self._closed:
-                raise NotConnected("this Robot is closed")
+                raise NotConnectedError("this Robot is closed")
             if self._link_lost is not None:
                 raise self._link_lost
             if gen != self._generation:
@@ -449,20 +471,23 @@ class Robot:
                 )
             try:
                 seq = self._tx.send(command)
-            except LinkLost as exc:
-                self._mark_link_lost(exc)
-                raise
-            sent = Sent(
-                name=name,
-                sequence=seq,
-                command=command,
-                clamped=clamped,
-                default_timeout=self._tx.default_outcome_timeout,
-            )
-            self._pending[seq] = sent
-            while len(self._pending) > 512:
-                self._pending.popitem(last=False)
-            return sent
+            except LinkLostError as exc:
+                lost = exc
+            else:
+                sent = Sent(
+                    name=name,
+                    sequence=seq,
+                    command=command,
+                    clamped=clamped,
+                    default_timeout=self._tx.default_outcome_timeout,
+                )
+                self._pending[seq] = sent
+                while len(self._pending) > 512:
+                    self._pending.popitem(last=False)
+                return sent
+        # Outside the lock: on_link_lost may block on things that need a verb.
+        self._mark_link_lost(lost)
+        raise lost
 
     def _keepalive_loop(self) -> None:
         interval = 1.0 / KEEPALIVE_HZ
@@ -473,7 +498,7 @@ class Robot:
                 last_seen = s.received_at
             if time.monotonic() - last_seen > self.link_timeout and self._link_lost is None:
                 self._mark_link_lost(
-                    LinkLost(
+                    LinkLostError(
                         f"no state from {self._tx.endpoint} for {self.link_timeout:.1f}s; "
                         "the edge's own watchdog has already stopped the robot"
                     )
@@ -489,14 +514,14 @@ class Robot:
                 continue
             try:
                 self._send("set_velocity", v, gen)
-            except (LinkLost, NotConnected):
+            except (LinkLostError, NotConnectedError):
                 return
             except Exception as exc:  # a transport bug must not silently end the hold
                 log.exception("keepalive send failed; declaring the link lost")
-                self._mark_link_lost(LinkLost(f"keepalive send failed: {exc!r}"))
+                self._mark_link_lost(LinkLostError(f"keepalive send failed: {exc!r}"))
                 return
 
-    def _mark_link_lost(self, exc: LinkLost) -> None:
+    def _mark_link_lost(self, exc: LinkLostError) -> None:
         with self._lock:
             if self._link_lost is not None:
                 return
@@ -547,6 +572,16 @@ class Robot:
         prev = self._state
         if prev is not None and 0 < (prev.sequence - state.sequence) % 2**32 < 2**31:
             return
+        if state.joints and not state.joints[0].name:
+            names = robots.joint_names_for(len(state.joints))
+            if names is not None:
+                state = dataclasses.replace(
+                    state,
+                    joints=tuple(
+                        dataclasses.replace(j, name=n)
+                        for j, n in zip(state.joints, names, strict=True)
+                    ),
+                )
         self._state = state
         self._state_seen.set()
 
@@ -558,9 +593,10 @@ class Robot:
             # (or a duplicate). It must not surface as a fresh refusal of this session.
             log.debug("dropped an outcome for unknown sequence %d", outcome.sequence)
             return
-        sent._resolve(outcome)
-        if isinstance(outcome, Refused):
-            outcome = dataclasses.replace(outcome, verb=sent.name)
+        sent._resolve(outcome)  # stamps the verb onto a Refused
+        resolved = sent.outcome
+        if isinstance(resolved, Refused):
+            outcome = resolved
         if isinstance(outcome, Refused):
             with self._lock:  # outcomes() snapshots+clears under the same lock
                 self._refusals.append(outcome)

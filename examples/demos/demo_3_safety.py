@@ -16,11 +16,11 @@ suppresses the next STAND until the rig restarts).
 import sys
 import time
 
-from asimov_sdk import Applied, Mode, Refused, Robot, Unknown, WaitTimedOut
+from asimov_sdk import Applied, Mode, Refused, Robot, Unknown, WaitTimeoutError
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect_direct(host) as robot:
+with Robot.connect(host) as robot:
     print("1) a command sent while the firmware is DAMPed")
     robot.damp()
     robot.wait_for(Mode.DAMP, timeout=5.0)
@@ -34,7 +34,7 @@ with Robot.connect_direct(host) as robot:
             print(f"   no verdict in {w}s — this edge has no outcome channel yet; observe instead:")
     try:
         robot.wait_for(Mode.MOVE, timeout=1.5)
-    except WaitTimedOut as exc:
+    except WaitTimeoutError as exc:
         print(f"   observed: it did NOT take effect — {exc}")
     robot.stop()
 

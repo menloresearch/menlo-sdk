@@ -21,13 +21,12 @@ its own. Callbacks must be cheap and must not block; ``Robot`` hands the work of
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from asimov_sdk._command import Command
 from asimov_sdk._media import AudioChunk, Frame
 from asimov_sdk._outcome import Applied, Refused
-from asimov_sdk._state import State
-from asimov_sdk._state import Transport as TransportKind
+from asimov_sdk._state import State, TransportKind
 
 StateCallback = Callable[[State], None]
 FrameCallback = Callable[[Frame], None]
@@ -36,7 +35,6 @@ OutcomeCallback = Callable[[Applied | Refused], None]
 ControllerCallback = Callable[[str | None, str | None, str], None]  # previous, current, reason
 
 
-@runtime_checkable
 class Transport(Protocol):
     """What a wire has to provide. See the module docstring for the contract."""
 
@@ -52,17 +50,22 @@ class Transport(Protocol):
     default_outcome_timeout: float
 
     def open(self) -> None:
-        """Bind, connect, start reader threads. Raise ``ConnectFailed`` on failure."""
+        """Bind, connect, start reader threads. Raise ``ConnectError`` on failure. Must be
+        callable again after ``close()``: ``Robot`` reopens the same transport."""
 
     def close(self) -> None:
         """Stop threads, release sockets. Idempotent; never raises."""
 
     def send(self, command: Command) -> int:
-        """Encode and send one command. Returns the sequence number stamped on it.
-        Raise ``LinkLost`` when the wire is gone; never block on the robot."""
+        """Encode and send one command. Returns the sequence number stamped on it: a
+        uint32 that wraps, unique per transport instance. Raise ``NotConnectedError`` when
+        the transport is not open, ``LinkLostError`` when the wire is gone; never block on
+        the robot."""
 
     def subscribe_state(self, callback: StateCallback) -> None:
-        """Every telemetry sample the robot pushes, already normalised to ``State``."""
+        """Every telemetry sample the robot pushes, normalised to ``State``. Joint names may
+        be left empty: ``Robot`` fills them from its per-robot tables. ``subscribe_*`` may be
+        called before ``open()``."""
 
     def subscribe_outcome(self, callback: OutcomeCallback) -> None:
         """Per-command verdicts, when the edge sends them. A transport whose wire has no
@@ -72,11 +75,12 @@ class Transport(Protocol):
         """Who holds the body now. Same caveat as outcomes."""
 
     def subscribe_frames(self, callback: FrameCallback) -> None:
-        """Camera frames. Raise ``Unsupported("camera", kind)`` when this wire has none."""
+        """Camera frames. Raise ``UnsupportedError("camera", kind)`` when this wire has none."""
 
     def subscribe_audio(self, callback: AudioCallback) -> None:
-        """Microphone audio. Raise ``Unsupported("microphone", kind)`` when this wire has none."""
+        """Microphone audio. Raise ``UnsupportedError("microphone", kind)`` when this wire
+        has none."""
 
     def play_audio(self, chunk: AudioChunk) -> None:
-        """Audio to the robot's speaker. Raise ``Unsupported("speaker", kind)`` when this
+        """Audio to the robot's speaker. Raise ``UnsupportedError("speaker", kind)`` when this
         wire cannot carry it."""

@@ -1,16 +1,16 @@
 """`wait_until` is the completion primitive — and it notices when the robot goes quiet.
 
 A wait that keeps checking a frozen snapshot would happily "succeed" on a dead robot.
-`wait_until` raises `StateStale` instead once the stream is older than `stale_after`.
+`wait_until` raises `StateStaleError` instead once the stream is older than `stale_after`.
 """
 
 import sys
 
-from asimov_sdk import Mode, Robot, RobotFaulted, StateStale, WaitTimedOut
+from asimov_sdk import Mode, Robot, RobotFaultedError, StateStaleError, WaitTimeoutError
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect_direct(host) as robot:
+with Robot.connect(host) as robot:
     robot.stand()
     try:
         s = robot.wait_until(
@@ -19,11 +19,11 @@ with Robot.connect_direct(host) as robot:
             stale_after=2.0,
         )
         print(f"settled: mode={s.mode.name} upright={s.upright} sample_age={s.age_s:.3f}s")
-    except RobotFaulted as exc:
+    except RobotFaultedError as exc:
         print(f"the firmware fault-DAMPed: {exc}")  # retrying will not help; clear the fault
-    except StateStale as exc:
+    except StateStaleError as exc:
         print(f"the robot stopped talking: {exc}")  # treat as absent, not slow
-    except WaitTimedOut as exc:
+    except WaitTimeoutError as exc:
         print(f"still not there: {exc}")
 
     # Joint temperatures, by name, from the same typed sample.

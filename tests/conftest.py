@@ -10,7 +10,8 @@ from collections.abc import Callable
 
 import pytest
 
-from asimov_sdk import Robot
+from asimov_sdk import Applied, Refused, Robot
+from asimov_sdk.transport.udp import UdpTransport
 
 
 def _free_port() -> int:
@@ -116,14 +117,21 @@ def edge():
     e.close()
 
 
+class SeamUdpTransport(UdpTransport):
+    """The real transport plus one test-only door: deliver a verdict as if the edge sent it."""
+
+    def deliver_outcome(self, outcome: Applied | Refused) -> None:
+        for cb in tuple(self._on_outcome):
+            cb(outcome)
+
+
 @pytest.fixture
 def robot(edge):
-    r = Robot.connect_direct(
-        "127.0.0.1",
-        command_port=edge.command_port,
-        state_bind=("127.0.0.1", edge.state_port),
-        timeout=3.0,
+    tx = SeamUdpTransport(
+        "127.0.0.1", command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port)
     )
+    r = Robot(tx)
+    r.open(timeout=3.0)
     yield r
     r.close()
 

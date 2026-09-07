@@ -8,11 +8,11 @@ effect" is read from state, and works today.
 
 import sys
 
-from asimov_sdk import Applied, Mode, Refused, Robot, Unknown, WaitTimedOut
+from asimov_sdk import Applied, Mode, Refused, Robot, Unknown, WaitTimeoutError
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect_direct(host) as robot:
+with Robot.connect(host) as robot:
     robot.damp()
     robot.wait_for(Mode.DAMP, timeout=5.0)
 
@@ -28,6 +28,6 @@ with Robot.connect_direct(host) as robot:
     # The observable truth, on any edge: the robot did not start moving.
     try:
         robot.wait_for(Mode.MOVE, timeout=1.0)
-    except WaitTimedOut as exc:
+    except WaitTimeoutError as exc:
         print(f"did not take effect: {exc}")
     robot.stop()

@@ -7,25 +7,26 @@ path — encoding, the hold, the waits, the error model.
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
 
 from asimov_sdk import (
     AsimovError,
-    ConnectFailed,
-    LinkLost,
+    ConnectError,
+    LinkLostError,
     Mode,
-    NotConnected,
-    ProtocolMismatch,
+    NotConnectedError,
+    ProtocolMismatchError,
     Refusal,
     Refused,
     Robot,
-    RobotFaulted,
-    StateStale,
+    RobotFaultedError,
+    StateStaleError,
     Unknown,
     Velocity,
-    WaitTimedOut,
+    WaitTimeoutError,
 )
 from asimov_sdk.robot import KEEPALIVE_HZ
 
@@ -43,22 +44,22 @@ def test_connect_waits_for_the_first_state_and_describes_the_robot(edge, robot):
 
 def test_connect_refuses_when_nobody_answers():
     """A UDP socket that hears nothing is talking to nobody. Say so, and say the fix."""
-    with pytest.raises(ConnectFailed) as exc:
-        Robot.connect_direct("127.0.0.1", command_port=1, state_bind=("127.0.0.1", 0), timeout=0.3)
+    with pytest.raises(ConnectError) as exc:
+        Robot.connect("127.0.0.1", command_port=1, state_bind=("127.0.0.1", 0), timeout=0.3)
     assert "--udp-control" in str(exc.value)
 
 
 def test_connect_refuses_a_protocol_version_it_was_not_built_for(edge):
     edge.state.protocol_version = 99
-    with pytest.raises(ProtocolMismatch) as exc:
-        Robot.connect_direct(
+    with pytest.raises(ProtocolMismatchError) as exc:
+        Robot.connect(
             "127.0.0.1",
             command_port=edge.command_port,
             state_bind=("127.0.0.1", edge.state_port),
             timeout=2,
         )
     assert exc.value.observed == 99 and exc.value.expected == 1
-    r = Robot.connect_direct(
+    r = Robot.connect(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),
@@ -154,7 +155,7 @@ def test_a_superseded_velocity_never_reaches_the_robot(edge, robot):
 def test_trajectory_length_must_match_the_robot(edge, robot):
     with pytest.raises(ValueError):
         robot.trajectory([0.0] * 24)
-    robot.trajectory([0.1] * 25, kp=[50.0] * 25)
+    robot.trajectory([0.1] * 25, kp=[50.0] * 25, kd=[2.0] * 25)
     assert edge.wait_for(lambda r: any(c.HasField("all_trajectory") for c in r))
     c = next(c for c in edge.received if c.HasField("all_trajectory"))
     assert len(c.all_trajectory.positions) == 25 and len(c.all_trajectory.kp) == 25
@@ -179,7 +180,7 @@ def test_a_delivered_refusal_resolves_the_handle_and_the_callback(edge, robot):
     seen = []
     robot.on_refused = seen.append
     sent = robot.set_velocity(vx=0.2)
-    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FW_DAMPED, "firmware is DAMPed"))
+    robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FW_DAMPED, "firmware is DAMPed"))
     assert isinstance(sent.outcome, Refused) and sent.outcome.reason is Refusal.FW_DAMPED
     assert sent.outcome.reason.retryable is False
     assert seen and seen[0].sequence == sent.sequence
@@ -213,7 +214,7 @@ def test_wait_for_follows_the_robots_own_report(edge, robot):
 
 
 def test_wait_times_out_with_a_typed_error_that_is_also_a_TimeoutError(edge, robot):
-    with pytest.raises(WaitTimedOut) as exc:
+    with pytest.raises(WaitTimeoutError) as exc:
         robot.wait_for(Mode.STAND, timeout=0.2)
     assert isinstance(exc.value, TimeoutError) and isinstance(exc.value, AsimovError)
     assert "STAND" in str(exc.value) and exc.value.last is not None
@@ -223,7 +224,7 @@ def test_wait_refuses_to_succeed_on_a_state_that_stopped_updating(edge, robot):
     """THE regression this design exists for: a frozen snapshot must never satisfy a wait."""
     edge.pushing = False
     time.sleep(0.4)
-    with pytest.raises(StateStale) as exc:
+    with pytest.raises(StateStaleError) as exc:
         robot.wait_until(lambda s: True, timeout=1.0, stale_after=0.3)
     assert exc.value.last is not None and exc.value.last.age_s > 0.3
 
@@ -232,7 +233,7 @@ def test_wait_gives_up_early_on_a_fault_damp(edge, robot):
     a = edge.state.active_alerts.add()
     a.id, a.severity = 7, 0  # severity 0 == CRITICAL on the firmware's scale
     time.sleep(0.05)
-    with pytest.raises(RobotFaulted) as exc:
+    with pytest.raises(RobotFaultedError) as exc:
         robot.wait_for(Mode.STAND, timeout=2.0)
     assert exc.value.state.faulted is True
     assert exc.value.state.alerts[0].critical is True
@@ -242,7 +243,7 @@ def test_wait_stops_when_the_pending_mode_command_is_refused(edge, robot):
     from asimov_sdk import CommandRefusedError
 
     sent = robot.stand()
-    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     with pytest.raises(CommandRefusedError):
         robot.wait_for(Mode.STAND, timeout=2.0)
 
@@ -257,7 +258,7 @@ def test_link_lost_when_state_goes_silent(edge, robot):
     edge.pushing = False
     time.sleep(0.8)
     assert not robot.connected and lost
-    with pytest.raises(LinkLost):
+    with pytest.raises(LinkLostError):
         robot.set_velocity(vx=0.1)
 
 
@@ -272,7 +273,7 @@ def test_close_zeroes_a_held_velocity_then_stops_talking(edge, robot):
     time.sleep(3 / KEEPALIVE_HZ)
     assert len(edge.received) == n
     robot.close()  # idempotent
-    with pytest.raises(NotConnected):
+    with pytest.raises(NotConnectedError):
         robot.stand()
 
 
@@ -286,7 +287,7 @@ def test_close_without_a_held_velocity_sends_nothing(edge, robot):
 
 
 def test_with_block_closes_and_the_state_names_joints(edge):
-    with Robot.connect_direct(
+    with Robot.connect(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),
@@ -347,7 +348,7 @@ def test_wait_until_survives_the_pending_table_churning_under_it(edge, robot):
         try:
             # Must end with the promised typed error, never RuntimeError from a dict
             # mutated during iteration.
-            with pytest.raises(WaitTimedOut):
+            with pytest.raises(WaitTimeoutError):
                 robot.wait_until(lambda s: False, timeout=0.6, poll=0.0)
         finally:
             stop.set()
@@ -428,7 +429,7 @@ def test_a_refused_stand_does_not_poison_a_later_drive(edge, robot):
     from asimov_sdk import CommandRefusedError
 
     sent = robot.stand()
-    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     with pytest.raises(CommandRefusedError):
         robot.wait_for(Mode.STAND, timeout=1.0)
     robot.set_velocity(vx=0.1)  # a new verb is in force; the old refusal is history
@@ -439,7 +440,7 @@ def test_a_refused_stand_does_not_poison_a_later_drive(edge, robot):
 def test_a_fault_in_an_unknown_mode_still_fails_fast(edge, robot):
     edge.state.current_mode = 99
     edge.state.error_flags = 0x4
-    with pytest.raises(RobotFaulted):
+    with pytest.raises(RobotFaultedError):
         robot.wait_for(Mode.STAND, timeout=3.0)
 
 
@@ -462,7 +463,7 @@ def test_an_unresolvable_host_fails_at_connect():
     from asimov_sdk.transport.udp import UdpTransport
 
     tx = UdpTransport("no-such-robot.invalid", command_port=8850, state_bind=("127.0.0.1", 0))
-    with pytest.raises(ConnectFailed):
+    with pytest.raises(ConnectError):
         tx.open()
 
 
@@ -472,7 +473,7 @@ def test_an_unresolvable_host_fails_at_connect():
 def test_reopen_waits_for_fresh_state_instead_of_the_last_session(edge, robot):
     robot.close()
     edge.pushing = False
-    with pytest.raises(ConnectFailed):
+    with pytest.raises(ConnectError):
         robot.open(timeout=0.4)  # the old session's sample must not satisfy this wait
     edge.pushing = True
     robot.open(timeout=2.0)
@@ -484,7 +485,7 @@ def test_a_refusal_names_the_verb_that_was_refused(edge, robot):
     from asimov_sdk import CommandRefusedError
 
     sent = robot.stand()
-    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     with pytest.raises(CommandRefusedError) as info:
         sent.require()
     assert str(info.value).startswith("stand refused: FAULT_DAMPED")
@@ -495,15 +496,15 @@ def test_a_refusal_names_the_verb_that_was_refused(edge, robot):
 def test_a_resolved_outcome_leaves_the_pending_table(edge, robot):
     sent = robot.stand()
     assert sent.sequence in robot._pending
-    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     assert sent.sequence not in robot._pending and sent.outcome is not None
 
 
 def test_state_source_allowlist_drops_everyone_else(edge):
     kw = dict(command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port))
-    with pytest.raises(ConnectFailed):
-        Robot.connect_direct("127.0.0.1", timeout=0.5, state_source="10.255.255.1", **kw)
-    with Robot.connect_direct("127.0.0.1", timeout=2.0, state_source="localhost", **kw) as r:
+    with pytest.raises(ConnectError):
+        Robot.connect("127.0.0.1", timeout=0.5, state_source="10.255.255.1", **kw)
+    with Robot.connect("127.0.0.1", timeout=2.0, state_source="localhost", **kw) as r:
         assert r.connected
 
 
@@ -539,8 +540,8 @@ def test_reopen_after_link_lost_is_a_working_reconnect(edge, robot):
     robot.close()
     edge.pushing = True
     robot.open(timeout=2.0)
-    assert robot.connected, "the old LinkLost must not outlive the session that produced it"
-    robot.set_velocity(vx=0.1)  # would raise the stale LinkLost before the fix
+    assert robot.connected, "the old LinkLostError must not outlive the session that produced it"
+    robot.set_velocity(vx=0.1)  # would raise the stale LinkLostError before the fix
     assert edge.wait_for(lambda r: sum(c.HasField("policy") for c in r) >= 3)
     robot.wait_for(Mode.DAMP, timeout=1.0)  # waits work too (edge is DAMP by default)
     robot.close()
@@ -550,7 +551,7 @@ def test_a_refusal_from_the_previous_session_does_not_haunt_a_reopen(edge, robot
     from asimov_sdk import CommandRefusedError
 
     sent = robot.stand()
-    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     with pytest.raises(CommandRefusedError):
         robot.wait_for(Mode.STAND, timeout=1.0)
     robot.close()
@@ -593,7 +594,7 @@ def test_a_stop_can_never_become_motion_through_the_clamp():
 def test_waits_refuse_a_closed_robot(edge, robot):
     robot.wait_for(Mode.DAMP, timeout=1.0)  # works while open
     robot.close()
-    with pytest.raises(NotConnected):
+    with pytest.raises(NotConnectedError):
         robot.wait_for(Mode.DAMP, timeout=1.0)  # the cached DAMP sample must not satisfy it
 
 
@@ -606,12 +607,12 @@ def test_stop_is_named_stop(edge, robot):
 def test_an_outcome_for_a_sequence_we_never_sent_is_dropped(edge, robot):
     seen = []
     robot.on_refused = seen.append
-    robot._tx._deliver_outcome(Refused(999_999, Refusal.FAULT_DAMPED))
+    robot._tx.deliver_outcome(Refused(999_999, Refusal.FAULT_DAMPED))
     assert seen == [] and list(robot.outcomes()) == []
 
 
 def test_connect_direct_takes_link_timeout(edge):
-    with Robot.connect_direct(
+    with Robot.connect(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),
@@ -623,7 +624,7 @@ def test_connect_direct_takes_link_timeout(edge):
 
 def test_outcomes_drains_at_call_time_not_first_iteration(edge, robot):
     sent = robot.stand()
-    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     it = robot.outcomes()  # not iterated yet
     assert len(robot._refusals) == 0, "the drain must happen when outcomes() is called"
     assert [o.name for o in it] == ["stand"]
@@ -636,7 +637,7 @@ def test_transport_open_twice_fails_loudly_instead_of_leaking(edge):
     tx.open()
     try:
         first = tx._sock
-        with pytest.raises(ConnectFailed):
+        with pytest.raises(ConnectError):
             tx.open()  # an ephemeral bind would silently succeed and orphan the first socket
         assert tx._sock is first
     finally:
@@ -652,5 +653,120 @@ def test_an_unresolvable_state_source_is_named_in_the_error(edge):
         state_bind=("127.0.0.1", 0),
         state_source="no-such-source.invalid",
     )
-    with pytest.raises(ConnectFailed, match="no-such-source\\.invalid"):
+    with pytest.raises(ConnectError, match="no-such-source\\.invalid"):
         tx.open()
+
+
+# ── input validation and wait semantics ───────────────────────────────────────
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.0, -1.0])
+def test_duration_must_be_a_positive_finite_number(edge, robot, bad):
+    with pytest.raises(ValueError):
+        robot.set_velocity(vx=0.1, duration=bad)
+    assert robot._latched is None, "a rejected duration must not leave a velocity held"
+
+
+@pytest.mark.parametrize(
+    "kw", [{"timeout": float("nan")}, {"poll": float("inf")}, {"stale_after": 0.0}]
+)
+def test_wait_timing_arguments_must_be_finite(edge, robot, kw):
+    with pytest.raises(ValueError):
+        robot.wait_until(lambda s: True, **kw)
+
+
+def test_link_timeout_must_be_a_positive_finite_number(edge):
+    from asimov_sdk.transport.udp import UdpTransport
+
+    with pytest.raises(ValueError):
+        Robot(UdpTransport("127.0.0.1"), link_timeout=float("nan"))
+
+
+def test_a_fault_damp_is_reported_even_when_the_wait_asked_for_damp(edge, robot):
+    """`damp(); wait_for(DAMP)` on a robot that fault-DAMPed must not read as success: the
+    fault takes precedence over the predicate, and the state rides on the exception."""
+    a = edge.state.active_alerts.add()
+    a.id, a.severity = 7, 0  # FALL_DETECTED, critical
+    edge.set_mode("damp")
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not robot.state.faulted:
+        time.sleep(0.01)  # let a sample carrying the alert arrive
+    assert robot.state.faulted
+    with pytest.raises(RobotFaultedError) as info:
+        robot.wait_for(Mode.DAMP, timeout=2.0)
+    assert info.value.state.mode is Mode.DAMP and info.value.state.alerts[0].name == "FALL_DETECTED"
+
+
+def test_send_before_open_is_not_connected_not_link_lost():
+    from asimov_sdk.transport.udp import UdpTransport
+
+    with pytest.raises(NotConnectedError):
+        UdpTransport("127.0.0.1").send(Velocity())
+
+
+def test_a_velocity_attempted_during_a_failed_open_never_reaches_the_next_session(edge):
+    """Verbs are refused until the handshake passes, and any drive latched in a previous
+    attempt is cleared, so a reconnect cannot walk the robot off by itself."""
+    import threading
+
+    from asimov_sdk.transport.udp import UdpTransport
+
+    edge.pushing = False
+    robot = Robot(
+        UdpTransport(
+            "127.0.0.1", command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port)
+        )
+    )
+    stop = threading.Event()
+    refused = []
+
+    def controller() -> None:
+        while not stop.is_set():
+            try:
+                robot.set_velocity(vx=0.25)
+            except NotConnectedError:
+                refused.append(1)
+            time.sleep(0.02)
+
+    threading.Thread(target=controller, daemon=True).start()
+    with pytest.raises(ConnectError):
+        robot.open(timeout=0.4)
+    stop.set()
+    time.sleep(0.1)
+    assert refused, "verbs during the handshake must raise NotConnectedError"
+    edge.pushing = True
+    n0 = len(edge.velocities())
+    robot.open(timeout=2.0)
+    time.sleep(0.4)
+    assert edge.velocities()[n0:] == [], "nobody asked this session to move"
+    robot.close()
+
+
+def test_trajectory_needs_both_gains_or_neither(edge, robot):
+    with pytest.raises(ValueError):
+        robot.trajectory([0.0] * 25, kp=[10.0] * 25)
+    with pytest.raises(ValueError):
+        robot.trajectory([0.0] * 25, kd=[1.0] * 25)
+    sent = robot.trajectory([0.0] * 25, kp=[10.0] * 25, kd=[1.0] * 25)
+    assert edge.wait_for(lambda r: any(c.HasField("all_trajectory") for c in r))
+    c = next(c for c in edge.received if c.HasField("all_trajectory"))
+    assert c.mode == 2, "a trajectory datagram says MOVE, never DAMP"
+    assert sent.name == "trajectory"
+
+
+def test_close_from_the_reader_thread_still_closes_the_transport(edge, robot):
+    """A state callback that closes the robot runs on the transport's reader thread; the
+    reader must not try to join itself, and the socket must still be released."""
+    done = threading.Event()
+
+    def on_state(_s):
+        if not done.is_set():
+            done.set()
+            robot.close()
+
+    robot._tx.subscribe_state(on_state)
+    assert done.wait(2.0)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and robot._tx._sock is not None:
+        time.sleep(0.02)
+    assert robot._tx._sock is None and not robot.connected

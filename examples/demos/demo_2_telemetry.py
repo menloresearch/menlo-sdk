@@ -11,7 +11,7 @@ frozen robot from a still one is not a monitor.
 import sys
 import time
 
-from asimov_sdk import Mode, Robot, StateStale
+from asimov_sdk import Mode, Robot, StateStaleError
 
 
 def gz(state) -> str:
@@ -22,7 +22,7 @@ def gz(state) -> str:
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 6.0
 
-with Robot.connect_direct(host) as robot:
+with Robot.connect(host) as robot:
     info = robot.info
     print(f"{info.dof} joints, protocol v{info.protocol_version}, via {info.transport}")
     print(f"endpoint: {info.endpoint}")
@@ -54,7 +54,7 @@ with Robot.connect_direct(host) as robot:
             lambda st: st.mode is Mode.MOVE and st.upright, timeout=2.0, stale_after=1.0
         )
         print(f"\nstill upright and in MOVE after the run; sample age {s.age_s * 1000:.1f} ms")
-    except StateStale as exc:
+    except StateStaleError as exc:
         print(f"\nthe robot stopped reporting: {exc}")
 
     critical = [a for a in robot.state.alerts if a.critical]

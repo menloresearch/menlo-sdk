@@ -1,10 +1,10 @@
 [project]
 name = "asimov-sdk"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Drive an Asimov robot from Python: one Robot, pluggable transports."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Menlo Research" }]
 keywords = ["robotics", "asimov", "humanoid", "sdk"]
 classifiers = [
@@ -13,7 +13,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries",
     "Typing :: Typed",
 ]
 # The SDK's ONE runtime dependency is protobuf. The generated asimov.io bindings ride
@@ -26,11 +26,8 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/menloresearch/asimov-sdk"
-
-[project.optional-dependencies]
-# `State`/`Robot` need nothing beyond the stdlib; examples that decode camera frames
-# will want these once the direct lane carries video.
-vision = ["numpy>=1.26", "pillow>=10"]
+Issues = "https://github.com/menloresearch/asimov-sdk/issues"
+Changelog = "https://github.com/menloresearch/asimov-sdk/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -44,6 +41,9 @@ dev = [
 [build-system]
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/asimov_sdk/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/asimov_sdk"]

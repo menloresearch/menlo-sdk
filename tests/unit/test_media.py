@@ -1,5 +1,5 @@
 """Camera / microphone / speaker plumbing against a fake transport, and the honest
-`Unsupported` on a wire that carries none of it."""
+`UnsupportedError` on a wire that carries none of it."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from asimov_sdk import AudioChunk, Frame, Robot, Unsupported, WaitTimedOut
+from asimov_sdk import AudioChunk, Frame, Robot, UnsupportedError, WaitTimeoutError
 from asimov_sdk._command import Velocity
 from asimov_sdk._state import Joint, Mode, State
 
@@ -122,7 +122,7 @@ def test_camera_frames_yields_as_they_arrive_and_times_out_when_quiet(media):
     threading.Thread(target=feed).start()
     got = [next(it).sequence for _ in range(3)]
     assert got == [0, 1, 2]
-    with pytest.raises(WaitTimedOut):
+    with pytest.raises(WaitTimeoutError):
         next(it)  # nobody is pushing any more
 
 
@@ -139,12 +139,12 @@ def test_microphone_chunks_and_speaker_play(media):
 def test_the_udp_lane_says_unsupported_not_silence(edge, robot):
     assert robot.info.capabilities == frozenset({"drive", "state"})
     assert not robot.has("camera")
-    with pytest.raises(Unsupported) as info:
+    with pytest.raises(UnsupportedError) as info:
         robot.camera.latest()
     assert info.value.capability == "camera" and "direct" in str(info.value)
-    with pytest.raises(Unsupported):
+    with pytest.raises(UnsupportedError):
         robot.microphone.latest()
-    with pytest.raises(Unsupported):
+    with pytest.raises(UnsupportedError):
         robot.speaker.play_pcm(b"\x00\x00")
     assert isinstance(info.value, Exception) and Velocity().is_zero  # sanity, imports used
 
@@ -153,7 +153,7 @@ def test_battery_is_a_capability_when_the_robot_reports_one(edge):
     edge.state.battery.voltage_v = 48.2
     edge.state.battery.soc_percent = 77.0
     time.sleep(0.05)
-    with Robot.connect_direct(
+    with Robot.connect(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),
