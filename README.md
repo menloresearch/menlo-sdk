@@ -10,7 +10,7 @@ with Robot.connect("asimov.local") as robot:
     robot.wait_for(Mode.STAND, timeout=15)
     robot.set_velocity(vx=0.25, duration=4.0)  # m/s, held for 4 s, then zero
     robot.wait_for(Mode.MOVE)
-    robot.stand()                              # zero velocity is MOVE at rest, not STAND
+    robot.stand()  # zero velocity is MOVE at rest, not STAND
     print(robot.state.joint("L_Knee").pos, robot.state.battery)
 ```
 
@@ -42,16 +42,24 @@ The edge must run with `--udp-control` and push state to your machine
 ## API in one screen
 
 ```python
-robot = Robot.connect(host, command_port=8850, state_bind=("0.0.0.0", 8851),
-                      timeout=5.0, limits=None, state_source=None, link_timeout=2.0)
-robot = Robot(transport, limits=None, link_timeout=2.0); robot.open()   # any Transport
+robot = Robot.connect(
+    host,
+    command_port=8850,
+    state_bind=("0.0.0.0", 8851),
+    timeout=5.0,
+    limits=None,
+    state_source=None,
+    link_timeout=2.0,
+)
+robot = Robot(transport, limits=None, link_timeout=2.0)
+robot.open()  # any Transport
 
 # verbs — each returns a Sent immediately; the wire's own vocabulary
-robot.set_velocity(vx, vy, vyaw, duration=None)   # held at 10 Hz until superseded/stop/duration
-robot.stop()                                       # zero velocity; robot stays in MOVE at rest
-robot.stand()                                      # one-shot
-robot.damp()                                       # one-shot; motors compliant NOW — the emergency verb
-robot.trajectory(positions, kp=None, kd=None)     # one setpoint, radians, firmware order
+robot.set_velocity(vx, vy, vyaw, duration=None)  # held at 10 Hz until superseded/stop/duration
+robot.stop()  # zero velocity; robot stays in MOVE at rest
+robot.stand()  # one-shot
+robot.damp()  # one-shot; motors compliant NOW — the emergency verb
+robot.trajectory(positions, kp=None, kd=None)  # one setpoint, radians, firmware order
 robot.goto(positions, duration=2.0, hz=50, wait=True)  # clocked, interpolated from the current pose
 
 # waits — the robot's own report, never a sleep
@@ -59,25 +67,38 @@ robot.wait_for(Mode.STAND, timeout=10)
 robot.wait_until(lambda s: s.upright and s.mode is Mode.MOVE, timeout=10, stale_after=None)
 
 # state
-s = robot.state           # latest sample: mode, joints, gravity, gyro, quat, euler, alerts, battery
-s.age_s; s.upright; s.faulted; s.joint("L_Knee").pos; s.battery.soc_percent
-robot.info                # transport, endpoint, dof, joint_names, protocol_version, limits, capabilities
-robot.has("camera"); robot.require("drive", "battery")
+s = robot.state  # latest sample: mode, joints, gravity, gyro, quat, euler, alerts, battery
+s.age_s
+s.upright
+s.faulted
+s.joint("L_Knee").pos
+s.battery.soc_percent
+robot.info  # transport, endpoint, dof, joint_names, protocol_version, limits, capabilities
+robot.has("camera")
+robot.require("drive", "battery")
 
 # media — UnsupportedError when this robot/transport does not carry it
-robot.camera.latest(); robot.camera.frames(timeout=5); robot.camera.subscribe(cb)
-robot.microphone.chunks(); robot.speaker.play_pcm(pcm_s16le, sample_rate_hz=16000)
+robot.camera.latest()
+robot.camera.frames(timeout=5)
+robot.camera.subscribe(cb)
+robot.microphone.chunks()
+robot.speaker.play_pcm(pcm_s16le, sample_rate_hz=16000)
 
 # callbacks (transport thread; keep them short)
-robot.on_state = ...; robot.on_alert = ...; robot.on_mode_change = ...
-robot.on_refused = ...; robot.on_link_lost = ...
+robot.on_state = ...
+robot.on_alert = ...
+robot.on_mode_change = ...
+robot.on_refused = ...
+robot.on_link_lost = ...
 
 # recording
-with robot.record("run.jsonl"): ...     # every state sample and every command, JSON lines
+with robot.record("run.jsonl"):
+    ...  # every state sample and every command, JSON lines
 
 # outcomes — was the command admitted? separate from "did it take effect"
-sent = robot.stand(); sent.wait_outcome()   # Applied | Refused | Unknown
-sent.require()                              # raises CommandRefusedError on Refused
+sent = robot.stand()
+sent.wait_outcome()  # Applied | Refused | Unknown
+sent.require()  # raises CommandRefusedError on Refused
 ```
 
 ## Safety model
