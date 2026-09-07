@@ -12,6 +12,7 @@ from __future__ import annotations
 import functools
 import importlib
 import importlib.util
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -30,17 +31,29 @@ class Bindings:
 _MODULES = ("asimov_command_pb2", "asimov_common_pb2", "asimov_state_pb2")
 
 
+_IMPORT_RE = re.compile(r"^from \. import (\w+)", re.M)
+
+
 def _complete(package: str) -> bool:
-    """True when every module we need exists in ``package`` — checked on the FILESYSTEM,
-    without importing anything. Importing even the package's ``__init__`` can pull in the
-    generated modules, and each of those registers its ``.proto`` in protobuf's process-global
-    descriptor pool; importing one tree and then falling back to the other would register the
-    same file twice and crash. So the decision is made first, then exactly one tree is imported."""
+    """True when ``package`` can be imported without a crash — checked on the FILESYSTEM,
+    without importing anything. Importing even the package's ``__init__`` pulls in EVERY
+    generated module (the generated ``v1/__init__`` imports them all), and each registers its
+    ``.proto`` in protobuf's process-global descriptor pool; importing one tree and then
+    falling back to the other would register the same file twice and crash. So the decision
+    is made first, then exactly one tree is imported. "Complete" means: every module that
+    package's own ``v1/__init__.py`` imports is present, plus the three the SDK uses."""
     spec = importlib.util.find_spec(package)  # top-level lookup: resolves, does not import
     if spec is None or not spec.submodule_search_locations:
         return False
-    roots = [Path(loc) / "v1" for loc in spec.submodule_search_locations]
-    return all(any((root / f"{m}.py").is_file() for root in roots) for m in _MODULES)
+    for loc in spec.submodule_search_locations:
+        v1 = Path(loc) / "v1"
+        init = v1 / "__init__.py"
+        if not init.is_file():
+            continue
+        needed = set(_IMPORT_RE.findall(init.read_text(encoding="utf-8"))) | set(_MODULES)
+        if all((v1 / f"{m}.py").is_file() for m in needed):
+            return True
+    return False
 
 
 @functools.cache

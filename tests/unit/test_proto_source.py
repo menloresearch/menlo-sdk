@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from asimov_sdk import _proto
 
 VENDOR = Path(_proto.__file__).parent / "_vendor"
@@ -49,7 +51,10 @@ print('vendored round-trip ok')
     assert "vendored round-trip ok" in r.stdout
 
 
-def test_a_partially_installed_asimov_protocol_falls_back_wholesale_without_importing_it(tmp_path):
+@pytest.mark.parametrize("missing", ["asimov_state_pb2", "edge_eol_pb2"])
+def test_a_partially_installed_asimov_protocol_falls_back_wholesale_without_importing_it(
+    tmp_path, missing
+):
     """An installed package missing one module must send ALL imports to the vendored tree,
     decided before anything is imported: a half-import registers the same .proto twice in
     protobuf's process-global pool and crashes. The 'installed' package is a copy of the
@@ -58,7 +63,7 @@ def test_a_partially_installed_asimov_protocol_falls_back_wholesale_without_impo
 
     partial = tmp_path / "site"
     shutil.copytree(VENDOR / "asimov_protocol", partial / "asimov_protocol")
-    (partial / "asimov_protocol" / "v1" / "asimov_state_pb2.py").unlink()
+    (partial / "asimov_protocol" / "v1" / f"{missing}.py").unlink()  # incl. one the SDK never uses
     code = """
 import os, sys
 sys.path.insert(0, os.environ['PARTIAL_SITE'])

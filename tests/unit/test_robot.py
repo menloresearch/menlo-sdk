@@ -641,3 +641,16 @@ def test_transport_open_twice_fails_loudly_instead_of_leaking(edge):
         assert tx._sock is first
     finally:
         tx.close()
+
+
+def test_an_unresolvable_state_source_is_named_in_the_error(edge):
+    from asimov_sdk.transport.udp import UdpTransport
+
+    tx = UdpTransport(
+        "127.0.0.1",
+        command_port=edge.command_port,
+        state_bind=("127.0.0.1", 0),
+        state_source="no-such-source.invalid",
+    )
+    with pytest.raises(ConnectFailed, match="no-such-source\\.invalid"):
+        tx.open()

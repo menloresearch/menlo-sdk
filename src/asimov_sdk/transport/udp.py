@@ -141,12 +141,14 @@ class UdpTransport:
         # Resolve the robot's name ONCE. sendto() with a hostname re-resolves on every
         # datagram — ten mDNS lookups a second under the keepalive, each able to stall
         # damp()/stop() behind a slow resolver.
+        resolving = self._host
         try:
             self._addr = (socket.gethostbyname(self._host), self._port)
             if self._state_source is not None:
+                resolving = self._state_source
                 self._state_source_ip = socket.gethostbyname(self._state_source)
         except OSError as exc:
-            raise ConnectFailed(f"cannot resolve {self._host!r}: {exc}") from exc
+            raise ConnectFailed(f"cannot resolve {resolving!r}: {exc}") from exc
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.bind(self._bind)
