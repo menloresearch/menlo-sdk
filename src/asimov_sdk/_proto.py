@@ -10,7 +10,10 @@ generated code at the same tag — see ``_vendor/VENDORED.md``.
 from __future__ import annotations
 
 import functools
+import importlib
+import importlib.util
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 Source = Literal["asimov-protocol", "vendored"]
@@ -24,18 +27,28 @@ class Bindings:
     source: Source
 
 
+_MODULES = ("asimov_command_pb2", "asimov_common_pb2", "asimov_state_pb2")
+
+
+def _complete(package: str) -> bool:
+    """True when every module we need exists in ``package`` — checked on the FILESYSTEM,
+    without importing anything. Importing even the package's ``__init__`` can pull in the
+    generated modules, and each of those registers its ``.proto`` in protobuf's process-global
+    descriptor pool; importing one tree and then falling back to the other would register the
+    same file twice and crash. So the decision is made first, then exactly one tree is imported."""
+    spec = importlib.util.find_spec(package)  # top-level lookup: resolves, does not import
+    if spec is None or not spec.submodule_search_locations:
+        return False
+    roots = [Path(loc) / "v1" for loc in spec.submodule_search_locations]
+    return all(any((root / f"{m}.py").is_file() for root in roots) for m in _MODULES)
+
+
 @functools.cache
 def load() -> Bindings:
     """Import the bindings lazily (protobuf loads when a transport opens, not at import)."""
-    try:
-        from asimov_protocol.v1 import asimov_command_pb2 as cmd
-        from asimov_protocol.v1 import asimov_common_pb2 as common
-        from asimov_protocol.v1 import asimov_state_pb2 as st
-
-        return Bindings(cmd, common, st, "asimov-protocol")
-    except ImportError:
-        from asimov_sdk._vendor.asimov_protocol.v1 import asimov_command_pb2 as cmd
-        from asimov_sdk._vendor.asimov_protocol.v1 import asimov_common_pb2 as common
-        from asimov_sdk._vendor.asimov_protocol.v1 import asimov_state_pb2 as st
-
-        return Bindings(cmd, common, st, "vendored")
+    if _complete("asimov_protocol"):
+        package, source = "asimov_protocol", "asimov-protocol"
+    else:
+        package, source = "asimov_sdk._vendor.asimov_protocol", "vendored"
+    cmd, common, st = (importlib.import_module(f"{package}.v1.{m}") for m in _MODULES)
+    return Bindings(cmd, common, st, source)  # type: ignore[arg-type]

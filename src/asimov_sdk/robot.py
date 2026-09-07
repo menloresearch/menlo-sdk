@@ -378,12 +378,13 @@ class Robot:
             ) from None
 
     def outcomes(self) -> Iterator[Refused]:
-        """Drain refusals received so far, oldest first. Each refusal is handed to exactly
-        one caller; the drain itself is taken under the lock."""
+        """Drain refusals received so far, oldest first. The drain happens NOW, under the
+        lock, at call time (not on first iteration); each refusal is handed to exactly one
+        caller."""
         with self._lock:
             drained = tuple(self._refusals)
             self._refusals.clear()
-        yield from drained
+        return iter(drained)
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _once(self, name: str, command: Command) -> Sent:

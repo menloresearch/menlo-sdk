@@ -3,6 +3,7 @@ vendored tree alone is enough to speak the wire (that is what `pip install asimo
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -46,3 +47,37 @@ print('vendored round-trip ok')
     )
     assert r.returncode == 0, r.stderr
     assert "vendored round-trip ok" in r.stdout
+
+
+def test_a_partially_installed_asimov_protocol_falls_back_wholesale_without_importing_it(tmp_path):
+    """An installed package missing one module must send ALL imports to the vendored tree,
+    decided before anything is imported: a half-import registers the same .proto twice in
+    protobuf's process-global pool and crashes. The 'installed' package is a copy of the
+    vendored tree with asimov_state_pb2 deleted, put on sys.path under its own name."""
+    import shutil
+
+    partial = tmp_path / "site"
+    shutil.copytree(VENDOR / "asimov_protocol", partial / "asimov_protocol")
+    (partial / "asimov_protocol" / "v1" / "asimov_state_pb2.py").unlink()
+    code = """
+import os, sys
+sys.path.insert(0, os.environ['PARTIAL_SITE'])
+from asimov_sdk import _proto
+b = _proto.load()
+assert b.source == 'vendored', b.source
+assert not any(k == 'asimov_protocol' or k.startswith('asimov_protocol.') for k in sys.modules), \
+    'the incomplete installed package was imported'
+m = b.state.RobotState(protocol_version=1); m.joint_pos.extend([0.0] * 3)
+print('wholesale fallback ok')
+"""
+    env = {**os.environ, "PARTIAL_SITE": str(partial)}
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "wholesale fallback ok" in r.stdout

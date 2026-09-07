@@ -619,3 +619,25 @@ def test_connect_direct_takes_link_timeout(edge):
         link_timeout=0.7,
     ) as r:
         assert r.link_timeout == 0.7
+
+
+def test_outcomes_drains_at_call_time_not_first_iteration(edge, robot):
+    sent = robot.stand()
+    robot._tx._deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
+    it = robot.outcomes()  # not iterated yet
+    assert len(robot._refusals) == 0, "the drain must happen when outcomes() is called"
+    assert [o.name for o in it] == ["stand"]
+
+
+def test_transport_open_twice_fails_loudly_instead_of_leaking(edge):
+    from asimov_sdk.transport.udp import UdpTransport
+
+    tx = UdpTransport("127.0.0.1", command_port=edge.command_port, state_bind=("127.0.0.1", 0))
+    tx.open()
+    try:
+        first = tx._sock
+        with pytest.raises(ConnectFailed):
+            tx.open()  # an ephemeral bind would silently succeed and orphan the first socket
+        assert tx._sock is first
+    finally:
+        tx.close()

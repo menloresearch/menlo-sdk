@@ -8,7 +8,9 @@ All notable changes to asimov-sdk. Pre-1.0: minor versions may break the API.
   asimov-protocol v1.1.0 / d753b84) with `protobuf` as the only runtime dependency, so
   `pip install asimov-sdk` and CI need no access to the protocol repository. An installed
   `asimov-protocol` package is preferred when present (one descriptor set per process).
-  `scripts/vendor_protocol.sh <tag>` re-vendors.
+  `scripts/vendor_protocol.sh <tag>` re-vendors. The source is chosen before any import (a
+  partially installed package falls back wholesale), `outcomes()` drains at call time, and
+  opening a `UdpTransport` twice raises instead of leaking a socket.
 
 Adversarial codex pass against the peer SDKs (2026-09-07):
 

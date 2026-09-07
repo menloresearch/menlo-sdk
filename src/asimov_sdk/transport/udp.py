@@ -135,6 +135,8 @@ class UdpTransport:
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def open(self) -> None:
+        if self._sock is not None:
+            raise ConnectFailed("this UdpTransport is already open")  # never leak a socket+thread
         _pb()  # fail here, with the install hint, not in the reader thread
         # Resolve the robot's name ONCE. sendto() with a hostname re-resolves on every
         # datagram — ten mDNS lookups a second under the keepalive, each able to stall
