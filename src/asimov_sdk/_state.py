@@ -17,7 +17,11 @@ from typing import Literal
 
 from asimov_sdk._command import Limits
 
-Transport = Literal["direct", "cloud"]
+Transport = Literal["direct"]
+
+#: What a robot, over a given transport, can do for a script. ``drive`` and ``state`` are
+#: what every transport must carry; the rest depend on the robot and the wire.
+Capability = Literal["drive", "state", "battery", "camera", "microphone", "speaker"]
 
 
 class Mode(enum.IntEnum):
@@ -56,6 +60,21 @@ class Alert:
 
 
 @dataclass(frozen=True, slots=True)
+class Battery:
+    """Pack summary from the robot's battery management system."""
+
+    voltage_v: float
+    current_a: float  # positive charging, negative discharging
+    soc_percent: float  # 0-100
+    max_cell_temp_c: float
+    protection_flags: int  # BMS protection bitfield; nonzero means the BMS is protecting
+
+    @property
+    def protecting(self) -> bool:
+        return self.protection_flags != 0
+
+
+@dataclass(frozen=True, slots=True)
 class Joint:
     name: str  # firmware name, or "" when the SDK has no table for this robot
     pos: float  # rad
@@ -78,6 +97,7 @@ class State:
     sequence: int
     fw_timestamp_us: int
     protocol_version: int
+    battery: Battery | None = None  # None when the robot has no BMS or did not report one
     received_at: float = field(default_factory=time.monotonic)
 
     @property
@@ -127,8 +147,12 @@ class RobotInfo:
     joint_names: tuple[str, ...] | None
     protocol_version: int
     limits: Limits
+    capabilities: frozenset[str] = frozenset({"drive", "state"})
     model: str | None = None
     robot_id: str | None = None
+
+    def has(self, capability: Capability | str) -> bool:
+        return capability in self.capabilities
 
     def joint_index(self, name: str) -> int:
         if self.joint_names is None:

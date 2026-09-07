@@ -61,8 +61,9 @@ from asimov_sdk._errors import (
     StateStale,
     WaitTimedOut,
 )
+from asimov_sdk._media import Camera, Microphone, Speaker
 from asimov_sdk._outcome import Applied, Refused, Sent
-from asimov_sdk._state import Mode, RobotInfo, State
+from asimov_sdk._state import Capability, Mode, RobotInfo, State
 from asimov_sdk.transport.base import Transport
 from asimov_sdk.transport.udp import UdpTransport
 
@@ -109,6 +110,9 @@ class Robot:
         self._closed = True
         self._link_lost: LinkLost | None = None
         self._info: RobotInfo | None = None
+        self._camera = Camera("camera", transport)
+        self._microphone = Microphone("microphone", transport)
+        self._speaker = Speaker(transport)
         self.on_refused: Callable[[Refused], None] | None = None
         self.on_controller_change: Callable[[str | None, str | None, str], None] | None = None
         self.on_link_lost: Callable[[LinkLost], None] | None = None
@@ -187,6 +191,9 @@ class Robot:
                 observed=first.protocol_version,
             )
         dof = len(first.joints)
+        capabilities = set(self._tx.capabilities)
+        if first.battery is not None:
+            capabilities.add("battery")
         self._info = RobotInfo(
             transport=self._tx.kind,
             endpoint=self._tx.endpoint,
@@ -194,6 +201,7 @@ class Robot:
             joint_names=robots.joint_names_for(dof),
             protocol_version=first.protocol_version,
             limits=self.limits,
+            capabilities=frozenset(capabilities),
         )
         self._keepalive = threading.Thread(
             target=self._keepalive_loop, name="asimov-sdk-keepalive", daemon=True
@@ -239,6 +247,27 @@ class Robot:
     @property
     def connected(self) -> bool:
         return not self._closed and self._link_lost is None
+
+    def has(self, capability: Capability | str) -> bool:
+        """Does this robot, over this transport, provide ``capability``? See ``Capability``."""
+        return self.info.has(capability)
+
+    @property
+    def camera(self) -> Camera:
+        """Frames from the robot's camera. Raises ``Unsupported`` on first use when this
+        transport does not carry them."""
+        return self._camera
+
+    @property
+    def microphone(self) -> Microphone:
+        """Audio from the robot's microphone. Same contract as ``camera``."""
+        return self._microphone
+
+    @property
+    def speaker(self) -> Speaker:
+        """Audio to the robot's speaker. ``play`` raises ``Unsupported`` when this transport
+        cannot carry it."""
+        return self._speaker
 
     @property
     def state(self) -> State:

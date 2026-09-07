@@ -105,3 +105,21 @@ def test_a_missing_joint_velocity_is_None_not_zero():
     msg.joint_pos.extend([0.1] * 25)  # no joint_vel on the wire
     s = state_from_robot_state(msg, joint_names_for(25))
     assert s.joints[0].vel is None, "an unreported velocity must not read as 'stationary'"
+
+
+def test_battery_absent_or_zeroed_is_None_not_a_dead_pack():
+    msg = _robot_state(protocol_version=1)
+    msg.joint_pos.extend([0.0] * 25)
+    assert state_from_robot_state(msg, None).battery is None, "field absent"
+    msg.battery.SetInParent()  # present but all zero: firmware's "no BMS" shape
+    assert state_from_robot_state(msg, None).battery is None
+    msg.battery.voltage_v = 47.9
+    msg.battery.current_a = -3.2
+    msg.battery.soc_percent = 61.0
+    msg.battery.max_cell_temp_c = 33.5
+    msg.battery.protection_flags = 0x4
+    b = state_from_robot_state(msg, None).battery
+    assert (
+        b is not None and b.voltage_v == pytest.approx(47.9) and b.current_a == pytest.approx(-3.2)
+    )
+    assert b.protecting is True

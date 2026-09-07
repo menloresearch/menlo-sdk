@@ -22,10 +22,12 @@ from asimov_sdk._errors import (
     ProtocolMismatch,
     RobotFaulted,
     StateStale,
+    Unsupported,
     WaitTimedOut,
 )
+from asimov_sdk._media import AudioChunk, Camera, Frame, Microphone, Speaker
 from asimov_sdk._outcome import Applied, Outcome, Refusal, Refused, Sent, Unknown
-from asimov_sdk._state import Alert, Joint, Mode, RobotInfo, State
+from asimov_sdk._state import Alert, Battery, Capability, Joint, Mode, RobotInfo, State
 from asimov_sdk.robot import Robot
 from asimov_sdk.transport import Transport, UdpTransport
 
@@ -35,11 +37,17 @@ __all__ = [
     "Alert",
     "Applied",
     "AsimovError",
+    "AudioChunk",
+    "Battery",
+    "Camera",
+    "Capability",
     "CommandRefusedError",
     "ConnectFailed",
+    "Frame",
     "Joint",
     "Limits",
     "LinkLost",
+    "Microphone",
     "Mode",
     "ModeCommand",
     "NotConnected",
@@ -52,12 +60,14 @@ __all__ = [
     "RobotFaulted",
     "RobotInfo",
     "Sent",
+    "Speaker",
     "State",
     "StateStale",
     "Trajectory",
     "Transport",
     "UdpTransport",
     "Unknown",
+    "Unsupported",
     "Velocity",
     "WaitTimedOut",
     "__version__",

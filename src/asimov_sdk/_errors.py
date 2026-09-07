@@ -41,6 +41,18 @@ class ProtocolMismatch(ConnectFailed):
         self.observed = observed
 
 
+class Unsupported(AsimovError):
+    """This robot, over this transport, does not provide the capability. Check
+    ``robot.has(...)`` first when a script should degrade instead of fail."""
+
+    def __init__(self, capability: str, transport: str) -> None:
+        super().__init__(
+            f"this robot does not provide {capability!r} over the {transport!r} transport"
+        )
+        self.capability = capability
+        self.transport = transport
+
+
 class NotConnected(AsimovError):
     """A verb was called before ``connect`` or after ``close``."""
 

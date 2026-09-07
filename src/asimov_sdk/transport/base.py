@@ -24,11 +24,14 @@ from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 from asimov_sdk._command import Command
+from asimov_sdk._media import AudioChunk, Frame
 from asimov_sdk._outcome import Applied, Refused
 from asimov_sdk._state import State
 from asimov_sdk._state import Transport as TransportKind
 
 StateCallback = Callable[[State], None]
+FrameCallback = Callable[[Frame], None]
+AudioCallback = Callable[[AudioChunk], None]
 OutcomeCallback = Callable[[Applied | Refused], None]
 ControllerCallback = Callable[[str | None, str | None, str], None]  # previous, current, reason
 
@@ -38,8 +41,12 @@ class Transport(Protocol):
     """What a wire has to provide. See the module docstring for the contract."""
 
     kind: TransportKind
-    #: Human-readable address of the robot for this wire: ``"host:8850"``, ``"<robot_id>-body"``.
+    #: Human-readable address of the robot for this wire, e.g. ``"host:8850"``.
     endpoint: str
+    #: Which of ``Capability`` this wire carries. ``drive`` and ``state`` are mandatory; a
+    #: transport lists ``camera``/``microphone``/``speaker`` only when the three methods
+    #: below actually deliver.
+    capabilities: frozenset[str]
     #: How long ``Sent.wait_outcome`` waits by default on this wire. A LAN datagram and a
     #: LiveKit round trip are different animals.
     default_outcome_timeout: float
@@ -63,3 +70,13 @@ class Transport(Protocol):
 
     def subscribe_controller_change(self, callback: ControllerCallback) -> None:
         """Who holds the body now. Same caveat as outcomes."""
+
+    def subscribe_frames(self, callback: FrameCallback) -> None:
+        """Camera frames. Raise ``Unsupported("camera", kind)`` when this wire has none."""
+
+    def subscribe_audio(self, callback: AudioCallback) -> None:
+        """Microphone audio. Raise ``Unsupported("microphone", kind)`` when this wire has none."""
+
+    def play_audio(self, chunk: AudioChunk) -> None:
+        """Audio to the robot's speaker. Raise ``Unsupported("speaker", kind)`` when this
+        wire cannot carry it."""

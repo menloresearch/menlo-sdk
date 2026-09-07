@@ -34,11 +34,18 @@ from typing import Any
 
 from asimov_sdk import _proto, robots
 from asimov_sdk._command import Command, ModeCommand, Trajectory, Velocity
-from asimov_sdk._errors import ConnectFailed, LinkLost
+from asimov_sdk._errors import ConnectFailed, LinkLost, Unsupported
+from asimov_sdk._media import AudioChunk
 from asimov_sdk._outcome import Applied, Refused
-from asimov_sdk._state import Alert, Joint, Mode, State
+from asimov_sdk._state import Alert, Battery, Joint, Mode, State
 from asimov_sdk._state import Transport as TransportKind
-from asimov_sdk.transport.base import ControllerCallback, OutcomeCallback, StateCallback
+from asimov_sdk.transport.base import (
+    AudioCallback,
+    ControllerCallback,
+    FrameCallback,
+    OutcomeCallback,
+    StateCallback,
+)
 
 log = logging.getLogger("asimov_sdk.transport.udp")
 
@@ -96,9 +103,27 @@ def state_from_robot_state(msg: Any, joint_names: tuple[str, ...] | None) -> Sta
             )
             for a in msg.active_alerts
         ),
+        battery=_battery_from(msg),
         sequence=int(msg.sequence),
         fw_timestamp_us=int(msg.timestamp_us),
         protocol_version=int(msg.protocol_version),
+    )
+
+
+def _battery_from(msg: Any) -> Battery | None:
+    """``RobotState.battery`` (field 28). The firmware leaves it absent or all-zero when no
+    BMS is fitted; both mean "not reported" here, never a 0 V pack."""
+    if not msg.HasField("battery"):
+        return None
+    b = msg.battery
+    if not (b.voltage_v or b.current_a or b.soc_percent or b.max_cell_temp_c or b.protection_flags):
+        return None
+    return Battery(
+        voltage_v=float(b.voltage_v),
+        current_a=float(b.current_a),
+        soc_percent=float(b.soc_percent),
+        max_cell_temp_c=float(b.max_cell_temp_c),
+        protection_flags=int(b.protection_flags),
     )
 
 
@@ -107,6 +132,9 @@ class UdpTransport:
 
     kind: TransportKind = "direct"
     default_outcome_timeout: float = 0.5
+    #: The UDP lane carries commands and state only. Battery rides inside RobotState and is
+    #: reported per robot (see RobotInfo.capabilities); media is not on this wire.
+    capabilities: frozenset[str] = frozenset({"drive", "state"})
 
     def __init__(
         self,
@@ -258,7 +286,17 @@ class UdpTransport:
             raise LinkLost(f"send to {self.endpoint} failed: {exc}") from exc
         return seq
 
-    # Test seam: a fake edge (or a future outcome channel) delivers verdicts here.
+    # ── media: not carried on this wire ──────────────────────────────────────
+    def subscribe_frames(self, callback: FrameCallback) -> None:
+        raise Unsupported("camera", self.kind)
+
+    def subscribe_audio(self, callback: AudioCallback) -> None:
+        raise Unsupported("microphone", self.kind)
+
+    def play_audio(self, chunk: AudioChunk) -> None:
+        raise Unsupported("speaker", self.kind)
+
+    # Test seam: a fake edge delivers verdicts here.
     def _deliver_outcome(self, outcome: Applied | Refused) -> None:
         for cb in tuple(self._on_outcome):
             cb(outcome)
