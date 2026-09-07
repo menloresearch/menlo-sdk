@@ -569,3 +569,52 @@ def test_reopen_learns_the_robot_again_instead_of_filtering_it_as_foreign(edge, 
     )  # would time out before the fix: every sample dropped as "not this robot"
     assert robot.info.dof == 12 and len(robot.state.joints) == 12
     robot.close()
+
+
+# ── codex adversarial pass (2026-09-07) ──────────────────────────────────────
+
+
+@pytest.mark.parametrize("bad", [-0.6, float("nan"), float("inf"), -0.0001])
+def test_limits_must_be_finite_magnitudes(bad):
+    from asimov_sdk import Limits
+
+    with pytest.raises(ValueError):
+        Limits(vx=bad)
+
+
+def test_a_stop_can_never_become_motion_through_the_clamp():
+    from asimov_sdk import Limits
+
+    for limits in (Limits(), Limits(vx=0.0), Limits(vx=0.1, vy=0.0, vyaw=0.0)):
+        assert Velocity().clamped(limits).is_zero
+
+
+def test_waits_refuse_a_closed_robot(edge, robot):
+    robot.wait_for(Mode.DAMP, timeout=1.0)  # works while open
+    robot.close()
+    with pytest.raises(NotConnected):
+        robot.wait_for(Mode.DAMP, timeout=1.0)  # the cached DAMP sample must not satisfy it
+
+
+def test_stop_is_named_stop(edge, robot):
+    sent = robot.stop()
+    assert sent.name == "stop" and sent.command.is_zero
+    assert robot.set_velocity(vx=0.1).name == "set_velocity"
+
+
+def test_an_outcome_for_a_sequence_we_never_sent_is_dropped(edge, robot):
+    seen = []
+    robot.on_refused = seen.append
+    robot._tx._deliver_outcome(Refused(999_999, Refusal.FAULT_DAMPED))
+    assert seen == [] and list(robot.outcomes()) == []
+
+
+def test_connect_direct_takes_link_timeout(edge):
+    with Robot.connect_direct(
+        "127.0.0.1",
+        command_port=edge.command_port,
+        state_bind=("127.0.0.1", edge.state_port),
+        timeout=2.0,
+        link_timeout=0.7,
+    ) as r:
+        assert r.link_timeout == 0.7

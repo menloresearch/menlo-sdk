@@ -122,6 +122,7 @@ class Robot:
         allow_version_skew: bool = False,
         limits: Limits | None = None,
         state_source: str | None = None,
+        link_timeout: float = DEFAULT_LINK_TIMEOUT_S,
     ) -> Robot:
         """Attach to a robot over its LAN UDP lane.
 
@@ -137,7 +138,7 @@ class Robot:
         tx = UdpTransport(
             host, command_port=command_port, state_bind=state_bind, state_source=state_source
         )
-        robot = cls(tx, limits=limits)
+        robot = cls(tx, limits=limits, link_timeout=link_timeout)
         robot.open(timeout=timeout, allow_version_skew=allow_version_skew)
         return robot
 
@@ -257,7 +258,9 @@ class Robot:
         seconds pass (then zero velocity is sent). Clamped to ``limits``; the returned
         ``Sent.command`` is what actually went out and ``Sent.clamped`` says whether it
         differs from what you asked."""
-        asked = Velocity(vx, vy, vyaw)
+        return self._drive("set_velocity", Velocity(vx, vy, vyaw), duration)
+
+    def _drive(self, name: str, asked: Velocity, duration: float | None) -> Sent:
         v = asked.clamped(self.limits)
         if duration is not None and duration <= 0:
             raise ValueError("duration must be positive")
@@ -272,13 +275,13 @@ class Robot:
                 time.monotonic() + duration if (duration is not None and not v.is_zero) else None
             )
             self._last_mode = None  # a new drive supersedes whatever posture change preceded it
-            return self._send("set_velocity", v, gen, clamped=(v != asked))
+            return self._send(name, v, gen, clamped=(v != asked))
 
     def stop(self) -> Sent:
         """Zero velocity. The firmware stays in MOVE at zero speed (standing in place under
         the walking policy); call ``stand()`` to return to the STAND posture. Not an
         emergency stop — see ``damp``."""
-        return self.set_velocity()
+        return self._drive("stop", Velocity(), None)
 
     def stand(self) -> Sent:
         """Ask the firmware to stand. One-shot. Follow with ``wait_for(Mode.STAND)``."""
@@ -330,6 +333,8 @@ class Robot:
         deadline = time.monotonic() + timeout
         last: State | None = None
         while True:
+            if self._closed:  # a cached sample from a closed session must not satisfy a wait
+                raise NotConnected("this Robot is closed")
             if self._link_lost is not None:
                 raise self._link_lost
             s = self._state
@@ -513,10 +518,14 @@ class Robot:
     def _on_outcome(self, outcome: Applied | Refused) -> None:
         with self._lock:
             sent = self._pending.pop(outcome.sequence, None)  # resolved: no reason to keep it
-        if sent is not None:
-            sent._resolve(outcome)
-            if isinstance(outcome, Refused):
-                outcome = dataclasses.replace(outcome, verb=sent.name)
+        if sent is None:
+            # Nothing of ours is waiting on this sequence: a verdict for a previous session
+            # (or a duplicate). It must not surface as a fresh refusal of this session.
+            log.debug("dropped an outcome for unknown sequence %d", outcome.sequence)
+            return
+        sent._resolve(outcome)
+        if isinstance(outcome, Refused):
+            outcome = dataclasses.replace(outcome, verb=sent.name)
         if isinstance(outcome, Refused):
             with self._lock:  # outcomes() snapshots+clears under the same lock
                 self._refusals.append(outcome)

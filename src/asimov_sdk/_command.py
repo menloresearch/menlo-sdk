@@ -28,6 +28,14 @@ class Limits:
     vy: float = 0.6  # m/s
     vyaw: float = 1.5  # rad/s
 
+    def __post_init__(self) -> None:
+        for name in ("vx", "vy", "vyaw"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                # A negative limit would turn a requested stop into motion (clamp of 0
+                # into [-l, l] with l < 0 is -l). A limit is a magnitude, or nothing.
+                raise ValueError(f"Limits.{name} must be finite and >= 0, got {value!r}")
+
 
 @dataclass(frozen=True, slots=True)
 class Velocity:

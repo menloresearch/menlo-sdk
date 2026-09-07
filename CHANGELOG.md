@@ -4,6 +4,15 @@ All notable changes to asimov-sdk. Pre-1.0: minor versions may break the API.
 
 ## Unreleased
 
+Adversarial codex pass against the peer SDKs (2026-09-07):
+
+- `Limits` validates its values: finite and non-negative, or `ValueError`. A negative limit
+  used to turn `stop()` into forward motion (clamp of 0 into [-l, l] with l < 0).
+- Waits raise `NotConnected` on a closed `Robot` instead of succeeding on a cached sample.
+- `stop()` reports itself as `stop` on its `Sent` and in refusal messages.
+- Outcomes for sequences this session never sent are dropped, not surfaced as refusals.
+- `connect_direct(..., link_timeout=)`.
+
 tokamak-pm round 1 (approved; two Important items, both fixed):
 
 - A `Robot` reopened after `close()` waits for a fresh state sample instead of passing the
