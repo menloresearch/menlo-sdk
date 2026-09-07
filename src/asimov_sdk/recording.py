@@ -54,8 +54,8 @@ class Recording:
         self.samples = 0
         self.commands_written = 0
         self._fh: Any = None
-        self._prev_state = robot.on_state
-        self._prev_sent = robot._on_sent
+        self._prev_state: Any = None
+        self._prev_sent: Any = None
 
     def _write(self, kind: str, obj: Any) -> None:
         if self._fh is None:
@@ -75,6 +75,7 @@ class Recording:
             self._prev_sent(sent)
 
     def __enter__(self) -> Self:
+        self._prev_state, self._prev_sent = self._robot.on_state, self._robot._on_sent
         self._fh = self.path.open("w", encoding="utf-8")
         if self._states:
             self._robot.on_state = self._on_state

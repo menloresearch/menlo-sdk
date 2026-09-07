@@ -201,3 +201,13 @@ def test_alerts_from_the_previous_session_do_not_haunt_a_reopen(edge, robot):
     assert not robot.state.faulted, "a carried alert leaked across sessions"
     assert not robot.state.alerts
     robot.close()
+
+
+def test_recording_restores_the_callback_set_after_construction(edge, robot):
+    rec = robot.record("/tmp/verify/rec-order.jsonl")
+    later = []
+    robot.on_state = later.append  # set between construction and entering the block
+    with rec:
+        time.sleep(0.05)
+    assert robot.on_state == later.append
+    assert later, "the pre-existing callback kept firing while recording"

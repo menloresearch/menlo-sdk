@@ -770,3 +770,10 @@ def test_close_from_the_reader_thread_still_closes_the_transport(edge, robot):
     while time.monotonic() < deadline and robot._tx._sock is not None:
         time.sleep(0.02)
     assert robot._tx._sock is None and not robot.connected
+
+
+def test_wait_for_keeps_a_stale_stream_as_StateStaleError(edge, robot):
+    edge.pushing = False
+    time.sleep(0.4)
+    with pytest.raises(StateStaleError):
+        robot.wait_for(Mode.STAND, timeout=2.0, stale_after=0.3)

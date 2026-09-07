@@ -124,7 +124,6 @@ class Robot:
         self._state_seen = threading.Event()
         self._latched: Velocity | None = None
         self._latch_deadline: float | None = None
-        self._holding_trajectory = False  # a goto() is re-sending its target
         self._generation = 0
         self._stop = threading.Event()
         self._keepalive: threading.Thread | None = None
@@ -196,7 +195,6 @@ class Robot:
             self._info = None  # or _on_state would filter the NEW robot's samples as foreign
             self._link_lost = None
             self._latched, self._latch_deadline = None, None  # a drive never survives a session
-            self._holding_trajectory = False
             self._last_alerts, self._last_alerts_at = (), 0.0  # nor do the last session's alerts
             self._generation += 1
             self._last_mode = None
@@ -452,7 +450,6 @@ class Robot:
         first = self.trajectory(blend(1), kp=kp_t, kd=kd_t)
         with self._lock:
             gen = self._generation  # the verb above bumped it; another verb bumps again
-            self._holding_trajectory = True
 
         def run() -> None:
             i = 2
@@ -463,13 +460,10 @@ class Robot:
                 time.sleep(period if i <= steps else 1.0 / KEEPALIVE_HZ)
                 with self._lock:
                     if self._generation != gen or self._closed:
-                        self._holding_trajectory = False
                         return  # superseded by another verb, or closed
                 try:
                     self._send("trajectory", Trajectory(blend(min(i, steps)), kp_t, kd_t), gen)
                 except AsimovError:
-                    with self._lock:
-                        self._holding_trajectory = False
                     return
                 i += 1
 
@@ -544,10 +538,17 @@ class Robot:
                 )
             time.sleep(poll)
 
-    def wait_for(self, mode: Mode, *, timeout: float = 10.0) -> State:
-        """``wait_until(lambda s: s.mode is mode)`` with a readable name."""
+    def wait_for(
+        self, mode: Mode, *, timeout: float = 10.0, stale_after: float | None = None
+    ) -> State:
+        """``wait_until(lambda s: s.mode is mode)`` with a readable name. A quiet stream still
+        raises :class:`StateStaleError`, not a plain timeout."""
         try:
-            return self.wait_until(lambda s: s.mode is mode, timeout=timeout)
+            return self.wait_until(
+                lambda s: s.mode is mode, timeout=timeout, stale_after=stale_after
+            )
+        except StateStaleError:
+            raise
         except WaitTimeoutError as exc:
             raise WaitTimeoutError(
                 f"the robot did not reach {mode.name} within {timeout:.1f}s"
