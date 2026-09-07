@@ -166,3 +166,38 @@ def test_alerts_sent_every_20th_frame_are_carried_forward_for_stable_reads():
             assert events == [("FALL_DETECTED", "raised"), ("FALL_DETECTED", "cleared")]
     finally:
         edge.close()
+
+
+def test_goto_refuses_to_plan_from_a_stale_pose(edge, robot):
+    from asimov_sdk import StateStaleError
+
+    robot.link_timeout = 5.0  # long enough that LinkLostError does not fire first
+    edge.pushing = False
+    time.sleep(0.7)
+    with pytest.raises(StateStaleError):
+        robot.goto([0.5] * 25, duration=0.5, wait=False)
+
+
+def test_a_held_goto_stops_when_the_link_is_lost(edge, robot):
+    robot.link_timeout = 0.3
+    robot.goto([0.5] * 25, duration=0.2, hz=20, wait=False)
+    time.sleep(0.3)
+    edge.pushing = False
+    time.sleep(0.8)
+    assert not robot.connected
+    n = sum(c.HasField("all_trajectory") for c in edge.received)
+    time.sleep(0.4)
+    assert sum(c.HasField("all_trajectory") for c in edge.received) == n, "hold must stop"
+
+
+def test_alerts_from_the_previous_session_do_not_haunt_a_reopen(edge, robot):
+    a = edge.state.active_alerts.add()
+    a.id, a.severity = 7, 0
+    time.sleep(0.1)
+    assert robot.state.faulted
+    robot.close()
+    del edge.state.active_alerts[:]
+    robot.open(timeout=2.0)
+    assert not robot.state.faulted, "a carried alert leaked across sessions"
+    assert not robot.state.alerts
+    robot.close()

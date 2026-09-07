@@ -7,5 +7,6 @@ reproduce. You will get an acknowledgement within a few days.
 
 What the SDK does to limit damage on its own: speeds are clamped client-side and the clamp
 is visible; a held velocity expires on the robot two seconds after the last packet; a lost
-link sends a zero velocity; state datagrams that do not look like the robot are dropped,
+link sends a zero velocity and stops re-sending any held trajectory (the edge DAMPs it two
+seconds later); state datagrams that do not look like the robot are dropped,
 and `state_source=` restricts which address may send state.

@@ -11,7 +11,7 @@ with Robot.connect("asimov.local") as robot:
     robot.set_velocity(vx=0.25, duration=4.0)  # m/s, held for 4 s, then zero
     robot.wait_for(Mode.MOVE)
     robot.stand()  # zero velocity is MOVE at rest, not STAND
-    print(robot.state.joint("L_Knee").pos, robot.state.battery)
+    print(robot.state.joint("L_Knee").pos, robot.state.battery)  # battery is None without a BMS
 ```
 
 One `Robot`, one API, pluggable transports. `UdpTransport` speaks the robot's LAN lane:
@@ -106,9 +106,10 @@ sent.require()  # raises CommandRefusedError on Refused
 - A held velocity is re-sent at 10 Hz. The edge zeroes velocity two seconds after the last
   one it received; the robot then stands in place in MOVE.
 - `duration=` bounds a hold on the client; the SDK sends the zero itself when time is up.
-- `close()` sends a zero if a velocity was held. `LinkLostError` (no state for
-  `link_timeout` seconds) sends a zero too, then every verb raises until you `close()` and
-  `open()` again.
+- `close()` sends a zero if a velocity was held and stops re-sending a held trajectory.
+  `LinkLostError` (no state for `link_timeout` seconds) does the same, then every verb raises
+  until you `close()` and `open()` again. A trajectory that is no longer re-sent is DAMPed by
+  the edge two seconds later; there is no neutral setpoint the SDK could send instead.
 - A verb is never dropped as superseded; only the keepalive's re-sends are. A new verb ends
   any running `goto()`.
 - `trajectory()` and `goto()` put every joint under position control with the walking

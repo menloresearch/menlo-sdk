@@ -95,6 +95,8 @@ DEFAULT_LINK_TIMEOUT_S = 2.0
 #: How long a firmware alert block is carried forward over frames that omit it (the firmware
 #: sends it every 20th frame, 100 ms apart at 200 Hz).
 ALERT_HOLD_S = 0.3
+#: A goto() refuses to plan from a reported pose older than this.
+GOTO_MAX_POSE_AGE_S = 0.5
 
 
 class Robot:
@@ -122,6 +124,7 @@ class Robot:
         self._state_seen = threading.Event()
         self._latched: Velocity | None = None
         self._latch_deadline: float | None = None
+        self._holding_trajectory = False  # a goto() is re-sending its target
         self._generation = 0
         self._stop = threading.Event()
         self._keepalive: threading.Thread | None = None
@@ -193,6 +196,8 @@ class Robot:
             self._info = None  # or _on_state would filter the NEW robot's samples as foreign
             self._link_lost = None
             self._latched, self._latch_deadline = None, None  # a drive never survives a session
+            self._holding_trajectory = False
+            self._last_alerts, self._last_alerts_at = (), 0.0  # nor do the last session's alerts
             self._generation += 1
             self._last_mode = None
             self._pending.clear()
@@ -239,7 +244,9 @@ class Robot:
         self._keepalive.start()
 
     def close(self) -> None:
-        """Zero velocity if one is held, then drop the link. Idempotent; never raises."""
+        """Zero velocity if one is held, stop re-sending a held trajectory, then drop the link.
+        Idempotent; never raises. A trajectory that is no longer re-sent is DAMPed by the edge
+        two seconds later: there is no neutral setpoint the SDK could send instead."""
         with self._lock:
             if self._closed:
                 return
@@ -422,7 +429,14 @@ class Robot:
         target = tuple(float(p) for p in positions)
         _positive_finite("duration", duration)
         _positive_finite("hz", hz)
-        start = self.state.joint_pos
+        current = self.state
+        if current.age_s > GOTO_MAX_POSE_AGE_S:
+            raise StateStaleError(
+                f"the last reported pose is {current.age_s:.2f}s old; a motion must start from "
+                f"a fresh one (limit {GOTO_MAX_POSE_AGE_S:.1f}s)",
+                last=current,
+            )
+        start = current.joint_pos
         if len(target) != len(start):
             raise ValueError(f"goto has {len(target)} positions; this robot reports {len(start)}")
         kp_t = tuple(float(x) for x in kp) if kp is not None else None
@@ -438,6 +452,7 @@ class Robot:
         first = self.trajectory(blend(1), kp=kp_t, kd=kd_t)
         with self._lock:
             gen = self._generation  # the verb above bumped it; another verb bumps again
+            self._holding_trajectory = True
 
         def run() -> None:
             i = 2
@@ -448,10 +463,13 @@ class Robot:
                 time.sleep(period if i <= steps else 1.0 / KEEPALIVE_HZ)
                 with self._lock:
                     if self._generation != gen or self._closed:
+                        self._holding_trajectory = False
                         return  # superseded by another verb, or closed
                 try:
                     self._send("trajectory", Trajectory(blend(min(i, steps)), kp_t, kd_t), gen)
                 except AsimovError:
+                    with self._lock:
+                        self._holding_trajectory = False
                     return
                 i += 1
 
@@ -611,7 +629,8 @@ class Robot:
                 self._mark_link_lost(
                     LinkLostError(
                         f"no state from {self._tx.endpoint} for {self.link_timeout:.1f}s; "
-                        "a zero velocity was sent; close() and open() to reconnect"
+                        "a zero velocity was sent and any held trajectory stopped; "
+                        "close() and open() to reconnect"
                     )
                 )
             with self._lock:
