@@ -25,4 +25,7 @@ live:            ## a robot or `menlo-studio up --container --sdk`; needs ASIMOV
 vendor-protocol: ## re-vendor the generated bindings: make vendor-protocol REF=v1.1.0
 	scripts/vendor_protocol.sh $(REF)
 
+check-vendor:    ## fail if the vendored bindings drift from the tag pinned in _vendor/VENDORED.md
+	scripts/vendor_protocol.sh --check
+
 check: lint typecheck test

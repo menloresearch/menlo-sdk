@@ -46,6 +46,30 @@ jobs:
       - name: Package builds
         run: uv build && ls -l dist/
 
+  # The vendored bindings must be exactly what the pinned asimov-protocol tag generates.
+  # Needs read access to that repository; without the token this warns and skips.
+  vendored-bindings:
+    name: vendored bindings match the pinned tag
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - name: Token check
+        id: tok
+        env:
+          TOKEN: ${{ secrets.ASIMOV_REPOS_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOKEN}@github.com/menloresearch/".insteadOf "https://github.com/menloresearch/"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::ASIMOV_REPOS_TOKEN is not granted to this repository; cannot verify the vendored bindings against the pinned tag"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify
+        if: steps.tok.outputs.present == 'true'
+        run: scripts/vendor_protocol.sh --check
+
   # The real edge connector, in-process: proves the wire, not just the fake. Clones
   # asimov-edge at the commit the SDK is developed against; skipped only when the
   # token is missing, and then LOUDLY.
