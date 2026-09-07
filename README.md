@@ -63,7 +63,7 @@ robot.trajectory(positions, kp=None, kd=None)  # one setpoint, radians, firmware
 robot.goto(positions, duration=2.0, hz=50, wait=True)  # clocked, interpolated from the current pose
 
 # waits — the robot's own report, never a sleep
-robot.wait_for(Mode.STAND, timeout=10)
+robot.wait_for(Mode.STAND, timeout=10, stale_after=None)
 robot.wait_until(lambda s: s.upright and s.mode is Mode.MOVE, timeout=10, stale_after=None)
 
 # state

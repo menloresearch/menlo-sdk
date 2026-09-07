@@ -11,6 +11,7 @@ import dataclasses
 import enum
 import json
 import os
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -54,13 +55,16 @@ class Recording:
         self.samples = 0
         self.commands_written = 0
         self._fh: Any = None
+        self._lock = threading.Lock()
         self._prev_state: Any = None
         self._prev_sent: Any = None
 
     def _write(self, kind: str, obj: Any) -> None:
-        if self._fh is None:
-            return
-        self._fh.write(json.dumps({"t": time.monotonic(), "kind": kind, **_plain(obj)}) + "\n")
+        # Called from the transport's reader thread (states) and the caller's thread (sent).
+        line = json.dumps({"t": time.monotonic(), "kind": kind, **_plain(obj)}) + "\n"
+        with self._lock:
+            if self._fh is not None:
+                self._fh.write(line)
 
     def _on_state(self, state: State) -> None:
         self._write("state", state)
@@ -88,7 +92,8 @@ class Recording:
             self._robot.on_state = self._prev_state
         if self._commands:
             self._robot._on_sent = self._prev_sent
-        fh, self._fh = self._fh, None
+        with self._lock:
+            fh, self._fh = self._fh, None
         if fh is not None:
             fh.close()
 

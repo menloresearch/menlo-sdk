@@ -49,7 +49,8 @@ jobs:
           python -m zipfile -l dist/*.whl | grep -E 'asimov_sdk/py.typed|_vendor/asimov_protocol/v1/asimov_state_pb2.pyi|_vendor/VENDORED.md'
 
   # The vendored bindings must be exactly what the pinned asimov-protocol tag generates.
-  # Needs read access to that repository; without the token this warns and skips.
+  # Needs read access to that repository; without the token this warns and skips. The only
+  # PR-controlled code that runs with the credential present is scripts/vendor_protocol.sh.
   vendored-bindings:
     name: vendored bindings match the pinned tag
     runs-on: ubuntu-latest
@@ -107,6 +108,9 @@ jobs:
           git clone --depth 1 https://github.com/menloresearch/asimov-edge.git /tmp/asimov-edge
           git -C /tmp/asimov-edge fetch --depth 1 origin "$EDGE_REF"
           git -C /tmp/asimov-edge checkout "$EDGE_REF"
+      - name: Drop the git credential before running anything from the PR
+        if: steps.tok.outputs.present == 'true'
+        run: git config --global --unset-all url."https://x-access-token:${{ secrets.ASIMOV_REPOS_TOKEN }}@github.com/menloresearch/".insteadOf
       - name: Sync + install the edge into the same environment
         if: steps.tok.outputs.present == 'true'
         run: |
