@@ -399,12 +399,13 @@ class Robot:
         """Move every joint from where it IS to ``positions`` over ``duration`` seconds.
 
         Interpolates (minimum-jerk) from the current reported joint positions and clocks
-        ``trajectory()`` setpoints at ``hz`` from a background thread — the edge stops
-        driving a trajectory two seconds after the last setpoint, so a single ``trajectory()``
-        call cannot hold a pose; this can. Any other verb cancels the motion. With ``wait``,
-        blocks until every joint is within ``tolerance`` radians of the target (or raises
-        :class:`WaitTimeoutError` after ``timeout``, default ``duration + 2``). Returns the
-        ``Sent`` of the first setpoint.
+        ``trajectory()`` setpoints at ``hz`` from a background thread, then HOLDS the target
+        by re-sending it at the keepalive rate until another verb takes over — the edge
+        DAMPs a trajectory two seconds after the last setpoint, so a reached pose is kept
+        alive the way a velocity is. ``stand()`` (or any other verb) ends the hold. With
+        ``wait``, blocks until every joint is within ``tolerance`` radians of the target, or
+        raises :class:`WaitTimeoutError` after ``timeout`` (default ``duration + 2``).
+        Returns the ``Sent`` of the first setpoint.
         """
         target = tuple(float(p) for p in positions)
         _positive_finite("duration", duration)
@@ -427,15 +428,20 @@ class Robot:
             gen = self._generation  # the verb above bumped it; another verb bumps again
 
         def run() -> None:
-            for i in range(2, steps + 1):
-                time.sleep(period)
+            i = 2
+            while True:
+                # Clock the motion at `hz`; once the target is reached keep re-sending it at the
+                # keepalive rate — the edge DAMPs a trajectory two seconds after the last setpoint,
+                # so a reached pose must be held until another verb takes over.
+                time.sleep(period if i <= steps else 1.0 / KEEPALIVE_HZ)
                 with self._lock:
                     if self._generation != gen or self._closed:
-                        return  # cancelled by another verb, or closed
+                        return  # superseded by another verb, or closed
                 try:
-                    self._send("trajectory", Trajectory(blend(i), kp_t, kd_t), gen)
+                    self._send("trajectory", Trajectory(blend(min(i, steps)), kp_t, kd_t), gen)
                 except AsimovError:
                     return
+                i += 1
 
         threading.Thread(target=run, name="asimov-sdk-goto", daemon=True).start()
         if wait:

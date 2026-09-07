@@ -102,18 +102,26 @@ def test_recording_writes_states_and_commands_and_loads_back(edge, robot, tmp_pa
     assert all(json.loads(line) for line in path.read_text().splitlines())
 
 
-def test_goto_clocks_setpoints_from_the_current_pose_to_the_target(edge, robot):
+def test_goto_clocks_setpoints_from_the_current_pose_then_holds_the_target(edge, robot):
     for i in range(25):
         edge.state.joint_pos[i] = 0.1
     time.sleep(0.05)
     robot.goto([0.5] * 25, duration=0.5, hz=20, wait=False)
-    assert edge.wait_for(lambda r: sum(c.HasField("all_trajectory") for c in r) >= 9, timeout=2.0)
-    time.sleep(0.2)
+    assert edge.wait_for(lambda r: sum(c.HasField("all_trajectory") for c in r) >= 10, timeout=2.0)
     traj = [c.all_trajectory.positions[0] for c in edge.received if c.HasField("all_trajectory")]
-    assert 9 <= len(traj) <= 11
-    assert traj[0] > 0.1 and traj[-1] == pytest.approx(0.5)
-    assert traj == sorted(traj), "minimum-jerk from the current pose is monotone"
+    motion = traj[:10]
+    assert motion[0] > 0.1 and motion[-1] == pytest.approx(0.5)
+    assert motion == sorted(motion), "minimum-jerk from the current pose is monotone"
     assert all(c.mode == 2 for c in edge.received if c.HasField("all_trajectory"))
+    # after the motion the target is HELD: more setpoints keep arriving, all at the target
+    n = sum(c.HasField("all_trajectory") for c in edge.received)
+    time.sleep(0.35)
+    later = [c.all_trajectory.positions[0] for c in edge.received if c.HasField("all_trajectory")]
+    assert len(later) >= n + 2 and all(p == pytest.approx(0.5) for p in later[n:])
+    robot.stand()  # another verb ends the hold
+    n = sum(c.HasField("all_trajectory") for c in edge.received)
+    time.sleep(0.3)
+    assert sum(c.HasField("all_trajectory") for c in edge.received) <= n + 1
 
 
 def test_a_velocity_verb_cancels_a_running_goto(edge, robot):
