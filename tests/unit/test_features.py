@@ -203,8 +203,8 @@ def test_alerts_from_the_previous_session_do_not_haunt_a_reopen(edge, robot):
     robot.close()
 
 
-def test_recording_restores_the_callback_set_after_construction(edge, robot):
-    rec = robot.record("/tmp/verify/rec-order.jsonl")
+def test_recording_restores_the_callback_set_after_construction(edge, robot, tmp_path):
+    rec = robot.record(tmp_path / "rec-order.jsonl")
     later = []
     robot.on_state = later.append  # set between construction and entering the block
     with rec:
