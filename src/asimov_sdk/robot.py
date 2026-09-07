@@ -92,6 +92,9 @@ def _nonnegative_finite(name: str, value: float) -> float:
 KEEPALIVE_HZ = 10.0
 #: Past this much silence the state stream stops counting as an observation.
 DEFAULT_LINK_TIMEOUT_S = 2.0
+#: How long a firmware alert block is carried forward over frames that omit it (the firmware
+#: sends it every 20th frame, 100 ms apart at 200 Hz).
+ALERT_HOLD_S = 0.3
 
 
 class Robot:
@@ -114,6 +117,8 @@ class Robot:
         # without the lock. That is safe because reading/replacing one attribute is atomic
         # in CPython (GIL or free-threaded); anything compound goes under `_lock`.
         self._state: State | None = None
+        self._last_alerts: tuple[Alert, ...] = ()
+        self._last_alerts_at = 0.0
         self._state_seen = threading.Event()
         self._latched: Velocity | None = None
         self._latch_deadline: float | None = None
@@ -368,10 +373,12 @@ class Robot:
         kp: tuple[float, ...] | list[float] | None = None,
         kd: tuple[float, ...] | list[float] | None = None,
     ) -> Sent:
-        """One set of joint targets for every motor (radians, firmware order). The edge drives
-        a trajectory for two seconds after the last setpoint and then DAMPs, so clock these
-        yourself or use :meth:`goto`. ``ValueError`` unless ``len(positions) == info.dof``, or
-        when only one of ``kp``/``kd`` is given (the edge ignores a lone gain)."""
+        """One set of joint targets for every motor (radians, firmware order). Every joint goes
+        under position control and the walking policy is off, so a standing biped will not
+        balance itself — see :meth:`goto`. The edge drives a trajectory for two seconds after
+        the last setpoint and then DAMPs, so clock these yourself or use :meth:`goto`.
+        ``ValueError`` unless ``len(positions) == info.dof``, or when only one of ``kp``/``kd``
+        is given (the edge ignores a lone gain)."""
         pos = tuple(float(p) for p in positions)
         if self._info is not None and len(pos) != self._info.dof:
             raise ValueError(
@@ -397,6 +404,11 @@ class Robot:
         timeout: float | None = None,
     ) -> Sent:
         """Move every joint from where it IS to ``positions`` over ``duration`` seconds.
+
+        A trajectory puts EVERY joint under position control with the walking policy off:
+        the robot does not balance itself while one is in force. On a standing biped, use
+        this only with the robot supported, or with gains (``kp``/``kd``) known to hold the
+        legs; a fall latches a fault-DAMP that lasts until the firmware restarts.
 
         Interpolates (minimum-jerk) from the current reported joint positions and clocks
         ``trajectory()`` setpoints at ``hz`` from a background thread, then HOLDS the target
@@ -681,10 +693,25 @@ class Robot:
                         for j, n in zip(state.joints, names, strict=True)
                     ),
                 )
+        state = self._carry_alerts(state)
         prev = self._state
         self._state = state
         self._state_seen.set()
         self._fire_state_callbacks(prev, state)
+
+    def _carry_alerts(self, state: State) -> State:
+        """The firmware puts its alert block in every 20th frame (10 Hz at 200 Hz) and an
+        absent block decodes the same as "no alerts". Carry the last block forward for
+        ``ALERT_HOLD_S`` so ``state.alerts``, ``faulted`` and ``on_alert`` are stable
+        per sample; a cleared alert lingers at most that long."""
+        now = time.monotonic()
+        if state.alerts:
+            self._last_alerts, self._last_alerts_at = state.alerts, now
+            return state
+        if self._last_alerts and now - self._last_alerts_at < ALERT_HOLD_S:
+            return dataclasses.replace(state, alerts=self._last_alerts)
+        self._last_alerts = ()
+        return state
 
     def _fire_state_callbacks(self, prev: State | None, state: State) -> None:
         if self.on_state is not None:

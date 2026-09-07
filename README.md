@@ -90,8 +90,11 @@ sent.require()                              # raises CommandRefusedError on Refu
   `open()` again.
 - A verb is never dropped as superseded; only the keepalive's re-sends are. A new verb ends
   any running `goto()`.
-- The edge drives a trajectory for two seconds after the last setpoint, then DAMPs. Use
-  `goto()` to hold or reach a pose; `trajectory()` is one setpoint you clock yourself.
+- `trajectory()` and `goto()` put every joint under position control with the walking
+  policy off: the robot does not balance itself while one is in force. On a standing biped
+  use them with the robot supported, or with gains known to hold the legs. The edge DAMPs a
+  trajectory two seconds after the last setpoint; `goto()` holds its target until another
+  verb, `trajectory()` is one setpoint you clock yourself.
 - `damp()` folds a standing biped. It is deliberate and never implied by anything else.
 - Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s), the clamp is
   visible on `Sent.clamped`, and `Limits` rejects negative or non-finite values.

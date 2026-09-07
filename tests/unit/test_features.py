@@ -13,6 +13,7 @@ from asimov_sdk import (
     BatteryProtection,
     Frame,
     Mode,
+    Robot,
     UnsupportedError,
     WaitTimeoutError,
 )
@@ -76,7 +77,7 @@ def test_state_alert_and_mode_callbacks(edge, robot):
     time.sleep(0.1)
     del edge.state.active_alerts[:]
     edge.set_mode("stand")
-    time.sleep(0.1)
+    time.sleep(0.5)  # a cleared alert is carried for ALERT_HOLD_S before it reads as gone
     assert len(states) > 5
     assert alerts == [("FALL_DETECTED", "raised"), ("FALL_DETECTED", "cleared")]
     assert modes == [(Mode.DAMP, Mode.STAND)]
@@ -136,3 +137,32 @@ def test_a_velocity_verb_cancels_a_running_goto(edge, robot):
 def test_goto_wait_times_out_when_the_robot_does_not_follow(edge, robot):
     with pytest.raises(WaitTimeoutError):
         robot.goto([0.5] * 25, duration=0.2, hz=20, wait=True, timeout=0.5)
+
+
+def test_alerts_sent_every_20th_frame_are_carried_forward_for_stable_reads():
+    """The firmware includes its alert block in 1 of 20 frames. Per-sample reads must not
+    flicker, on_alert must fire once per transition, and a fault must be seen every sample."""
+    from tests.conftest import FakeEdge
+
+    edge = FakeEdge(state_hz=200.0, alerts_every=20)
+    try:
+        with Robot.connect(
+            "127.0.0.1",
+            command_port=edge.command_port,
+            state_bind=("127.0.0.1", edge.state_port),
+            timeout=2,
+        ) as robot:
+            events = []
+            robot.on_alert = lambda a, ev: events.append((a.name, ev))
+            a = edge.state.active_alerts.add()
+            a.id, a.severity = 7, 0
+            time.sleep(0.3)
+            reads = [bool(robot.state.alerts) for _ in range(40) if not time.sleep(0.005)]
+            assert all(reads), "alerts flickered between frames"
+            assert all(robot.state.faulted for _ in range(10))
+            del edge.state.active_alerts[:]
+            time.sleep(0.6)
+            assert robot.state.alerts == ()
+            assert events == [("FALL_DETECTED", "raised"), ("FALL_DETECTED", "cleared")]
+    finally:
+        edge.close()

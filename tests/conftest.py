@@ -31,7 +31,7 @@ class FakeEdge:
     Records every decoded command; the state it pushes is whatever the test sets.
     """
 
-    def __init__(self, *, state_hz: float = 100.0) -> None:
+    def __init__(self, *, state_hz: float = 100.0, alerts_every: int = 1) -> None:
         from asimov_sdk._proto import load
 
         pb = load()  # same bindings the SDK uses, whichever source it resolved to
@@ -45,6 +45,7 @@ class FakeEdge:
         self.state.joint_pos.extend([0.0] * 25)
         self.state.projected_gravity.extend([0.0, 0.0, -1.0])
         self.pushing = True
+        self.alerts_every = alerts_every  # firmware ships the alert block every 20th frame
         self._hz = state_hz
         self._stop = threading.Event()
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -76,7 +77,13 @@ class FakeEdge:
                 seq += 1
                 self.state.sequence = seq
                 self.state.timestamp_us = int(time.time() * 1e6)
-                out.sendto(self.state.SerializeToString(), ("127.0.0.1", self.state_port))
+                if self.alerts_every > 1 and seq % self.alerts_every:
+                    frame = self._st_pb.RobotState()
+                    frame.CopyFrom(self.state)
+                    del frame.active_alerts[:]
+                    out.sendto(frame.SerializeToString(), ("127.0.0.1", self.state_port))
+                else:
+                    out.sendto(self.state.SerializeToString(), ("127.0.0.1", self.state_port))
             time.sleep(period)
         out.close()
 
