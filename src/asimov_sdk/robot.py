@@ -447,9 +447,15 @@ class Robot:
             a = 10 * t**3 - 15 * t**4 + 6 * t**5  # minimum jerk, 0→1
             return tuple(s0 + (s1 - s0) * a for s0, s1 in zip(start, target, strict=True))
 
-        first = self.trajectory(blend(1), kp=kp_t, kd=kd_t)
         with self._lock:
-            gen = self._generation  # the verb above bumped it; another verb bumps again
+            # Bump, send the first setpoint and record the generation in ONE lock hold: a
+            # verb landing between them would otherwise leave this motion running under the
+            # newer generation and let stale setpoints follow the takeover command.
+            self._generation += 1
+            gen = self._generation
+            self._latched, self._latch_deadline = None, None
+            first = self._send("trajectory", Trajectory(blend(1), kp_t, kd_t), gen)
+            self._last_mode = first
 
         def run() -> None:
             i = 2

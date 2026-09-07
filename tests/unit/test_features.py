@@ -211,3 +211,24 @@ def test_recording_restores_the_callback_set_after_construction(edge, robot, tmp
         time.sleep(0.05)
     assert robot.on_state == later.append
     assert later, "the pre-existing callback kept firing while recording"
+
+
+def test_goto_captures_its_generation_with_the_first_setpoint(edge, robot):
+    """A verb that lands during goto()'s first send must cancel the motion. Simulated by
+    bumping the generation from inside the first trajectory send."""
+    real_send = robot._send
+    fired = []
+
+    def racing_send(name, command, gen, **kw):
+        result = real_send(name, command, gen, **kw)
+        if name == "trajectory" and not fired:
+            fired.append(1)
+            robot.damp()  # another verb lands right after the first setpoint left
+        return result
+
+    robot._send = racing_send  # type: ignore[method-assign]
+    robot.goto([0.5] * 25, duration=0.3, hz=20, wait=False)
+    time.sleep(0.5)
+    n_traj = sum(c.HasField("all_trajectory") for c in edge.received)
+    assert n_traj == 1, f"{n_traj} trajectory setpoints went out after the takeover verb"
+    assert "damp" in edge.modes()
