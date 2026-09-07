@@ -92,6 +92,9 @@ class Robot:
         self.limits = limits if limits is not None else Limits()
         self.link_timeout = link_timeout
         self._lock = threading.RLock()
+        # `_state` and `_info` are single reference assignments read from several threads
+        # without the lock. That is safe because reading/replacing one attribute is atomic
+        # in CPython (GIL or free-threaded); anything compound goes under `_lock`.
         self._state: State | None = None
         self._state_seen = threading.Event()
         self._latched: Velocity | None = None
@@ -398,11 +401,13 @@ class Robot:
             return sent
 
     def _send(self, name: str, command: Command, gen: int, *, clamped: bool = False) -> Sent:
-        if self._closed:
-            raise NotConnected("this Robot is closed")
-        if self._link_lost is not None:
-            raise self._link_lost
         with self._lock:
+            # Checked under the lock so a close() racing on another thread cannot slip a
+            # command onto a transport that is being torn down.
+            if self._closed:
+                raise NotConnected("this Robot is closed")
+            if self._link_lost is not None:
+                raise self._link_lost
             if gen != self._generation:
                 # Superseded before it left. Report it as sent-then-superseded rather than
                 # send a stale command after its replacement.
