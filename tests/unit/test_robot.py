@@ -300,7 +300,7 @@ def test_with_block_closes_and_the_state_names_joints(edge):
     assert not r.connected
 
 
-# ── review round 1: concurrency, liveness, and trust in the state stream ──────
+# ── concurrency, liveness, and trust in the state stream ─────────────────────
 
 
 def test_damp_is_never_dropped_by_a_racing_set_velocity(edge, robot):
@@ -467,7 +467,7 @@ def test_an_unresolvable_host_fails_at_connect():
         tx.open()
 
 
-# ── tokamak-pm round 1 (approved with two Important items) ────────────────────
+# ── reopen hygiene and outcome naming ─────────────────────────────────────────
 
 
 def test_reopen_waits_for_fresh_state_instead_of_the_last_session(edge, robot):
@@ -573,7 +573,7 @@ def test_reopen_learns_the_robot_again_instead_of_filtering_it_as_foreign(edge, 
     robot.close()
 
 
-# ── codex adversarial pass (2026-09-07) ──────────────────────────────────────
+# ── limits, closed robots, verb names, foreign outcomes ────────────────────────────
 
 
 @pytest.mark.parametrize("bad", [-0.6, float("nan"), float("inf"), -0.0001])

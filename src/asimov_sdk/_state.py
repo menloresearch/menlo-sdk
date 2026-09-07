@@ -1,8 +1,7 @@
 """What the robot reports, typed.
 
-A :class:`State` is one telemetry sample, normalised so that both transports produce
-the same object: the UDP lane carries ``asimov.io.RobotState``, the cloud lane will
-carry ``menlo.edge.EdgeTelemetry``, and neither name leaks above the transport.
+A :class:`State` is one telemetry sample, normalised so every transport produces the same
+object: the UDP lane carries ``asimov.io.RobotState``; no wire name leaks above the transport.
 
 Fields the robot cannot report are ``None``, never a plausible default. There is
 deliberately no ``pose``: the firmware has no odometry and neither lane carries one.
@@ -195,8 +194,9 @@ class State:
 
     @property
     def faulted(self) -> bool:
-        """The firmware's own fault test: an error flag, or any critical alert. The shipped
-        firmware never writes ``error_flags``, so the alerts are the half that matters."""
+        """An error flag or any critical alert. The firmware never writes ``error_flags``, so
+        the alerts are what matters — and they clear about 2.5 s after the condition ends,
+        while the firmware's own fault latch keeps the robot DAMPed until it restarts."""
         return bool(self.error_flags) or any(a.critical for a in self.alerts)
 
     @property
@@ -217,7 +217,7 @@ class State:
 class RobotInfo:
     """What the SDK can say about the body it is attached to. Read once at connect.
 
-    Discovery is not on the wire yet, so everything here is derived from the transport
+    Everything here is derived from the transport
     and the first state sample. Fields that need the robot to describe itself are
     ``None`` rather than guessed.
     """

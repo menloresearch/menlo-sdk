@@ -7,8 +7,8 @@
         robot.wait_for(Mode.STAND)
         robot.set_velocity(vx=0.25, duration=4.0)
 
-One ``Robot``, one API, pluggable transports. The direct LAN lane ships today; the
-cloud lane plugs into the same ``Transport`` seam later.
+One ``Robot``, one API, pluggable transports: ``UdpTransport`` speaks the robot's LAN
+lane; any other wire implements ``asimov_sdk.Transport``.
 """
 
 from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity

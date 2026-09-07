@@ -2,8 +2,8 @@
 
 This is the edge's own external-client protocol (asimov-edge ``connectors/udp_connector.py``,
 opt-in with ``--udp-control``). Speaking it makes the SDK the fifth connector beside BLE,
-cloud, RF and the manager: the same ``RobotCommand``, the same arbiter, the same safety
-layer, the same RSL gate when the robot has one.
+the robot's other controllers: the same ``RobotCommand``, the same arbiter, the same safety
+layer. Datagrams are unsigned; a robot whose edge enforces signed commands drops them.
 
 The wire::
 
@@ -208,7 +208,7 @@ class UdpTransport:
         self._on_state.append(callback)
 
     def subscribe_outcome(self, callback: OutcomeCallback) -> None:
-        # Honoured, never fired: the UdpConnector has no outcome channel yet.
+        # Honoured, never fired: the UdpConnector has no outcome channel.
         self._on_outcome.append(callback)
 
     def subscribe_controller_change(self, callback: ControllerCallback) -> None:
@@ -278,7 +278,7 @@ class UdpTransport:
             self._seq = (self._seq + 1) & 0xFFFFFFFF
             seq = self._seq
         msg.sequence = seq
-        # Load-bearing when the robot's RSL gate is on (5 s freshness window); harmless off.
+        # The edge rejects commands stamped more than 5 s in the past or 2 s in the future.
         msg.timestamp_us = int(time.time() * 1_000_000)
         try:
             sock.sendto(msg.SerializeToString(), addr)

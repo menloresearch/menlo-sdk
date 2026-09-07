@@ -1,6 +1,6 @@
-"""Per-robot facts the wire does not carry yet.
+"""Per-robot facts the wire does not carry.
 
-The edge has no discovery channel today (planned), so the SDK cannot ask a robot for its
+The SDK cannot ask a robot for its
 joint names. Until it can, the tables here fill in what a 25-DOF ``RobotState`` means.
 Every table names its source; if that source moves, the table is wrong and must move
 with it — do not "fix" a name here without re-reading the firmware profile.

@@ -4,7 +4,7 @@ Set ``ASIMOV_SDK_LIVE_HOST`` (e.g. ``127.0.0.1``) to run. These are the only tes
 prove the SDK moves a body; the unit suite proves it speaks the wire. Kept short and
 observable: every step waits on the robot's own report, never on a sleep.
 
-The sequence ends in DAMP on purpose. On the studio firmware a DAMP mid-session
+The sequence ends in DAMP on purpose. A DAMP drops the robot; the fall latch
 suppresses the next STAND until the rig restarts, so run this last.
 """
 
@@ -26,7 +26,7 @@ def test_stand_walk_stop_damp(live_host):
         assert robot.state.age_s < 0.5, "state should be streaming"
 
         sent = robot.stand()
-        assert isinstance(sent.wait_outcome(), Unknown), "no outcome channel on this edge yet"
+        assert isinstance(sent.wait_outcome(), Unknown), "no outcome channel on the UDP lane"
         s = robot.wait_for(Mode.STAND, timeout=15.0)
         print(f"STAND reported after {time.monotonic() - sent.sent_at:.2f}s; upright={s.upright}")
         assert s.upright is True

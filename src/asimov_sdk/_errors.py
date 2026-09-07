@@ -62,7 +62,8 @@ class LinkLostError(AsimovError):
 
     The session is over: every verb and wait on this ``Robot`` raises this error until the
     caller reconnects with ``close()`` followed by ``open()``, which starts a clean session.
-    There is no automatic reconnect — the edge's own watchdog has already stopped the robot,
+    There is no automatic reconnect — the SDK sent a zero velocity when it declared the link
+    lost,
     and whether to try again is the caller's decision.
     """
 

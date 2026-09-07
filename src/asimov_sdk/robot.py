@@ -86,8 +86,8 @@ def _nonnegative_finite(name: str, value: float) -> float:
     return value
 
 
-#: How often a held velocity is re-sent. The edge zero-and-STANDs ~2 s after the last
-#: velocity it saw; 10 Hz leaves 20 misses of margin and is what the edge's other
+#: How often a held velocity is re-sent. The edge zeroes velocity 2 s after the last one it
+#: received (the robot then holds MOVE at rest), so 10 Hz leaves a 20-packet margin.
 #: controllers send.
 KEEPALIVE_HZ = 10.0
 #: Past this much silence the state stream stops counting as an observation.
@@ -368,8 +368,10 @@ class Robot:
         kp: tuple[float, ...] | list[float] | None = None,
         kd: tuple[float, ...] | list[float] | None = None,
     ) -> Sent:
-        """Direct joint targets for every motor (radians, firmware order). A setpoint the
-        caller clocks; ``ValueError`` unless ``len(positions) == info.dof``."""
+        """One set of joint targets for every motor (radians, firmware order). The edge drives
+        a trajectory for two seconds after the last setpoint and then DAMPs, so clock these
+        yourself or use :meth:`goto`. ``ValueError`` unless ``len(positions) == info.dof``, or
+        when only one of ``kp``/``kd`` is given (the edge ignores a lone gain)."""
         pos = tuple(float(p) for p in positions)
         if self._info is not None and len(pos) != self._info.dof:
             raise ValueError(
@@ -591,7 +593,7 @@ class Robot:
                 self._mark_link_lost(
                     LinkLostError(
                         f"no state from {self._tx.endpoint} for {self.link_timeout:.1f}s; "
-                        "the edge's own watchdog has already stopped the robot"
+                        "a zero velocity was sent; close() and open() to reconnect"
                     )
                 )
             with self._lock:

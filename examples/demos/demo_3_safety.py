@@ -31,7 +31,7 @@ with Robot.connect(host) as robot:
         case Refused(reason=r):
             print(f"   refused: {r.name} (retryable={r.retryable})")
         case Unknown(waited_s=w):
-            print(f"   no verdict in {w}s — this edge has no outcome channel yet; observe instead:")
+            print(f"   no verdict in {w}s — the UDP lane has no outcome channel; observe instead:")
     try:
         robot.wait_for(Mode.MOVE, timeout=1.5)
     except WaitTimeoutError as exc:

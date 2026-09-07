@@ -30,8 +30,8 @@ from asimov_sdk._errors import CommandRefusedError, OutcomeUnknownError
 class Refusal(enum.IntEnum):
     """Why the robot refused a command.
 
-    Values mirror ``menlo.edge.RefusalReason`` (asimov-protocol #12) so an outcome from
-    either transport maps 1:1. ``UNRECOGNIZED`` is a value this SDK build does not know:
+    Values follow ``menlo.edge.RefusalReason``; the UDP lane delivers none of them, so an
+    outcome from any transport maps 1:1. ``UNRECOGNIZED`` is a value this SDK build does not know:
     the robot is newer than the client. It is still a refusal.
     """
 
@@ -49,7 +49,7 @@ class Refusal(enum.IntEnum):
     SHUTTING_DOWN = 11
     NO_CAMERA = 12
     #: The arbiter dropped the command because another controller holds the body
-    #: (``arbiter.py`` reason ``not_active``). Not in RefusalReason yet — proposed.
+    #: (the edge's arbiter reason ``not_active``).
     NOT_ACTIVE = 100
     UNRECOGNIZED = -1
 
@@ -172,7 +172,7 @@ class Sent:
         """Like ``wait_outcome`` but raise on refusal.
 
         ``unknown_ok=False`` also raises when nothing arrived. Keep the default while the
-        edge does not yet report outcomes — otherwise every call raises for the wrong reason.
+        UDP lane reports no outcomes — otherwise every call raises for the wrong reason.
         """
         outcome = self.wait_outcome(timeout)
         if isinstance(outcome, Refused):

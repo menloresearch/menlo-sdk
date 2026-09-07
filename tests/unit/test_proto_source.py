@@ -1,5 +1,5 @@
 """The bindings resolve from an installed asimov-protocol OR the vendored tree — and the
-vendored tree alone is enough to speak the wire (that is what `pip install asimov-sdk` gets)."""
+vendored tree alone is enough to speak the wire (that is what an installed wheel has)."""
 
 from __future__ import annotations
 

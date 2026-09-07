@@ -6,16 +6,8 @@ them, :class:`~asimov_sdk._outcome.Outcome` verdicts) back. It owns encoding, so
 and threads. It knows nothing about latching, clamping, waits or the error model — those
 live in :class:`~asimov_sdk.robot.Robot`, once, for every transport.
 
-Two transports are planned and one exists:
-
-* ``direct`` — :class:`asimov_sdk.transport.udp.UdpTransport`. Bare ``asimov.io``
-  protobufs to the edge's ``UdpConnector`` on the robot's LAN. Shipped.
-* ``cloud`` — the platform path: a LiveKit room shared with the edge, ``CloudCommand``
-  envelopes out, ``EdgeTelemetry`` back. Not in this package yet; it must implement
-  exactly this protocol and nothing else changes.
-
-Threading contract: a transport may call the subscribed callbacks from any thread of
-its own. Callbacks must be cheap and must not block; ``Robot`` hands the work off.
+One transport ships, ``UdpTransport`` (the robot's LAN lane). Any other wire implements
+this protocol; ``Robot`` does not know which it is on.
 """
 
 from __future__ import annotations
@@ -46,7 +38,7 @@ class Transport(Protocol):
     #: below actually deliver.
     capabilities: frozenset[str]
     #: How long ``Sent.wait_outcome`` waits by default on this wire. A LAN datagram and a
-    #: LiveKit round trip are different animals.
+    #: different wire has a different round trip.
     default_outcome_timeout: float
 
     def open(self) -> None:
@@ -69,7 +61,7 @@ class Transport(Protocol):
 
     def subscribe_outcome(self, callback: OutcomeCallback) -> None:
         """Per-command verdicts, when the edge sends them. A transport whose wire has no
-        outcome channel yet simply never calls this."""
+        outcome channel never calls this."""
 
     def subscribe_controller_change(self, callback: ControllerCallback) -> None:
         """Who holds the body now. Same caveat as outcomes."""

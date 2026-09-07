@@ -4,8 +4,8 @@ The verbs on :class:`~asimov_sdk.robot.Robot` are the wire's verbs — ``set_vel
 ``stand``, ``damp``, ``stop``, ``trajectory`` — because that is what the edge, the
 protocol and the robot's other controllers already call them. These dataclasses are
 their payloads, transport-neutral: the UDP transport encodes them as
-``asimov.io.RobotCommand``; a future cloud transport will encode the same objects as
-``menlo.edge.CloudCommand``. Nothing above the transport knows which.
+``asimov.io.RobotCommand``; another transport encodes the same objects for its own wire.
+Nothing above the transport knows which.
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 Two sources, one rule: an installed ``asimov-protocol`` package wins (the edge and its tools
 import that one, and protobuf's descriptor pool tolerates exactly one copy of each ``.proto``
 per process); the tree vendored under ``asimov_sdk/_vendor`` is the fallback that makes
-``pip install asimov-sdk`` work with no access to the protocol repository. Both are the same
+installing the wheel work with no access to the protocol repository. Both are the same
 generated code at the same tag — see ``_vendor/VENDORED.md``.
 """
 

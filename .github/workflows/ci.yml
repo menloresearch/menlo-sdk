@@ -43,8 +43,10 @@ jobs:
       - name: Unit tests
         run: uv run pytest -m "not integration and not live"
 
-      - name: Package builds
-        run: uv build && ls -l dist/
+      - name: Package builds and ships its bindings and type information
+        run: |
+          uv build && ls -l dist/
+          python -m zipfile -l dist/*.whl | grep -E 'asimov_sdk/py.typed|_vendor/asimov_protocol/v1/asimov_state_pb2.pyi|_vendor/VENDORED.md'
 
   # The vendored bindings must be exactly what the pinned asimov-protocol tag generates.
   # Needs read access to that repository; without the token this warns and skips.

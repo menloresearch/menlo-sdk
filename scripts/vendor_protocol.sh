@@ -6,7 +6,7 @@
 #                                              fail if the vendored tree differs from it
 #
 # The SDK prefers an installed `asimov-protocol` package (one descriptor set per process);
-# the vendored tree is what makes `pip install asimov-sdk` work without access to the
+# the vendored tree is what makes installing the wheel work without access to the
 # protocol repository. The tag in VENDORED.md is the single source of the pin.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -5,7 +5,7 @@
   close()  what the `with` block does on exit: zero velocity (if one is held), then drop
            the link. Never a damp, so a script that ends leaves the robot on its feet.
 
-On the studio firmware a DAMP mid-session suppresses the next STAND until the rig
+A DAMP drops the robot; the fall latches a fault that suppresses STAND until the firmware
 restarts, so run this one last.
 """
 

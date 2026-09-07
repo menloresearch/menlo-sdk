@@ -3,148 +3,152 @@
 Drive an Asimov robot from Python.
 
 ```python
-from asimov_sdk import Robot, Mode
+from asimov_sdk import Mode, Robot
 
 with Robot.connect("asimov.local") as robot:
     robot.stand()
-    robot.wait_for(Mode.STAND, timeout=10.0)
+    robot.wait_for(Mode.STAND, timeout=15)
     robot.set_velocity(vx=0.25, duration=4.0)  # m/s, held for 4 s, then zero
     robot.wait_for(Mode.MOVE)
-    robot.stand()  # zero velocity is MOVE at rest, not STAND
-    robot.wait_for(Mode.STAND)
+    robot.stand()                              # zero velocity is MOVE at rest, not STAND
+    print(robot.state.joint("L_Knee").pos, robot.state.battery)
 ```
 
-One `Robot`, one API, pluggable transports. The **direct** lane — bare `asimov.io`
-protobufs to the robot's edge over the LAN — ships today. The **cloud** lane (through the
-Menlo platform) plugs into the same `Transport` seam next; nothing above it changes.
-
-> Status: **alpha**, pre-1.0. The API follows the robot's own wire vocabulary and will
-> stay close to it; names may still move before 1.0.
+One `Robot`, one API, pluggable transports. `UdpTransport` speaks the robot's LAN lane:
+`asimov.io.RobotCommand` datagrams to the robot's edge on udp/8850, `asimov.io.RobotState`
+pushed back on udp/8851. Commands land in the edge's arbiter beside the robot's other
+controllers and pass the same safety layer.
 
 ## Install
 
+Python 3.12 or newer.
+
 ```bash
 uv add "asimov-sdk @ git+https://github.com/menloresearch/asimov-sdk.git"
+# or: pip install "asimov-sdk @ git+https://github.com/menloresearch/asimov-sdk.git"
 ```
 
-The only runtime dependency is `protobuf`. The generated `asimov.io` bindings from
-[`asimov-protocol`](https://github.com/menloresearch/asimov-protocol) ship inside the wheel,
-pinned to the tag the edge pins (`src/asimov_sdk/_vendor/VENDORED.md`); if the
-`asimov-protocol` package is installed as well, the SDK uses that copy so the edge and the
-SDK share one set of descriptors. `make vendor-protocol REF=<tag>` moves the pin.
+The only runtime dependency is `protobuf`. The generated `asimov.io` bindings ship inside
+the package, pinned to an `asimov-protocol` tag (`src/asimov_sdk/_vendor/VENDORED.md`). If
+the `asimov-protocol` package is installed as well and is the same release, the SDK uses
+that copy so one process holds one set of descriptors.
 
-## What you need on the robot
+## The robot side
 
-The edge must open its UDP control lane and push state to your machine:
-
-```
-asimov-edge --udp-control --udp-state-host <your ip>
-```
-
-| direction | port | payload |
-|---|---|---|
-| you → robot | udp/8850 | `asimov.io.RobotCommand`, one per datagram |
-| robot → you | udp/8851 | `asimov.io.RobotState`, one per datagram, at telemetry rate |
-
-Your commands land in the edge's **arbiter** beside every other controller (BLE, cloud,
-RF, the manager) and pass the same safety layer: velocity is dropped while the firmware is
-DAMPed, STAND is suppressed on a fault-DAMP, and two seconds without a velocity zero-and-
-STANDs the robot. The SDK does not bypass any of that; it is a client of it.
-
-No robot handy? The simulator is the same edge and the same firmware:
+The edge must run with `--udp-control` and push state to your machine
+(`--udp-state-host <your ip>`). To run against a simulated robot instead of hardware:
 `menlo-studio up --container --sdk`, then `Robot.connect("127.0.0.1")`.
 
-## The API in one screen
+## API in one screen
 
 ```python
-robot = Robot.connect(host)      # returns when the first state sample arrives
-robot.info                              # RobotInfo: dof, joint names, protocol version, limits
+robot = Robot.connect(host, command_port=8850, state_bind=("0.0.0.0", 8851),
+                      timeout=5.0, limits=None, state_source=None, link_timeout=2.0)
+robot = Robot(transport, limits=None, link_timeout=2.0); robot.open()   # any Transport
 
-sent = robot.set_velocity(vx, vy, vyaw, duration=None)   # held at 10 Hz until superseded
-sent = robot.stop()                     # zero velocity; firmware stays in MOVE at rest
-sent = robot.stand()                    # one-shot posture
-sent = robot.damp()                     # one-shot; motors compliant NOW — the emergency stop
-sent = robot.trajectory(positions)      # direct joint setpoint, len == info.dof
+# verbs — each returns a Sent immediately; the wire's own vocabulary
+robot.set_velocity(vx, vy, vyaw, duration=None)   # held at 10 Hz until superseded/stop/duration
+robot.stop()                                       # zero velocity; robot stays in MOVE at rest
+robot.stand()                                      # one-shot
+robot.damp()                                       # one-shot; motors compliant NOW — the emergency verb
+robot.trajectory(positions, kp=None, kd=None)     # one setpoint, radians, firmware order
+robot.goto(positions, duration=2.0, hz=50, wait=True)  # clocked, interpolated from the current pose
 
-sent.command, sent.clamped              # what was ACTUALLY sent
-sent.outcome                            # Applied | Refused | None (pending); never blocks
-sent.wait_outcome(timeout)              # Applied | Refused | Unknown
-sent.require()                          # raise CommandRefusedError on Refused
+# waits — the robot's own report, never a sleep
+robot.wait_for(Mode.STAND, timeout=10)
+robot.wait_until(lambda s: s.upright and s.mode is Mode.MOVE, timeout=10, stale_after=None)
 
-robot.state                             # latest State: mode, joints, gravity, alerts, age_s
-robot.wait_for(Mode.STAND, timeout=)    # blocks on the robot's OWN report
-robot.wait_until(lambda s: ..., timeout=, stale_after=)
-robot.on_refused = callback             # when the edge reports refusals
-robot.close()                           # zero velocity if held, then drop the link
+# state
+s = robot.state           # latest sample: mode, joints, gravity, gyro, quat, euler, alerts, battery
+s.age_s; s.upright; s.faulted; s.joint("L_Knee").pos; s.battery.soc_percent
+robot.info                # transport, endpoint, dof, joint_names, protocol_version, limits, capabilities
+robot.has("camera"); robot.require("drive", "battery")
+
+# media — UnsupportedError when this robot/transport does not carry it
+robot.camera.latest(); robot.camera.frames(timeout=5); robot.camera.subscribe(cb)
+robot.microphone.chunks(); robot.speaker.play_pcm(pcm_s16le, sample_rate_hz=16000)
+
+# callbacks (transport thread; keep them short)
+robot.on_state = ...; robot.on_alert = ...; robot.on_mode_change = ...
+robot.on_refused = ...; robot.on_link_lost = ...
+
+# recording
+with robot.record("run.jsonl"): ...     # every state sample and every command, JSON lines
+
+# outcomes — was the command admitted? separate from "did it take effect"
+sent = robot.stand(); sent.wait_outcome()   # Applied | Refused | Unknown
+sent.require()                              # raises CommandRefusedError on Refused
 ```
 
-Two questions are deliberately separate:
+## Safety model
 
-- **Was it admitted?** `sent.wait_outcome()` is the arbiter's verdict for that command.
-  Today's edge does not report verdicts, so it returns `Unknown`. `Unknown` is never
-  treated as success and never as refusal.
-- **Did it take effect?** `wait_for` / `wait_until` read the robot's state stream. They
-  raise typed errors when the answer cannot come: `StateStaleError` (the stream went quiet),
-  `RobotFaultedError` (the firmware fault-DAMPed), `WaitTimeoutError`.
+- A held velocity is re-sent at 10 Hz. The edge zeroes velocity two seconds after the last
+  one it received; the robot then stands in place in MOVE.
+- `duration=` bounds a hold on the client; the SDK sends the zero itself when time is up.
+- `close()` sends a zero if a velocity was held. `LinkLostError` (no state for
+  `link_timeout` seconds) sends a zero too, then every verb raises until you `close()` and
+  `open()` again.
+- A verb is never dropped as superseded; only the keepalive's re-sends are. A new verb ends
+  any running `goto()`.
+- The edge drives a trajectory for two seconds after the last setpoint, then DAMPs. Use
+  `goto()` to hold or reach a pose; `trajectory()` is one setpoint you clock yourself.
+- `damp()` folds a standing biped. It is deliberate and never implied by anything else.
+- Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s), the clamp is
+  visible on `Sent.clamped`, and `Limits` rejects negative or non-finite values.
+- The state port is plain UDP: samples that do not look like this robot are dropped, an
+  older datagram never overwrites a newer sample, and `state_source=` pins the one address
+  state may arrive from.
+- The robot's fault latch outlives the alert that raised it: after a fall the robot stays
+  DAMPed and refuses STAND until its firmware restarts, while `state.faulted` clears after
+  about 2.5 s. A `wait_for(Mode.STAND)` in that condition ends in `WaitTimeoutError`.
 
-Errors that concern the robot or the link subclass `AsimovError`. Caller mistakes stay
-builtins: a non-finite velocity is a `ValueError`, an unknown joint name a `KeyError`.
+## Errors
 
-## Safety model, in short
+| Exception | When |
+|---|---|
+| `ConnectError` / `ProtocolMismatchError` | no state within `timeout`; protocol version differs |
+| `NotConnectedError` | a call before `open()` or after `close()` |
+| `LinkLostError` | no state for `link_timeout` s; the session is over |
+| `WaitTimeoutError` (also `TimeoutError`) | a wait's condition was not met in time; `.last` is the last state |
+| `StateStaleError` | the stream went quiet during a wait |
+| `RobotFaultedError` | the firmware fault-DAMPed; `.state` carries the alerts |
+| `CommandRefusedError` / `OutcomeUnknownError` | from `Sent.require()` |
+| `UnsupportedError` | this robot, over this transport, does not provide the capability |
 
-- A velocity is **held** and re-sent at 10 Hz by a background thread. That feeds nothing on
-  the robot; it holds off the edge's two-second watchdog, which is the real safety net.
-  `duration=` bounds the hold; the SDK sends an explicit zero when it ends.
-- **Mode commands are one-shot.** Repeating STAND at 10 Hz would let a script out-shout
-  an operator's DAMP.
-- `close()` (and the `with` block) sends zero velocity if one is held, then drops the
-  link. It never damps: damping a standing biped collapses it.
-- `damp()` **is** the emergency stop, and it raises on a dead link like every other verb.
-- The state port is plain UDP: samples that do not look like this robot are dropped, and
-  `connect(..., state_source="<robot ip>")` pins the one address state may arrive
-  from. Leave it unset on the simulator, whose state leaves from the container address.
-- Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s) and the clamp is
-  visible on `Sent.clamped`.
-- Lose the state stream for two seconds and the `Robot` is `LinkLostError`: terminal, no
-  auto-reconnect (reconnecting would re-latch a velocity across a gap you never saw).
+Caller mistakes stay builtins: `ValueError` for a non-finite velocity, a bad limit or
+duration, or a trajectory of the wrong length; `KeyError` for an unknown joint name.
 
-## Layout
-
-```
-src/asimov_sdk/
-  robot.py          Robot: verbs, hold, waits, error model — transport-neutral
-  _command.py       Velocity / ModeCommand / Trajectory, Limits
-  _state.py         State, Joint, Alert, Mode, RobotInfo
-  _outcome.py       Sent, Applied / Refused / Unknown, Refusal
-  _errors.py        AsimovError tree
-  robots.py         per-robot tables the wire does not carry yet (joint names, protocol version)
-  transport/
-    base.py         the Transport protocol every wire implements
-    udp.py          the direct lane (asimov-edge UdpConnector)
-```
-
-## Develop
+## Development
 
 ```bash
 make sync          # uv sync
-make check         # ruff + mypy --strict + unit tests
-make integration   # the REAL asimov-edge UdpConnector in-process (ASIMOV_EDGE_SRC=<edge>/src)
-make live          # a robot or studio rig (ASIMOV_SDK_LIVE_HOST=127.0.0.1)
+make check         # ruff, mypy --strict, unit tests (fake edge on the real wire)
+make integration   # the real asimov-edge UdpConnector in-process; ASIMOV_EDGE_SRC=<edge>/src
+make live          # a robot or simulator; ASIMOV_SDK_LIVE_HOST=<host>
+make check-vendor  # vendored bindings match the pinned asimov-protocol tag
+make vendor-protocol REF=v1.1.0
 ```
 
-CI runs lint, types and unit tests on 3.12 and 3.13, builds the wheel, and drives the
-real edge connector at the commit in `tests/integration/edge.pin`.
+CI runs the checks on Python 3.12 and 3.13 and builds the wheel. Two jobs need read access
+to other menloresearch repositories and skip with a warning when the repository secret is
+absent: the real-edge integration job and the vendored-bindings check.
 
-## Roadmap
-
-- **Cloud transport** — LiveKit room shared with the edge, `CloudCommand` out,
-  `EdgeTelemetry` in; RSL signing for gated robots. Same `Robot`.
-- **Outcomes** — the edge reporting per-command verdicts on both lanes; `Sent.wait_outcome`
-  stops returning `Unknown`.
-- **Discovery** — `robot.info` filled by the robot (model, joints, capabilities) instead of
-  a table in `robots.py`.
-- **Camera** on the direct lane.
+```
+src/asimov_sdk/
+  robot.py          Robot: verbs, waits, keepalive, callbacks, goto
+  _state.py         State, Joint, Alert, Battery, RobotInfo, Mode
+  _command.py       Velocity, ModeCommand, Trajectory, Limits
+  _outcome.py       Sent, Applied, Refused, Unknown, Refusal
+  _media.py         Frame, AudioChunk, Camera, Microphone, Speaker
+  recording.py      JSON-lines recording and load()
+  _errors.py        the exception taxonomy
+  robots.py         per-robot tables: joint names, protocol version
+  transport/        Transport protocol and UdpTransport
+  _vendor/          generated asimov.io bindings at the pinned tag
+examples/           runnable scripts; examples/demos/ are the three walkthroughs
+```
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. The vendored bindings are generated from `menloresearch/asimov-protocol` and carry
+that repository's terms.

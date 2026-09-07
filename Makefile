@@ -1,5 +1,5 @@
 # asimov-sdk — developer entry points. `uv` is the only tool assumed.
-.PHONY: sync lint fmt typecheck test integration live check
+.PHONY: sync lint fmt typecheck test integration live check vendor-protocol check-vendor
 
 sync:            ## create/refresh .venv from uv.lock
 	uv sync --all-groups
