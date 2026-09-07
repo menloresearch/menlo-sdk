@@ -27,9 +27,11 @@ Menlo platform) plugs into the same `Transport` seam next; nothing above it chan
 uv add "asimov-sdk @ git+https://github.com/menloresearch/asimov-sdk.git"
 ```
 
-The only runtime dependency is [`asimov-protocol`](https://github.com/menloresearch/asimov-protocol)
-(the generated protobufs), pulled by git URL at the tag the edge pins. Both repos are
-private; `uv` uses your git credentials (`gh auth login` is enough).
+The only runtime dependency is `protobuf`. The generated `asimov.io` bindings from
+[`asimov-protocol`](https://github.com/menloresearch/asimov-protocol) ship inside the wheel,
+pinned to the tag the edge pins (`src/asimov_sdk/_vendor/VENDORED.md`); if the
+`asimov-protocol` package is installed as well, the SDK uses that copy so the edge and the
+SDK share one set of descriptors. `make vendor-protocol REF=<tag>` moves the pin.
 
 ## What you need on the robot
 

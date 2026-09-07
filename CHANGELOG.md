@@ -4,6 +4,12 @@ All notable changes to asimov-sdk. Pre-1.0: minor versions may break the API.
 
 ## Unreleased
 
+- The generated `asimov.io` bindings are vendored into the wheel (`asimov_sdk/_vendor`,
+  asimov-protocol v1.1.0 / d753b84) with `protobuf` as the only runtime dependency, so
+  `pip install asimov-sdk` and CI need no access to the protocol repository. An installed
+  `asimov-protocol` package is preferred when present (one descriptor set per process).
+  `scripts/vendor_protocol.sh <tag>` re-vendors.
+
 Adversarial codex pass against the peer SDKs (2026-09-07):
 
 - `Limits` validates its values: finite and non-negative, or `ValueError`. A negative limit

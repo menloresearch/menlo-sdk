@@ -399,8 +399,9 @@ def _spam_state_port(port: int, payload: bytes, stop) -> None:
     [
         pytest.param(b"", id="empty datagram decodes as a default RobotState"),
         pytest.param(
-            __import__("asimov_protocol.v1.asimov_state_pb2", fromlist=["RobotState"])
-            .RobotState(protocol_version=1, joint_pos=[0.0, 0.0, 0.0])
+            __import__("asimov_sdk._proto", fromlist=["load"])
+            .load()
+            .state.RobotState(protocol_version=1, joint_pos=[0.0, 0.0, 0.0])
             .SerializeToString(),
             id="right protocol, wrong robot (3 joints)",
         ),

@@ -7,19 +7,11 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "asimov-protocol"
-version = "1.0.0"
-source = { git = "https://github.com/menloresearch/asimov-protocol.git?subdirectory=gen%2Fpython&rev=v1.1.0#d753b843a2fea6684d62e55c229882a0445a1c91" }
-dependencies = [
-    { name = "protobuf" },
-]
-
-[[package]]
 name = "asimov-sdk"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "asimov-protocol" },
+    { name = "protobuf" },
 ]
 
 [package.optional-dependencies]
@@ -39,9 +31,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "asimov-protocol", git = "https://github.com/menloresearch/asimov-protocol.git?subdirectory=gen%2Fpython&rev=v1.1.0" },
     { name = "numpy", marker = "extra == 'vision'", specifier = ">=1.26" },
     { name = "pillow", marker = "extra == 'vision'", specifier = ">=10" },
+    { name = "protobuf", specifier = ">=5.29.3" },
 ]
 provides-extras = ["vision"]
 

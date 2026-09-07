@@ -76,7 +76,9 @@ def test_the_edge_admits_our_velocity_as_a_udp_source():
 
 
 def test_the_edge_forwards_robot_state_to_our_bound_port():
-    from asimov_protocol.v1 import asimov_state_pb2 as st_pb
+    from asimov_sdk._proto import load
+
+    st_pb = load().state
     from edge.connectors.udp_connector import UdpConnector
     from edge.messages import RobotStateMessage
     from edge.topic_registry import TopicRegistry

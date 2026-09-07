@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from asimov_sdk import robots
+from asimov_sdk import _proto, robots
 from asimov_sdk._command import Command, ModeCommand, Trajectory, Velocity
 from asimov_sdk._errors import ConnectFailed, LinkLost
 from asimov_sdk._outcome import Applied, Refused
@@ -52,15 +52,13 @@ def _pb() -> tuple[Any, Any, Any]:
     """The generated bindings, imported lazily so importing the SDK never needs protobuf
     until a transport is actually opened (and so the error names the fix)."""
     try:
-        from asimov_protocol.v1 import asimov_command_pb2 as cmd
-        from asimov_protocol.v1 import asimov_common_pb2 as common
-        from asimov_protocol.v1 import asimov_state_pb2 as st
+        b = _proto.load()
     except ImportError as exc:  # pragma: no cover - environment, not logic
         raise ConnectFailed(
-            "asimov-protocol is not installed. It is the SDK's only wire dependency: "
-            "`uv add asimov-sdk` pulls it in; from a checkout run `uv sync`."
+            "protobuf is not installed; it is the SDK's only runtime dependency "
+            "(`pip install protobuf>=5.29.3`)."
         ) from exc
-    return cmd, common, st
+    return b.command, b.common, b.state
 
 
 def state_from_robot_state(msg: Any, joint_names: tuple[str, ...] | None) -> State:

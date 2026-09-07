@@ -11,9 +11,9 @@ from asimov_sdk.transport.udp import state_from_robot_state
 
 
 def _robot_state(**kw):
-    from asimov_protocol.v1 import asimov_state_pb2 as st_pb
+    from asimov_sdk._proto import load
 
-    msg = st_pb.RobotState(**kw)
+    msg = load().state.RobotState(**kw)
     return msg
 
 

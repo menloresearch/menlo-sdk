@@ -16,10 +16,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
 ]
-# The SDK's ONE wire dependency: the generated asimov.io protobufs, released from the
-# asimov-protocol repo and pinned to the same tag the edge pins. Everything else is stdlib.
+# The SDK's ONE runtime dependency is protobuf. The generated asimov.io bindings ride
+# inside the wheel (src/asimov_sdk/_vendor, pinned to the tag the edge pins — see
+# _vendor/VENDORED.md); an installed `asimov-protocol` package is preferred when present.
+# The floor matches the gencode's ValidateProtobufRuntimeVersion (plugin v29.3).
 dependencies = [
-    "asimov-protocol @ git+https://github.com/menloresearch/asimov-protocol.git@v1.1.0#subdirectory=gen/python",
+    "protobuf>=5.29.3",
 ]
 
 [project.urls]
@@ -46,19 +48,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/asimov_sdk"]
 
-[tool.hatch.metadata]
-# Direct-URL dependencies are fine for a git-installed SDK and for uv; PyPI would
-# reject them. Publishing to PyPI needs asimov-protocol on PyPI first (tracked).
-allow-direct-references = true
-
-[tool.uv]
-# The protocol repo is private: `uv sync` needs git credentials for github.com (a
-# `gh auth login` on a dev box; ASIMOV_REPOS_TOKEN in CI — see .github/workflows/ci.yml).
-
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests", "examples"]
+extend-exclude = ["src/asimov_sdk/_vendor"]  # generated code, not ours to style
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF", "SIM", "PL"]
@@ -80,10 +74,12 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 files = ["src/asimov_sdk"]
+exclude = ["src/asimov_sdk/_vendor/"]
 
 [[tool.mypy.overrides]]
-module = ["asimov_protocol.*"]
+module = ["asimov_protocol.*", "asimov_sdk._vendor.*"]
 ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

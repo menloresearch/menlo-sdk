@@ -28,20 +28,6 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      # asimov-protocol is a PRIVATE repo pulled by git URL. The default GITHUB_TOKEN
-      # cannot read it, so the org-level ASIMOV_REPOS_TOKEN (the same one the firmware's
-      # CI uses to fetch its proto submodule) is handed to git for github.com only.
-      # It never reaches a build artefact: it lives in the runner's git config.
-      - name: Grant git read access to menloresearch repos
-        env:
-          TOKEN: ${{ secrets.ASIMOV_REPOS_TOKEN }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::error::ASIMOV_REPOS_TOKEN is not available to this workflow; uv sync will fail on asimov-protocol"
-            exit 1
-          fi
-          git config --global url."https://x-access-token:${TOKEN}@github.com/menloresearch/".insteadOf "https://github.com/menloresearch/"
-
       - name: Sync (locked)
         run: uv sync --python ${{ matrix.python }} --locked --all-groups
 
@@ -73,23 +59,35 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-      - name: Grant git read access to menloresearch repos
+      # asimov-edge is an internal repo: the workflow's own token cannot read it. Without
+      # ASIMOV_REPOS_TOKEN this job warns and skips instead of failing the PR — the unit
+      # suite already drives the wire against a fake edge; this job is the extra proof.
+      - name: Token check
+        id: tok
         env:
           TOKEN: ${{ secrets.ASIMOV_REPOS_TOKEN }}
         run: |
-          [ -n "$TOKEN" ] || { echo "::error::ASIMOV_REPOS_TOKEN missing"; exit 1; }
-          git config --global url."https://x-access-token:${TOKEN}@github.com/menloresearch/".insteadOf "https://github.com/menloresearch/"
+          if [ -n "$TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOKEN}@github.com/menloresearch/".insteadOf "https://github.com/menloresearch/"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::ASIMOV_REPOS_TOKEN is not granted to this repository; skipping the real-edge integration job"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Check out asimov-edge at the pinned commit
+        if: steps.tok.outputs.present == 'true'
         run: |
           EDGE_REF="$(sed -nE 's/^ASIMOV_EDGE_REF=(.*)$/\1/p' tests/integration/edge.pin)"
           git clone --depth 1 https://github.com/menloresearch/asimov-edge.git /tmp/asimov-edge
           git -C /tmp/asimov-edge fetch --depth 1 origin "$EDGE_REF"
           git -C /tmp/asimov-edge checkout "$EDGE_REF"
       - name: Sync + install the edge into the same environment
+        if: steps.tok.outputs.present == 'true'
         run: |
           uv sync --locked --all-groups
           uv pip install /tmp/asimov-edge
       - name: Integration tests
+        if: steps.tok.outputs.present == 'true'
         env:
           ASIMOV_EDGE_SRC: /tmp/asimov-edge/src
         run: uv run pytest -m integration

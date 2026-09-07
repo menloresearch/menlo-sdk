@@ -22,4 +22,7 @@ integration:     ## the real asimov-edge UdpConnector in-process; needs ASIMOV_E
 live:            ## a robot or `menlo-studio up --container --sdk`; needs ASIMOV_SDK_LIVE_HOST
 	uv run pytest -m live -s
 
+vendor-protocol: ## re-vendor the generated bindings: make vendor-protocol REF=v1.1.0
+	scripts/vendor_protocol.sh $(REF)
+
 check: lint typecheck test

@@ -31,15 +31,16 @@ class FakeEdge:
     """
 
     def __init__(self, *, state_hz: float = 100.0) -> None:
-        from asimov_protocol.v1 import asimov_command_pb2 as cmd_pb
-        from asimov_protocol.v1 import asimov_common_pb2 as common_pb
-        from asimov_protocol.v1 import asimov_state_pb2 as st_pb
+        from asimov_sdk._proto import load
 
-        self._cmd_pb, self._common_pb, self._st_pb = cmd_pb, common_pb, st_pb
+        pb = load()  # same bindings the SDK uses, whichever source it resolved to
+        self._cmd_pb, self._common_pb, self._st_pb = pb.command, pb.common, pb.state
         self.command_port = _free_port()
         self.state_port = _free_port()
         self.received: list = []  # decoded RobotCommand protos, in arrival order
-        self.state = st_pb.RobotState(current_mode=common_pb.CONTROL_MODE_DAMP, protocol_version=1)
+        self.state = self._st_pb.RobotState(
+            current_mode=self._common_pb.CONTROL_MODE_DAMP, protocol_version=1
+        )
         self.state.joint_pos.extend([0.0] * 25)
         self.state.projected_gravity.extend([0.0, 0.0, -1.0])
         self.pushing = True
