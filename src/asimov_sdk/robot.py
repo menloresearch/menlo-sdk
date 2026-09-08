@@ -260,10 +260,7 @@ class Robot:
                 self._keepalive.join(timeout=2.0)
             self._keepalive = None
         if had_velocity:
-            try:
-                self._tx.send(Velocity())
-            except Exception:
-                log.debug("close: the zero-velocity frame did not go out", exc_info=True)
+            self._send_safety_zero("close")
         self._tx.close()
 
     def __enter__(self) -> Self:
@@ -673,15 +670,35 @@ class Robot:
         if had_velocity:
             # The STATE stream died; the COMMAND path may well still reach the edge. Do not
             # leave a nonzero velocity as the last word — send the zero, best effort.
-            try:
-                self._tx.send(Velocity())
-            except Exception:
-                log.debug("link lost: the zero-velocity frame did not go out", exc_info=True)
+            self._send_safety_zero("link lost")
         if self.on_link_lost is not None:
             try:
                 self.on_link_lost(exc)
             except Exception:
                 log.exception("on_link_lost raised")
+
+    def _send_safety_zero(self, why: str) -> None:
+        """Best-effort zero velocity on close() and link loss. Bypasses the closed/lost
+        checks in ``_send`` on purpose, but still reaches the recording hook: a log whose
+        last word is a nonzero setpoint would misreport what actually went out."""
+        zero = Velocity()
+        try:
+            seq = self._tx.send(zero)
+        except Exception:
+            log.debug("%s: the zero-velocity frame did not go out", why, exc_info=True)
+            return
+        hook = self._on_sent
+        if hook is not None:
+            self._call(
+                hook,
+                Sent(
+                    name="set_velocity",
+                    sequence=seq,
+                    command=zero,
+                    clamped=False,
+                    default_timeout=self._tx.default_outcome_timeout,
+                ),
+            )
 
     def _forget_state(self) -> None:
         self._state = None

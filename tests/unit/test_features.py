@@ -242,3 +242,29 @@ def test_goto_validates_its_arguments_before_any_setpoint_leaves(edge, robot, kw
         robot.goto([0.5] * 25, duration=0.3, wait=False, **kw)
     time.sleep(0.1)
     assert not any(c.HasField("all_trajectory") for c in edge.received)
+
+
+def test_recording_logs_the_safety_zero_sent_by_close(edge, robot, tmp_path):
+    path = tmp_path / "run.jsonl"
+    with robot.record(path) as rec:
+        robot.set_velocity(vx=0.3)
+        assert edge.wait_for(lambda r: any(c.HasField("policy") for c in r))
+        robot.close()
+    assert edge.velocities()[-1] == (0.0, 0.0, 0.0)
+    sent = [line for line in load(path) if line["kind"] == "sent"]
+    assert sent[-1]["name"] == "set_velocity" and sent[-1]["command"]["vx"] == 0.0
+    assert rec.commands_written == len(sent)
+
+
+def test_recording_logs_the_safety_zero_sent_on_link_loss(edge, robot, tmp_path):
+    robot.link_timeout = 0.3
+    path = tmp_path / "run.jsonl"
+    with robot.record(path):
+        robot.set_velocity(vx=0.3)
+        assert edge.wait_for(lambda r: any(c.HasField("policy") and c.policy.vx > 0 for c in r))
+        edge.pushing = False
+        time.sleep(0.8)
+        assert not robot.connected
+    assert edge.velocities()[-1] == (0.0, 0.0, 0.0)
+    sent = [line for line in load(path) if line["kind"] == "sent"]
+    assert sent[-1]["name"] == "set_velocity" and sent[-1]["command"]["vx"] == 0.0
