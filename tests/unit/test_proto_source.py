@@ -117,3 +117,34 @@ print('pinned bindings kept')
     )
     assert r.returncode == 0, r.stderr
     assert "pinned bindings kept" in r.stdout and "differs from the bindings" in r.stderr
+
+
+def test_a_tree_imported_before_the_sdk_is_reused_even_when_it_differs(tmp_path):
+    """Descriptors are process-global: if someone already imported a different asimov_protocol,
+    importing the vendored copy too would crash. The SDK reuses the imported tree and warns."""
+    import shutil
+
+    other = tmp_path / "site"
+    shutil.copytree(VENDOR / "asimov_protocol", other / "asimov_protocol")
+    common = other / "asimov_protocol" / "v1" / "asimov_common_pb2.py"
+    common.write_text(common.read_text() + "\n# a different release\n")
+    code = """
+import logging, os, sys
+logging.basicConfig(level=logging.WARNING)
+sys.path.insert(0, os.environ['OTHER_SITE'])
+import asimov_protocol.v1.asimov_command_pb2  # someone else got there first
+from asimov_sdk import _proto
+b = _proto.load()
+assert b.source == 'asimov-protocol', b.source
+print('reused the imported tree')
+"""
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={**os.environ, "OTHER_SITE": str(other)},
+    )
+    assert r.returncode == 0, r.stderr
+    assert "reused the imported tree" in r.stdout and "imported before the SDK" in r.stderr

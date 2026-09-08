@@ -162,3 +162,19 @@ def test_battery_is_a_capability_when_the_robot_reports_one(edge):
         assert r.has("battery")
         assert r.state.battery is not None and r.state.battery.soc_percent == pytest.approx(77.0)
         assert r.state.battery.protecting is False
+
+
+def test_first_media_attachment_happens_once_under_concurrency(media):
+    tx, robot = media
+    start = threading.Barrier(8)
+
+    def first_call() -> None:
+        start.wait()
+        robot.camera.latest()
+
+    threads = [threading.Thread(target=first_call) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(tx.frame_cbs) == 1, "two first callers attached twice; frames would be duplicated"

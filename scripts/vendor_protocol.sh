@@ -4,6 +4,7 @@
 #   scripts/vendor_protocol.sh v1.1.0          re-vendor at that tag, rewrite VENDORED.md
 #   scripts/vendor_protocol.sh --check         re-fetch the tag named in VENDORED.md and
 #                                              fail if the vendored tree differs from it
+#                                              (ASIMOV_PROTOCOL_SRC=<checkout> skips the fetch)
 #
 # The SDK prefers an installed `asimov-protocol` package (one descriptor set per process);
 # the vendored tree is what makes installing the wheel work without access to the
@@ -25,7 +26,12 @@ case "${1:?usage: vendor_protocol.sh <tag> | --check}" in
   --check)
     REF="$(pinned_ref)"; [ -n "$REF" ] || { echo "error: no Ref in $NOTE" >&2; exit 2; }
     TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-    fetch "$REF" "$TMP/proto"
+    if [ -n "${ASIMOV_PROTOCOL_SRC:-}" ]; then
+      # A checkout fetched by the caller (CI fetches it, then drops its credential).
+      ln -s "$ASIMOV_PROTOCOL_SRC" "$TMP/proto"
+    else
+      fetch "$REF" "$TMP/proto"
+    fi
     if diff -r -q --exclude=__pycache__ "$TMP/proto/gen/python/src/asimov_protocol" "$DEST" >/dev/null; then
       echo "OK: vendored bindings match asimov-protocol $REF ($(git -C "$TMP/proto" rev-parse --short HEAD))"
     else

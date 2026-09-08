@@ -232,3 +232,13 @@ def test_goto_captures_its_generation_with_the_first_setpoint(edge, robot):
     n_traj = sum(c.HasField("all_trajectory") for c in edge.received)
     assert n_traj == 1, f"{n_traj} trajectory setpoints went out after the takeover verb"
     assert "damp" in edge.modes()
+
+
+@pytest.mark.parametrize(
+    "kw", [{"tolerance": float("nan")}, {"timeout": float("inf")}, {"tolerance": -0.1}]
+)
+def test_goto_validates_its_arguments_before_any_setpoint_leaves(edge, robot, kw):
+    with pytest.raises(ValueError):
+        robot.goto([0.5] * 25, duration=0.3, wait=False, **kw)
+    time.sleep(0.1)
+    assert not any(c.HasField("all_trajectory") for c in edge.received)

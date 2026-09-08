@@ -125,7 +125,9 @@ class _Stream[T]:
 
     def _ensure(self) -> None:
         self._require()
-        if not self._attached:
+        with self._cv:  # two first callers must not both attach: every item would arrive twice
+            if self._attached:
+                return
             self._attach()
             self._attached = True
 

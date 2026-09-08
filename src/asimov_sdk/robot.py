@@ -421,12 +421,16 @@ class Robot:
         DAMPs a trajectory two seconds after the last setpoint, so a reached pose is kept
         alive the way a velocity is. ``stand()`` (or any other verb) ends the hold. With
         ``wait``, blocks until every joint is within ``tolerance`` radians of the target, or
-        raises :class:`WaitTimeoutError` after ``timeout`` (default ``duration + 2``).
-        Returns the ``Sent`` of the first setpoint.
+        raises :class:`WaitTimeoutError` after ``timeout`` (default ``duration + 2``); the
+        target is still held after that timeout until another verb. Every argument is
+        validated before the first setpoint leaves. Returns the ``Sent`` of the first setpoint.
         """
         target = tuple(float(p) for p in positions)
         _positive_finite("duration", duration)
         _positive_finite("hz", hz)
+        _nonnegative_finite("tolerance", tolerance)
+        if timeout is not None:
+            _nonnegative_finite("timeout", timeout)
         current = self.state
         if current.age_s > GOTO_MAX_POSE_AGE_S:
             raise StateStaleError(

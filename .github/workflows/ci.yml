@@ -49,8 +49,8 @@ jobs:
           python -m zipfile -l dist/*.whl | grep -E 'asimov_sdk/py.typed|_vendor/asimov_protocol/v1/asimov_state_pb2.pyi|_vendor/VENDORED.md'
 
   # The vendored bindings must be exactly what the pinned asimov-protocol tag generates.
-  # Needs read access to that repository; without the token this warns and skips. The only
-  # PR-controlled code that runs with the credential present is scripts/vendor_protocol.sh.
+  # Needs read access to that repository; without the token this warns and skips. The tag
+  # is fetched by the workflow and the credential dropped BEFORE any PR-controlled code runs.
   vendored-bindings:
     name: vendored bindings match the pinned tag
     runs-on: ubuntu-latest
@@ -69,9 +69,15 @@ jobs:
             echo "::warning::ASIMOV_REPOS_TOKEN is not granted to this repository; cannot verify the vendored bindings against the pinned tag"
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Verify
+      - name: Fetch the pinned tag, then drop the credential
         if: steps.tok.outputs.present == 'true'
-        run: scripts/vendor_protocol.sh --check
+        run: |
+          REF="$(sed -nE 's/^- Ref: `([^`]+)`.*/\1/p' src/asimov_sdk/_vendor/VENDORED.md)"
+          git clone -q --depth 1 --branch "$REF" https://github.com/menloresearch/asimov-protocol.git /tmp/asimov-protocol
+          git config --global --unset-all url."https://x-access-token:${{ secrets.ASIMOV_REPOS_TOKEN }}@github.com/menloresearch/".insteadOf
+      - name: Verify (no credential present while PR code runs)
+        if: steps.tok.outputs.present == 'true'
+        run: ASIMOV_PROTOCOL_SRC=/tmp/asimov-protocol scripts/vendor_protocol.sh --check
 
   # The real edge connector, in-process: proves the wire, not just the fake. Clones
   # asimov-edge at the commit the SDK is developed against; skipped only when the

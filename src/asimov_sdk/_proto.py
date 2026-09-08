@@ -14,6 +14,7 @@ import functools
 import importlib
 import importlib.util
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -69,10 +70,23 @@ def _same_as_vendored(package: str) -> bool:
     return False
 
 
+def _already_imported(package: str) -> bool:
+    return any(f"{package}.v1.{m}" in sys.modules for m in _MODULES)
+
+
 @functools.cache
 def load() -> Bindings:
     """Import the bindings lazily (protobuf loads when a transport opens, not at import)."""
-    if _same_as_vendored("asimov_protocol"):
+    if _already_imported("asimov_protocol"):
+        # Someone in this process imported the installed tree first. Its descriptors are
+        # registered; importing the vendored copy now would register them twice and crash.
+        if not _same_as_vendored("asimov_protocol"):
+            log.warning(
+                "asimov_protocol was imported before the SDK and differs from the bindings the "
+                "SDK was built against; using the imported tree to keep one descriptor set."
+            )
+        package, source = "asimov_protocol", "asimov-protocol"
+    elif _same_as_vendored("asimov_protocol"):
         package, source = "asimov_protocol", "asimov-protocol"
     else:
         package, source = "asimov_sdk._vendor.asimov_protocol", "vendored"
