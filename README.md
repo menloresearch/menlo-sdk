@@ -10,7 +10,8 @@ with Robot.connect("asimov.local") as robot:
     robot.wait_for(Mode.STAND, timeout=15)
     robot.set_velocity(vx=0.25, duration=4.0)  # m/s, held for 4 s, then zero
     robot.wait_for(Mode.MOVE)
-    robot.stand()  # zero velocity is MOVE at rest, not STAND
+    # The hold ends itself; the robot stays in MOVE at zero velocity, still balancing.
+    # That is how it stands still. STAND is a stiffen with no balance loop — see below.
     print(robot.state.joint("L_Knee").pos, robot.state.battery)  # battery is None without a BMS
 ```
 
@@ -56,10 +57,12 @@ robot.open()  # any Transport
 
 # verbs — each returns a Sent immediately; the wire's own vocabulary
 robot.set_velocity(vx, vy, vyaw, duration=None)  # held at 10 Hz until superseded/stop/duration
-robot.stop()  # zero velocity; robot stays in MOVE at rest
-robot.stand()  # one-shot
+robot.stop()  # zero velocity; stays in MOVE at rest, still balancing — how it stands still
+robot.stand()  # one-shot; STIFFEN to a pose, no balance loop — see the warning below
 robot.damp()  # one-shot; motors compliant NOW — the emergency verb
 robot.trajectory(positions, kp=None, kd=None)  # one setpoint, radians, firmware order
+# kp/kd <= 0 means LIMP: the firmware
+# substitutes its damping gains
 robot.goto(positions, duration=2.0, hz=50, wait=True)  # clocked, interpolated from the current pose
 
 # waits — the robot's own report, never a sleep
@@ -117,12 +120,29 @@ sent.require()  # raises CommandRefusedError on Refused
   use them with the robot supported, or with gains known to hold the legs. The edge DAMPs a
   trajectory two seconds after the last setpoint; `goto()` holds its target until another
   verb, `trajectory()` is one setpoint you clock yourself.
+- **`stand()` is a stiffen, not a balance.** It blends every joint to a fixed pose and
+  holds it with position gains, with no balance loop. It is the wake-up verb
+  (DAMP → STAND → MOVE) and is safe on a robot that is held, craned or on its stand.
+  Asking a free-standing biped to stiffen after walking tips it over. To stand still
+  after a walk, stay in MOVE at zero velocity, where the policy keeps balancing.
+- **While something is streaming setpoints, it owns the robot.** The firmware obeys
+  whichever command arrived last, so a mode verb sent from another thread during a
+  `goto()` or your own `trajectory()` loop is overwritten by the next setpoint. Measured:
+  a `damp()` fired into a 50 Hz trajectory loop left the robot in MOVE and upright, as if
+  never sent. Stop the stream, then send the verb. In an emergency kill the process —
+  the firmware DAMPs by itself 500 ms after the last setpoint, and that does not depend
+  on your loop still working.
 - `damp()` folds a standing biped. It is deliberate and never implied by anything else.
 - Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s), the clamp is
   visible on `Sent.clamped`, and `Limits` rejects negative or non-finite values.
 - The state port is plain UDP: samples that do not look like this robot are dropped, an
   older datagram never overwrites a newer sample, and `state_source=` pins the one address
   state may arrive from.
+- Datagrams on the UDP lane are **unsigned**; a robot whose edge enforces signed commands
+  drops them. Note that the edge maps a `trajectory` to the RSL capability
+  `control.skills`, which is a *different* grant from the `control.drive` that
+  `set_velocity` needs — a client cleared to drive is not automatically cleared to send
+  joint targets.
 - The robot's fault latch outlives the alert that raised it: after a fall the robot stays
   DAMPed and refuses STAND until its firmware restarts, while `state.faulted` clears after
   about 2.5 s. A `wait_for(Mode.STAND)` in that condition ends in `WaitTimeoutError`.

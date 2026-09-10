@@ -48,9 +48,10 @@ with Robot.connect(host) as robot:
     time.sleep(3.2)
     say(f"  turn over: upright={robot.state.upright}  gravity_z={gz(robot.state)}")
 
-    say("stand()  — back to the STAND posture")
-    robot.stand()
-    robot.wait_for(Mode.STAND, timeout=10.0)
-    say("  firmware reports STAND")
+    # No stand() here. STAND stiffens to a fixed pose with no balance loop, so asking a
+    # free-standing biped for it after walking tips it over and latches a fault-DAMP
+    # until the firmware restarts. The robot is already standing still the way a legged
+    # robot does: MOVE at zero velocity, with the policy balancing it.
+    say(f"  resting in MOVE at zero velocity  upright={robot.state.upright}  gz={gz(robot.state)}")
 
 say("left the with-block: close() sent nothing extra (no velocity was held); robot stays standing")
