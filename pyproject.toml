@@ -1,0 +1,90 @@
+[project]
+name = "asimov-sdk"
+dynamic = ["version"]
+description = "Drive an Asimov robot from Python: one Robot, pluggable transports."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Menlo Research" }]
+keywords = ["robotics", "asimov", "humanoid", "sdk"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+# The SDK's ONE runtime dependency is protobuf. The generated asimov.io bindings ride
+# inside the wheel (src/asimov_sdk/_vendor, pinned to the tag the edge pins — see
+# _vendor/VENDORED.md); an installed `asimov-protocol` package is preferred when present.
+# The floor matches the gencode's ValidateProtobufRuntimeVersion (plugin v29.3).
+dependencies = [
+    "protobuf>=5.29.3",
+]
+
+[project.urls]
+Repository = "https://github.com/menloresearch/asimov-sdk"
+Issues = "https://github.com/menloresearch/asimov-sdk/issues"
+Changelog = "https://github.com/menloresearch/asimov-sdk/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-timeout>=2.3",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-protobuf>=5.29",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/asimov_sdk/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/asimov_sdk"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "examples"]
+extend-exclude = ["src/asimov_sdk/_vendor"]  # generated code, not ours to style
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF", "SIM", "PL"]
+ignore = [
+    "PLR0913",  # verbs take a handful of keyword args by design
+    "PLR2004",  # magic numbers in tests and wire constants are named in comments
+    "PLR0912",  # the wait loop is one function on purpose
+    "PLR0915",
+    "PLR0911",
+    "PLC0415",  # lazy imports are deliberate: protobuf loads when a transport opens, not at import
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR", "B011", "RUF012"]
+"examples/**" = ["T201"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = ["src/asimov_sdk"]
+exclude = ["src/asimov_sdk/_vendor/"]
+
+[[tool.mypy.overrides]]
+module = ["asimov_protocol.*", "asimov_sdk._vendor.*", "numpy"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider --timeout=60"
+markers = [
+    "integration: needs an asimov-edge checkout (ASIMOV_EDGE_SRC); drives the real UdpConnector in-process",
+    "live: needs a running robot or studio rig (ASIMOV_SDK_LIVE_HOST)",
+]
