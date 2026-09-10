@@ -163,7 +163,9 @@ def stage_connect(robot: Robot, args: argparse.Namespace) -> None:
     print(f"   {info}")
     s = robot.state
     print(f"   {describe(s)}")
-    check_sample(s, tilt_limit=90.0, label="connect")  # only fault/staleness here
+    # A looser tilt cap than --tilt-deg: at this point we only care that the robot
+    # isn't lying on its side, plus the usual fault/staleness/upright checks.
+    check_sample(s, tilt_limit=90.0, label="connect")
     if s.battery is not None and s.battery.protecting:
         raise CheckFailed(f"connect: the BMS is protecting ({s.battery.protection!s})")
     if s.battery is not None and s.battery.soc_percent < args.min_soc:
