@@ -49,6 +49,7 @@ import ipaddress
 import math
 import socket
 import sys
+import threading
 import time
 
 from asimov_sdk import AsimovError, ConnectError, Mode, Robot, State, WaitTimeoutError
@@ -98,6 +99,22 @@ def describe(s: State) -> str:
     return " ".join(parts)
 
 
+def _resolve(host: str, timeout: float) -> list[tuple] | None:
+    """getaddrinfo() with a deadline; None on failure or timeout."""
+    out: list = []
+
+    def work() -> None:
+        try:
+            out.append(socket.getaddrinfo(host, None))
+        except OSError:
+            out.append(None)
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(timeout)
+    return out[0] if out else None
+
+
 def is_loopback(host: str) -> bool:
     """True only when every address `host` resolves to is loopback. A name that does not
     resolve counts as a robot: the safe default is to gate."""
@@ -106,11 +123,10 @@ def is_loopback(host: str) -> bool:
         return ipaddress.ip_address(literal).is_loopback  # no DNS for an address literal
     except ValueError:
         pass
-    try:
-        # One resolution, before anything moves; a slow resolver delays startup, never a
-        # command. A name that does not resolve counts as a robot.
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
+    # One resolution, before anything moves, bounded so a hung resolver cannot stall the
+    # checkout. A name that does not resolve in time counts as a robot.
+    infos = _resolve(host, timeout=3.0)
+    if not infos:
         return False
     addrs = {info[4][0] for info in infos}
     return bool(addrs) and all(ipaddress.ip_address(a.split("%")[0]).is_loopback for a in addrs)
@@ -313,6 +329,12 @@ def stage_walk(robot: Robot, args: argparse.Namespace, progress: Progress) -> No
         robot,
         expect=Mode.STAND,
     )
+    # gate() re-reads the robot only with --confirm; the velocity must never leave on a
+    # sample nobody looked at.
+    s = robot.state
+    check_sample(s, args.tilt_deg, "walk/pre")
+    if s.mode is not Mode.STAND:
+        raise CheckFailed(f"walk: expected STAND before walking, the robot is {s.mode.name}")
     progress.commanded = True
     progress.velocity = True
     # The SDK's bounded hold is measured from HERE (robot.py:334-336), so the watchdog
@@ -401,6 +423,10 @@ def stage_walk(robot: Robot, args: argparse.Namespace, progress: Progress) -> No
             raise CheckFailed(f"walk/re-stand: expected MOVE, the robot is {s.mode.name}")
         print("   back to STAND")
         robot.stand()
+        # STAND supersedes the velocity. If anything fails from here on, cleanup must
+        # not send stop(): that is a MOVE command, and would switch a stiffened robot
+        # back to the walking policy uncommanded.
+        progress.velocity = False
         s = robot.wait_for(Mode.STAND, timeout=args.stand_timeout, stale_after=STALE_S)
         print(f"   {describe(s)}")
         hold_still(robot, args.stand_s, args.tilt_deg, "walk/re-stand", expect=Mode.STAND)
@@ -413,6 +439,7 @@ def stage_walk(robot: Robot, args: argparse.Namespace, progress: Progress) -> No
 def stage_damp(robot: Robot, args: argparse.Namespace, progress: Progress) -> None:
     gate(args, "damp — motors go compliant NOW; the robot folds", robot)
     progress.commanded = True
+    progress.velocity = False  # damp() supersedes any velocity; cleanup must not stop()
     robot.damp()
     s = wait_damped(robot)
     print(f"   {describe(s)}")
@@ -517,8 +544,8 @@ def main() -> int:
     # for "still moving".
     if args.settle_timeout <= args.settle_s + QUIET_HOLD_S:
         ap.error(
-            f"--settle-timeout ({args.settle_timeout}) must exceed --settle-s "
-            f"({args.settle_s}) plus the {QUIET_HOLD_S}s quiet window, or settling can "
+            f"--settle-timeout ({args.settle_timeout:.1f}s) must exceed --settle-s "
+            f"({args.settle_s:.1f}s) plus the {QUIET_HOLD_S:.1f}s quiet window, or settling can "
             "never succeed"
         )
     # A recording path that cannot be opened should not cost a connection, and OSError
