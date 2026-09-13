@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ipaddress
 import math
+import socket
 import sys
 import time
 
@@ -94,6 +96,17 @@ def describe(s: State) -> str:
         if b.protecting:
             parts.append(f"BMS={b.protection!s}")
     return " ".join(parts)
+
+
+def is_loopback(host: str) -> bool:
+    """True only when every address `host` resolves to is loopback. A name that does not
+    resolve counts as a robot: the safe default is to gate."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    addrs = {info[4][0] for info in infos}
+    return bool(addrs) and all(ipaddress.ip_address(a.split("%")[0]).is_loopback for a in addrs)
 
 
 def check_sample(s: State, tilt_limit: float, label: str) -> float | None:
@@ -195,6 +208,10 @@ def wait_damped(robot: Robot, timeout: float = 5.0) -> State:
         s = robot.state
         if s.mode is Mode.DAMP:
             return s
+        if s.age_s > STALE_S:
+            # A frozen sample would otherwise be re-read as "still not DAMP" until the
+            # deadline; say what actually happened.
+            raise CheckFailed(f"damp: state is {s.age_s:.2f}s old — the robot stopped talking")
         if time.monotonic() >= deadline:
             raise CheckFailed(f"damp: still {s.mode.name} after {timeout:.0f}s")
         time.sleep(0.02)
@@ -300,7 +317,20 @@ def stage_walk(robot: Robot, args: argparse.Namespace, progress: Progress) -> No
     if sent.clamped:
         print(f"   note: the SDK clamped the request to {sent.command}")
     try:
-        robot.wait_for(Mode.MOVE, timeout=5.0, stale_after=STALE_S)
+        # Not wait_for(): that tests mode and staleness only, and a fall in the window
+        # between the velocity leaving and the robot reporting MOVE would go unseen for
+        # up to 5 s. Poll the full go/no-go on every sample instead.
+        t_move = time.monotonic() + 5.0
+        while True:
+            s = robot.state
+            check_sample(s, args.tilt_deg, "walk/start")
+            if s.mode is Mode.MOVE:
+                break
+            if time.monotonic() >= t_move:
+                raise CheckFailed(
+                    f"walk: the robot did not enter MOVE within 5s (still {s.mode.name})"
+                )
+            time.sleep(0.05)
         worst = 0.0
         # Reaching MOVE is not evidence the robot moved. This transport delivers no
         # command outcomes at all, the arbiter can refuse a velocity when another
@@ -439,7 +469,7 @@ def main() -> int:
     # The header asks the operator to remember --confirm on hardware; the parser should
     # not rely on memory. Anything that is not loopback is a robot in a room with people.
     if args.confirm is None:
-        args.confirm = args.host not in ("127.0.0.1", "localhost", "::1")
+        args.confirm = not is_loopback(args.host)
         if args.confirm:
             print(f"{args.host} is not loopback — gating every motion (--no-confirm to override)")
 
