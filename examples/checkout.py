@@ -101,7 +101,14 @@ def describe(s: State) -> str:
 def is_loopback(host: str) -> bool:
     """True only when every address `host` resolves to is loopback. A name that does not
     resolve counts as a robot: the safe default is to gate."""
+    literal = host.strip("[]").split("%")[0]
     try:
+        return ipaddress.ip_address(literal).is_loopback  # no DNS for an address literal
+    except ValueError:
+        pass
+    try:
+        # One resolution, before anything moves; a slow resolver delays startup, never a
+        # command. A name that does not resolve counts as a robot.
         infos = socket.getaddrinfo(host, None)
     except OSError:
         return False
@@ -380,8 +387,18 @@ def stage_walk(robot: Robot, args: argparse.Namespace, progress: Progress) -> No
         # The one motion that used to skip its gate. This file's own header says a
         # free-standing biped asked to stiffen after walking tips over, so of every
         # command here it is the one an operator most needs to authorise.
-        gate(args, "re-stand — stiffen after the walk; tips a free-standing biped", robot)
-        check_sample(robot.state, args.tilt_deg, "walk/re-stand")
+        gate(
+            args,
+            "re-stand — stiffen after the walk; tips a free-standing biped",
+            robot,
+            expect=Mode.MOVE,
+        )
+        s = robot.state
+        check_sample(s, args.tilt_deg, "walk/re-stand")
+        if s.mode is not Mode.MOVE:
+            # Without --confirm the gate does not re-read the robot; do it here so a
+            # robot that left MOVE meanwhile (someone DAMPed it) is not stiffened blind.
+            raise CheckFailed(f"walk/re-stand: expected MOVE, the robot is {s.mode.name}")
         print("   back to STAND")
         robot.stand()
         s = robot.wait_for(Mode.STAND, timeout=args.stand_timeout, stale_after=STALE_S)
