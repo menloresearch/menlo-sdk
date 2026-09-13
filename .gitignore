@@ -7,3 +7,6 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# Tokamak agent run metadata — local scratch, not part of the SDK
+.tokamak/
