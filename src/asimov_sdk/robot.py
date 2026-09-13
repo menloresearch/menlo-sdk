@@ -43,8 +43,9 @@ Behaviours worth knowing before the first script:
   ``trajectory()`` loop — a mode verb sent from another thread is overwritten by the next
   setpoint. Measured: a ``damp()`` fired into a 50 Hz trajectory loop left the robot in
   MOVE and upright, exactly as if it had never been sent. Stop the stream first, then
-  send the verb. For an emergency, kill the process: the firmware DAMPs by itself 500 ms
-  after the last setpoint, and that path does not depend on your loop still working.
+  send the verb. For an emergency, kill the process: the edge DAMPs by itself about two
+  seconds after the last setpoint, and that path does not depend on your loop still
+  working.
 * **``close()`` zeroes velocity first**, then drops the link, so leaving the ``with``
   block — including by exception — leaves the robot standing still, not walking.
 * **``damp()`` is the emergency verb.** A standing biped folds. It raises on a dead link

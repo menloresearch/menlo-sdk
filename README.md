@@ -130,8 +130,8 @@ sent.require()  # raises CommandRefusedError on Refused
   `goto()` or your own `trajectory()` loop is overwritten by the next setpoint. Measured:
   a `damp()` fired into a 50 Hz trajectory loop left the robot in MOVE and upright, as if
   never sent. Stop the stream, then send the verb. In an emergency kill the process —
-  the firmware DAMPs by itself 500 ms after the last setpoint, and that does not depend
-  on your loop still working.
+  the edge DAMPs by itself about two seconds after the last setpoint, and that does not
+  depend on your loop still working.
 - `damp()` folds a standing biped. It is deliberate and never implied by anything else.
 - Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s), the clamp is
   visible on `Sent.clamped`, and `Limits` rejects negative or non-finite values.
