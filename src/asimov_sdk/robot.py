@@ -10,10 +10,11 @@
             robot.wait_for(Mode.STAND, timeout=8.0)
         robot.set_velocity(vx=0.25, duration=4.0)   # held for 4 s, then zero
         robot.wait_for(Mode.MOVE)
-        # The hold ends by itself and the robot stays in MOVE at zero velocity, where
-        # the walking policy keeps balancing it. That IS how a free-standing biped
-        # stands still. Do not ask for STAND here: STAND stiffens to a fixed pose with
-        # no balance loop, and a robot nothing is holding tips over.
+        # Leaving the block zeroes the velocity, as the hold ending would. Either way the
+        # robot stays in MOVE at zero velocity, where the walking policy keeps balancing
+        # it — that IS how a free-standing biped stands still. Do not ask for STAND here:
+        # STAND stiffens to a fixed pose with no balance loop, and a robot nothing is
+        # holding tips over.
 
 The verbs are the wire's verbs — ``set_velocity``, ``stand``, ``damp``, ``stop``,
 ``trajectory`` — and every one returns immediately with a :class:`~asimov_sdk.Sent`.
@@ -404,8 +405,9 @@ class Robot:
         under position control and the walking policy is off, so a standing biped will not
         balance itself — see :meth:`goto`. The edge drives a trajectory for two seconds after
         the last setpoint and then DAMPs, so clock these yourself or use :meth:`goto`.
-        ``ValueError`` unless ``len(positions) == info.dof``, or when only one of ``kp``/``kd``
-        is given (the edge ignores a lone gain)."""
+        A ``kp``/``kd`` entry of zero or less means the firmware substitutes its own DAMP
+        gains for that joint (limp). ``ValueError`` unless ``len(positions) == info.dof``, or
+        when only one of ``kp``/``kd`` is given (the edge ignores a lone gain)."""
         pos = tuple(float(p) for p in positions)
         if self._info is not None and len(pos) != self._info.dof:
             raise ValueError(

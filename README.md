@@ -11,8 +11,9 @@ with Robot.connect("asimov.local") as robot:
         robot.wait_for(Mode.STAND, timeout=15)
     robot.set_velocity(vx=0.25, duration=4.0)  # m/s, held for 4 s, then zero
     robot.wait_for(Mode.MOVE)
-    # The hold ends itself; the robot stays in MOVE at zero velocity, still balancing.
-    # That is how it stands still. STAND is a stiffen with no balance loop — see below.
+    # Leaving the block zeroes the velocity (so does the hold ending). Either way the
+    # robot stays in MOVE at zero velocity, balancing — that is how it stands still.
+    # Do not ask for STAND here: it is a stiffen with no balance loop — see below.
     print(robot.state.joint("L_Knee").pos, robot.state.battery)  # battery is None without a BMS
 ```
 
@@ -142,10 +143,10 @@ sent.require()  # raises CommandRefusedError on Refused
   older datagram never overwrites a newer sample, and `state_source=` pins the one address
   state may arrive from.
 - Datagrams on the UDP lane are **unsigned**; a robot whose edge enforces signed commands
-  drops them. Note that the edge maps a `trajectory` to the RSL capability
-  `control.skills`, which is a *different* grant from the `control.drive` that
-  `set_velocity` needs (and `stand()`/`damp()` need `control.mode`) — a client cleared
-  to drive is not automatically cleared to send joint targets.
+  drops them. The edge's signed-command grants are its own namespace, separate from the
+  SDK's `has()`/`require()` capabilities: a `trajectory` needs `control.skills`, a
+  `set_velocity` needs `control.drive`, and `stand()`/`damp()` need `control.mode` — a
+  client cleared to drive is not automatically cleared to send joint targets.
 - The robot's fault latch outlives the alert that raised it: after a fall the robot stays
   DAMPed and refuses STAND until its firmware restarts, while `state.faulted` clears after
   about 2.5 s. A `wait_for(Mode.STAND)` in that condition ends in `WaitTimeoutError`.
