@@ -5,8 +5,9 @@
     from asimov_sdk import Robot, Mode
 
     with Robot.connect("asimov.local") as robot:
-        robot.stand()
-        robot.wait_for(Mode.STAND, timeout=8.0)
+        if robot.state.mode is Mode.DAMP:          # STAND is the wake-up verb only
+            robot.stand()
+            robot.wait_for(Mode.STAND, timeout=8.0)
         robot.set_velocity(vx=0.25, duration=4.0)   # held for 4 s, then zero
         robot.wait_for(Mode.MOVE)
         # The hold ends by itself and the robot stays in MOVE at zero velocity, where
@@ -33,16 +34,17 @@ Behaviours worth knowing before the first script:
   repeating them would let a script out-shout an operator's DAMP.
 * **Zero velocity is not STAND, and it is usually what you want.** After ``stop()`` (or a
   ``duration`` ending) the firmware stays in MOVE with zero velocity — the walking policy,
-  balancing in place. ``stand()`` returns it to the STAND posture, which is a different
-  thing: STAND stiffens every joint to a fixed pose and runs **no balance loop**. A
-  free-standing biped asked to stiffen after walking tips over. Use ``stand()`` to wake a
-  robot up (DAMP -> STAND -> MOVE), or on one that is held, craned or on its stand — not
-  to finish a walk.
-* **A streaming loop owns the robot.** The firmware obeys whichever command arrived
-  last, so while something is sending setpoints — a ``goto`` in flight, or your own
-  ``trajectory()`` loop — a mode verb sent from another thread is overwritten by the next
-  setpoint. Measured: a ``damp()`` fired into a 50 Hz trajectory loop left the robot in
-  MOVE and upright, exactly as if it had never been sent. Stop the stream first, then
+  balancing in place. STAND is a different thing: it stiffens every joint to a fixed
+  pose and runs **no balance loop**, so a free-standing biped asked to stiffen after
+  walking tips over. ``stand()`` is for waking a robot up (DAMP -> STAND -> MOVE), or for
+  one that is held, craned or on its stand — never for finishing a walk.
+* **Your own setpoint loop owns the robot; ``goto()`` does not.** The firmware obeys
+  whichever command arrived last. A ``goto()`` is fenced: any verb from any thread —
+  ``damp()``, ``stand()``, a velocity — bumps the generation and the goto thread stops
+  before its next setpoint leaves. A loop you clock yourself with ``trajectory()`` is
+  not fenced: a mode verb sent from another thread is overwritten by your next setpoint.
+  Measured: a ``damp()`` fired into a hand-rolled 50 Hz trajectory loop left the robot in
+  MOVE and upright, exactly as if it had never been sent. Stop your loop first, then
   send the verb. For an emergency, kill the process: the edge DAMPs by itself about two
   seconds after the last setpoint, and that path does not depend on your loop still
   working.

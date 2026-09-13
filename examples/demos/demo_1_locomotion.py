@@ -29,6 +29,10 @@ def say(msg: str) -> None:
 
 with Robot.connect(host) as robot:
     say(f"connected: {robot.info}")
+    if robot.state.mode is not Mode.DAMP:
+        # A previous run leaves the robot balancing in MOVE. STAND would stiffen it and
+        # tip it over; DAMP it while supported, or restart the firmware, then rerun.
+        sys.exit(f"robot is {robot.state.mode.name}, not DAMP — start this demo from DAMP")
 
     say("stand()")
     robot.stand()

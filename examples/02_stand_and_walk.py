@@ -16,6 +16,10 @@ from asimov_sdk import Mode, Robot
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
 with Robot.connect(host) as robot:
+    if robot.state.mode is not Mode.DAMP:
+        # A previous run left it balancing in MOVE. STAND would stiffen it and tip it over;
+        # DAMP it (supported) or restart the firmware, then run this again.
+        sys.exit(f"robot is {robot.state.mode.name}, not DAMP — start this from DAMP")
     print("standing …")
     robot.stand()
     s = robot.wait_for(Mode.STAND, timeout=15.0)
