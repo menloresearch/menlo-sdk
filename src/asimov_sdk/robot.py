@@ -48,7 +48,7 @@ import os
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from typing import Literal, Self
+from typing import TYPE_CHECKING, Literal, Self
 
 from asimov_sdk import robots
 from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity
@@ -69,7 +69,14 @@ from asimov_sdk._outcome import Applied, Refused, Sent
 from asimov_sdk._state import Alert, Capability, Mode, RobotInfo, State
 from asimov_sdk.recording import Recording
 from asimov_sdk.transport.base import Transport
+
+# Importing the LiveKit transports does NOT import livekit: every `livekit` import in the
+# SDK is lazy, inside `transport/_livekit_client.py`. `Robot.connect()` never touches it.
+from asimov_sdk.transport.livekit import MEDIA_TIMEOUT_S, HybridTransport, LiveKitTransport
 from asimov_sdk.transport.udp import UdpTransport
+
+if TYPE_CHECKING:
+    from asimov_sdk.transport._livekit_client import TokenProvider
 
 log = logging.getLogger(__name__)
 
@@ -134,8 +141,8 @@ class Robot:
         self._closed = True
         self._link_lost: LinkLostError | None = None
         self._info: RobotInfo | None = None
-        self._camera = Camera("camera", transport)
         self._microphone = Microphone("microphone", transport)
+        self._camera = Camera("camera", transport, self._microphone)  # capture_clip records both
         self._speaker = Speaker(transport)
         self.on_refused: Callable[[Refused], None] | None = None
         #: Every accepted state sample, on the transport's reader thread. Keep it short.
@@ -180,6 +187,92 @@ class Robot:
         robot.open(timeout=timeout, allow_version_skew=allow_version_skew)
         return robot
 
+    @classmethod
+    def connect_livekit(
+        cls,
+        url: str,
+        room: str,
+        *,
+        token: TokenProvider,
+        identity: str = "asimov-sdk",
+        timeout: float = 10.0,
+        media_timeout: float = MEDIA_TIMEOUT_S,
+        connect_timeout: float = 10.0,
+        allow_version_skew: bool = False,
+        limits: Limits | None = None,
+        link_timeout: float = DEFAULT_LINK_TIMEOUT_S,
+    ) -> Robot:
+        """Attach to a robot through a LiveKit room: commands, state, video and audio all
+        over the SFU, nothing on the LAN.
+
+        ``token`` is a LiveKit access token for ``room``, or a callable returning a fresh
+        one each time the room is joined. **The SDK never holds the LiveKit API secret** —
+        the robot's manager mints tokens, and there is no ``api_key``/``api_secret``
+        parameter anywhere in this SDK.
+
+        Needs the livekit extra (``pip install "asimov-sdk[livekit]"``); without it this
+        raises :class:`ConnectError` naming the install. Returns once the first state
+        packet has arrived on the ``state`` topic, the way ``connect()`` does on UDP.
+        ``media_timeout`` bounds the wait for the room's camera and microphone tracks,
+        which is what decides whether this robot reports those capabilities.
+        """
+        tx = LiveKitTransport(
+            url,
+            room,
+            token=token,
+            identity=identity,
+            media_timeout=media_timeout,
+            connect_timeout=connect_timeout,
+        )
+        robot = cls(tx, limits=limits, link_timeout=link_timeout)
+        robot.open(timeout=timeout, allow_version_skew=allow_version_skew)
+        return robot
+
+    @classmethod
+    def connect_hybrid(
+        cls,
+        host: str,
+        *,
+        livekit_url: str,
+        room: str,
+        token: TokenProvider,
+        identity: str = "asimov-sdk",
+        command_port: int = 8850,
+        state_bind: tuple[str, int] = ("0.0.0.0", 8851),
+        state_source: str | None = None,
+        timeout: float = 5.0,
+        media_timeout: float = MEDIA_TIMEOUT_S,
+        connect_timeout: float = 10.0,
+        allow_version_skew: bool = False,
+        limits: Limits | None = None,
+        link_timeout: float = DEFAULT_LINK_TIMEOUT_S,
+    ) -> Robot:
+        """Attach over the LAN UDP lane for control and a LiveKit room for video and audio.
+
+        The lane to pick on the robot's own network: commands keep the direct lane's
+        latency and need no server to be reachable, while the camera and microphone come
+        over the SFU that is already carrying them. The two fail independently — a room
+        that drops takes the frames with it and leaves the robot driveable.
+
+        Same edge setup as :meth:`connect` (``--udp-control``, ``--udp-state-host``), same
+        token rule as :meth:`connect_livekit` (no API secret, ever).
+        """
+        tx = HybridTransport(
+            host,
+            livekit_url=livekit_url,
+            room=room,
+            token=token,
+            identity=identity,
+            command_port=command_port,
+            state_bind=state_bind,
+            state_source=state_source,
+            media_timeout=media_timeout,
+            connect_timeout=connect_timeout,
+        )
+        robot = cls(tx, limits=limits, link_timeout=link_timeout)
+        robot.open(timeout=timeout, allow_version_skew=allow_version_skew)
+        return robot
+
     def open(self, *, timeout: float = 5.0, allow_version_skew: bool = False) -> None:
         if not self._closed:
             raise RuntimeError("this Robot is already open")
@@ -207,8 +300,7 @@ class Robot:
             self._tx.close()
             raise ConnectError(
                 f"no state from the robot at {self._tx.endpoint} within {timeout:.1f}s. "
-                "Is the edge running with --udp-control, and is its --udp-state-host "
-                "pointing at this machine?"
+                f"{self._tx.silence_hint}"
             )
         first = self._state
         assert first is not None

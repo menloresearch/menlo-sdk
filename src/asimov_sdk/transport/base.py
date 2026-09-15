@@ -40,6 +40,9 @@ class Transport(Protocol):
     #: How long ``Sent.wait_outcome`` waits by default on this wire. A LAN datagram and a
     #: different wire has a different round trip.
     default_outcome_timeout: float
+    #: What to check when a connect hears no state on THIS wire, appended to the
+    #: ``ConnectError``. The transport knows the setup that feeds it; ``Robot`` does not.
+    silence_hint: str
 
     def open(self) -> None:
         """Bind, connect, start reader threads. Raise ``ConnectError`` on failure. Must be

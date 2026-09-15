@@ -20,9 +20,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `WaitTimeoutError`, `StateStaleError`, `RobotFaultedError`, `CommandRefusedError`.
 - Media API `robot.camera`, `robot.microphone`, `robot.speaker` (`Frame`, `AudioChunk`)
   through the `Transport` seam; `UnsupportedError` on a transport that does not carry them.
+- Two more lanes, both first-class: `Robot.connect_hybrid(host, livekit_url=, room=, token=)`
+  (UDP control + LiveKit media) and `Robot.connect_livekit(url, room, token=)` (commands and
+  state as bare `RobotCommand`/`RobotState` on the `commands` and `state` data topics —
+  the same protobufs the UDP lane sends, no envelope, no type tag). `HybridTransport` and
+  `LiveKitTransport`; `robot.py` is unchanged but for the two constructors.
+- LiveKit is an EXTRA (`pip install "asimov-sdk[livekit]"`): the core still depends on
+  protobuf alone, every `livekit` import is lazy inside `transport/_livekit_client.py`, and
+  `Robot.connect()` never reaches it.
+- `Camera.photo(timeout=)` returns ONE fresh `Frame`; `Camera.capture_clip(seconds,
+  audio=True)` returns a `Clip` with `save_wav()` (stdlib `wave`), `frames_as_numpy()`,
+  `save_frames()` (Pillow) and `save_mp4()` (OpenCV) — the last three raise `ImportError`
+  naming the package rather than adding a dependency. LiveKit video is converted from I420
+  to `rgb8`, so `Frame.to_numpy()` works.
+- `Transport.silence_hint`: the transport, not `Robot`, says what to check when a connect
+  hears nothing on its wire.
 - Callbacks `on_state`, `on_alert`, `on_mode_change`, `on_refused`, `on_link_lost`,
   `on_controller_change`.
 - `robot.record(path)` JSON-lines recording and `asimov_sdk.recording.load()`.
+- Capability honesty on the room lanes: `camera`/`microphone` are claimed only once the
+  matching track is actually subscribed, and dropped when the room goes; a room with no
+  video raises `UnsupportedError` instead of yielding nothing.
 - Liveness: 10 Hz hold with a generation fence and bounded `duration`; `LinkLostError`
   after `link_timeout` seconds of silence, with a zero velocity sent; `close()` zeroes a
   held velocity; reopen with `close()` + `open()`.

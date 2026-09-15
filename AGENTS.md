@@ -33,5 +33,12 @@ edge's arbiter and safety layer, never a bypass. One `Robot`; transports impleme
 
 ## Dependencies
 
-Runtime: `protobuf` only. Dev: ruff, mypy (strict), pytest. Simulator for live tests:
-`menlo-studio up --container --sdk`.
+Runtime core: `protobuf` only — `pip install asimov-sdk` with no extra must drive a robot
+(the UDP lane). The media lane adds one extra, `[livekit]`, and every `livekit` import in
+the SDK is lazy and lives in `transport/_livekit_client.py`; nothing else may import it,
+and `Robot.connect()` must never reach it. Optional at call time, never at import time:
+numpy, Pillow and OpenCV are named in an error, never depended on.
+
+Dev: ruff, mypy (strict), pytest. Simulator for live tests:
+`menlo-studio up --container --sdk`. A LiveKit server for `make livekit`:
+`livekit-server --dev`.

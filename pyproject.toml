@@ -24,6 +24,12 @@ dependencies = [
     "protobuf>=5.29.3",
 ]
 
+# The media lane is an EXTRA on purpose: `pip install asimov-sdk` with no extra drives a
+# robot over UDP, and every `livekit` import in the SDK is lazy and lives in one module
+# (src/asimov_sdk/transport/_livekit_client.py).
+[project.optional-dependencies]
+livekit = ["livekit>=1.1,<2"]
+
 [project.urls]
 Repository = "https://github.com/menloresearch/asimov-sdk"
 Issues = "https://github.com/menloresearch/asimov-sdk/issues"
@@ -77,7 +83,7 @@ files = ["src/asimov_sdk"]
 exclude = ["src/asimov_sdk/_vendor/"]
 
 [[tool.mypy.overrides]]
-module = ["asimov_protocol.*", "asimov_sdk._vendor.*", "numpy"]
+module = ["asimov_protocol.*", "asimov_sdk._vendor.*", "numpy", "livekit.*", "cv2", "PIL.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
@@ -87,4 +93,5 @@ addopts = "-q -p no:cacheprovider --timeout=60"
 markers = [
     "integration: needs an asimov-edge checkout (ASIMOV_EDGE_SRC); drives the real UdpConnector in-process",
     "live: needs a running robot or studio rig (ASIMOV_SDK_LIVE_HOST)",
+    "livekit: needs the livekit extra and a LiveKit server (`livekit-server --dev`, or ASIMOV_SDK_LIVEKIT_URL)",
 ]
