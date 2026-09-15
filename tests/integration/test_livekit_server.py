@@ -1,17 +1,28 @@
 """The real ``livekit.rtc`` against a real server, when there is one.
 
-Run with ``make livekit`` after starting one::
+**TWO tokens are needed, not one.** A LiveKit participant's identity is a claim inside the
+JWT, so two participants in one room need two tokens; joining twice with the same one makes
+the server see a duplicate identity and disconnect the first. These tests put the SDK and a
+stand-in for the robot's edge in the same room, so:
+
+* ``ASIMOV_SDK_LIVEKIT_TOKEN``      — the SDK's, identity ``sdk``
+* ``ASIMOV_SDK_LIVEKIT_EDGE_TOKEN`` — the stand-in edge's, identity ``fake-edge``
+
+Run with ``make livekit`` after starting a server::
 
     livekit-server --dev            # api key devkey / secret secret, ws://127.0.0.1:7880
     uv sync --extra livekit
+    lk token create --api-key devkey --api-secret secret --join \\
+        --room asimov-sdk-it --identity sdk       --valid-for 24h
+    lk token create --api-key devkey --api-secret secret --join \\
+        --room asimov-sdk-it --identity fake-edge --valid-for 24h
     ASIMOV_SDK_LIVEKIT_URL=ws://127.0.0.1:7880 \\
-    ASIMOV_SDK_LIVEKIT_TOKEN=<a token for the room> uv run pytest -m livekit
+    ASIMOV_SDK_LIVEKIT_TOKEN=<the sdk one> \\
+    ASIMOV_SDK_LIVEKIT_EDGE_TOKEN=<the fake-edge one> uv run pytest -m livekit
 
-These tests skip LOUDLY and cleanly when the extra is not installed or no server or token
-is named. The SDK mints no token — it has no API secret — so the token comes from the
-environment exactly as it comes from the robot's manager in production. Generate one for a
-dev server with LiveKit's own CLI: ``lk token create --api-key devkey --api-secret secret
---join --room asimov-sdk-it --identity robot --valid-for 1h``.
+These tests skip LOUDLY and cleanly when the extra is not installed, or no server or token
+is named. The SDK mints no token — it has no API secret — so the tokens come from the
+environment exactly as they come from the robot's manager in production.
 """
 
 from __future__ import annotations
@@ -24,13 +35,15 @@ import pytest
 
 from asimov_sdk import ConnectError, Robot
 from asimov_sdk._command import Velocity
-from asimov_sdk.transport._livekit_client import _LiveKitClient
+from asimov_sdk.transport._livekit_client import _LiveKitClient, identity_from_token
 from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TOPIC, encode_command
 from asimov_sdk.transport.livekit import LiveKitTransport
 
 pytestmark = pytest.mark.livekit
 
-ROOM = "asimov-sdk-it"
+#: A LiveKit join grant is scoped to ONE room, so every test here uses the same one — the
+#: room the two tokens were minted for. Override with ASIMOV_SDK_LIVEKIT_ROOM.
+ROOM = os.environ.get("ASIMOV_SDK_LIVEKIT_ROOM", "asimov-sdk-it")
 
 
 @pytest.fixture
@@ -50,18 +63,34 @@ def token() -> str:
     return tok
 
 
-def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token):
+@pytest.fixture
+def edge_token() -> str:
+    """A SECOND token, for the stand-in edge. One token cannot carry two participants: the
+    identity is a claim inside it, and LiveKit disconnects the earlier duplicate."""
+    tok = os.environ.get("ASIMOV_SDK_LIVEKIT_EDGE_TOKEN")
+    if not tok:
+        pytest.skip(
+            "ASIMOV_SDK_LIVEKIT_EDGE_TOKEN not set — the stand-in edge needs its own "
+            "token (an identity is a claim inside the JWT, so one token is one participant)"
+        )
+    return tok
+
+
+def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token, edge_token):
     """Two clients in one room: the SDK's transport, and a stand-in for the robot's edge.
     What the edge receives on ``commands`` must be exactly what the SDK encoded, and a
     ``state`` packet from the edge must reach ``robot.state``."""
-    edge = _LiveKitClient(livekit_url, ROOM, token=token, identity="fake-edge")
+    edge = _LiveKitClient(livekit_url, ROOM, token=edge_token)
     received: list[bytes] = []
     edge.on_data(COMMAND_TOPIC, received.append)
     edge.connect()
     try:
-        tx = LiveKitTransport(livekit_url, ROOM, token=token, identity="sdk", media_timeout=1.0)
+        tx = LiveKitTransport(livekit_url, ROOM, token=token, media_timeout=1.0)
         tx.open()
         try:
+            assert tx.identity == identity_from_token(token), "the token says who we are"
+            assert tx.identity != edge.identity, "two participants, two identities"
+            assert tx.identity is not None and tx.identity in tx.endpoint
             seq = tx.send(Velocity(vx=0.1))
             deadline = time.monotonic() + 10.0
             while time.monotonic() < deadline and not received:
@@ -93,14 +122,12 @@ def test_connect_livekit_reports_a_room_that_has_no_robot_in_it(livekit_url, tok
     """A room the SDK can join but no edge answers in is a ConnectError naming the topic —
     never a Robot that looks connected."""
     with pytest.raises(ConnectError) as info:
-        Robot.connect_livekit(
-            livekit_url, f"{ROOM}-empty", token=token, timeout=2.0, media_timeout=0.5
-        )
+        Robot.connect_livekit(livekit_url, ROOM, token=token, timeout=2.0, media_timeout=0.5)
     assert "state" in str(info.value)
 
 
 def test_the_speaker_publishes_a_real_audio_track(livekit_url, token):
-    client = _LiveKitClient(livekit_url, f"{ROOM}-audio", token=token, identity="sdk-audio")
+    client = _LiveKitClient(livekit_url, ROOM, token=token)
     client.connect()
     try:
         from asimov_sdk import AudioChunk
@@ -113,20 +140,20 @@ def test_the_speaker_publishes_a_real_audio_track(livekit_url, token):
 
 
 def test_a_room_with_no_video_track_is_honest_about_it(livekit_url, token):
-    tx = LiveKitTransport(
-        livekit_url, f"{ROOM}-silent", token=token, identity="sdk-quiet", media_timeout=1.0
-    )
+    tx = LiveKitTransport(livekit_url, ROOM, token=token, media_timeout=1.0)
     tx.open()
     try:
-        assert "camera" not in tx.capabilities and "microphone" not in tx.capabilities
+        # Nothing in this suite ever publishes video, so a camera here would be invented.
+        assert "camera" not in tx.capabilities
         assert "speaker" in tx.capabilities, "the SDK can always publish into a joined room"
+        assert tx.identity is not None, "the token names who we joined as"
     finally:
         tx.close()
 
 
 def test_the_loop_thread_goes_away_with_close(livekit_url, token):
     """A client that leaked its event-loop thread would keep a process alive after close()."""
-    client = _LiveKitClient(livekit_url, f"{ROOM}-threads", token=token, identity="sdk-threads")
+    client = _LiveKitClient(livekit_url, ROOM, token=token)
     client.connect()
     assert "asimov-sdk-livekit" in {t.name for t in threading.enumerate()}
     client.close()

@@ -24,7 +24,10 @@ No envelope, no framing, no type tag: the topic identifies the type.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -60,6 +63,24 @@ def _rtc() -> Any:
     return rtc
 
 
+def identity_from_token(token: str) -> str | None:
+    """The identity a LiveKit access token claims, or ``None`` when it claims none.
+
+    The identity of a participant is a claim INSIDE the JWT (``sub``); a client cannot
+    choose it, and a client-side "identity" argument would be silently ignored by the
+    server. So the SDK does not take one — it reads back what the token says, and reports
+    that. Decoded, never verified: this is the SDK telling the truth about the token it
+    was handed, not a security check. The server is the authority.
+    """
+    try:
+        payload = token.split(".")[1]
+        raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        sub = json.loads(raw).get("sub")
+    except (IndexError, ValueError, binascii.Error, UnicodeDecodeError):
+        return None
+    return str(sub) if isinstance(sub, str) and sub else None
+
+
 class LiveKitClient(Protocol):
     """What the transports need from a room. :class:`_LiveKitClient` is the real one; the
     unit suite substitutes a fake, which is why no test needs a LiveKit server."""
@@ -73,6 +94,11 @@ class LiveKitClient(Protocol):
         """Which of ``camera`` / ``microphone`` are SUBSCRIBED on this room. Empty until a
         remote participant publishes one: a capability is claimed from what arrived, never
         from what a room might one day carry."""
+
+    @property
+    def identity(self) -> str | None:
+        """Who this client joined the room AS, read out of the token it presented.
+        ``None`` before a join, and when the token claims no identity."""
 
     def connect(self) -> None:
         """Join the room. ``ConnectError`` on failure."""
@@ -115,13 +141,15 @@ class _LiveKitClient:
         room: str,
         *,
         token: TokenProvider,
-        identity: str = "asimov-sdk",
         connect_timeout: float = 10.0,
     ) -> None:
+        """No ``identity`` argument, by design: the identity is a claim inside the token
+        and the server ignores anything a client says about it. Read it back with
+        :attr:`identity` once joined."""
         self._url = url
         self._room_name = room
         self._token = token
-        self._identity = identity
+        self._identity: str | None = None
         self._connect_timeout = connect_timeout
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -147,6 +175,11 @@ class _LiveKitClient:
     def tracks(self) -> frozenset[str]:
         with self._cv:
             return frozenset(self._tracks)
+
+    @property
+    def identity(self) -> str | None:
+        """Who this client joined AS, from the token's ``sub``. ``None`` before a join."""
+        return self._identity
 
     @property
     def endpoint(self) -> str:
@@ -183,6 +216,7 @@ class _LiveKitClient:
             raise ConnectError("this LiveKit client is already connected")
         rtc = _rtc()  # fail here, with the extras hint, not on the loop thread
         token = self._resolve_token()
+        self._identity = identity_from_token(token)
         self._start_loop()
         try:
             self._await(self._join(rtc, token), self._connect_timeout)
@@ -206,13 +240,17 @@ class _LiveKitClient:
         self._source = None
         self._source_format = None
         self._send_error = None
+        self._identity = None
         self._set_tracks(set())
 
     def wait_for_tracks(self, timeout: float) -> frozenset[str]:
-        # Both kinds present is the only state we can be SURE is final; short of that we
-        # wait the full budget rather than claim "no camera" on a track still arriving.
+        # Returns the moment the VIDEO track is up. A robot that publishes a camera is the
+        # common shape, and a mic-less robot is a real configuration — making every one of
+        # those pay the whole budget at connect would be a tax on the normal case. An audio
+        # track that lands after this still attaches and still works; it simply misses the
+        # RobotInfo snapshot, which is what `media_timeout` is the knob for.
         with self._cv:
-            self._cv.wait_for(lambda: {"camera", "microphone"} <= self._tracks, timeout)
+            self._cv.wait_for(lambda: "camera" in self._tracks, timeout)
             return frozenset(self._tracks)
 
     # ── out ──────────────────────────────────────────────────────────────────
@@ -302,6 +340,7 @@ class _LiveKitClient:
         await room.connect(self._url, token, options=rtc.RoomOptions(auto_subscribe=True))
         self._room = room
         self._connected = True
+        log.debug("joined %s as %s", self.endpoint, self._identity or "(no sub in the token)")
 
     async def _leave(self) -> None:
         for task in tuple(self._tasks):

@@ -15,9 +15,11 @@ The room convention
 -------------------
 * **room**: one per robot, named by the robot's id — every participant that may drive it
   is admitted to that room and nowhere else.
-* **identity**: the edge joins as ``robot``; a human operator as their user id; this agent
-  as something recognisable like ``agent-gemini``. The edge's arbiter decides who holds
-  the body by identity, so pick one and keep it.
+* **identity**: a claim INSIDE each participant's token (``sub``), not something a client
+  chooses — the edge's token says ``robot``, a human operator's says their user id, this
+  agent's says something recognisable like ``agent-gemini``. The edge's arbiter decides who
+  holds the body by identity, so the manager mints one token per participant. The SDK has
+  no ``identity`` argument; it reads the token's back and reports it.
 * **data topic "commands"**: one bare serialized ``asimov.io.RobotCommand`` per packet,
   reliable, exactly the protobuf the UDP lane sends. ``asimov_sdk`` writes these for you.
 * **data topic "state"**: one bare serialized ``asimov.io.RobotState`` per packet, pushed
@@ -59,7 +61,8 @@ TOKEN = os.environ.get("ASIMOV_SDK_TOKEN", "")
 
 def drive_from_the_same_room() -> None:
     """The SDK half: join the robot's room, look, and walk. This is all of it."""
-    with Robot.connect_livekit(URL, ROOM, token=TOKEN, identity="agent-gemini") as robot:
+    with Robot.connect_livekit(URL, ROOM, token=TOKEN) as robot:
+        # endpoint reads "<room>@<url> as <identity>" — the identity the TOKEN claimed.
         print(robot.info)  # transport=livekit, dof, capabilities from the tracks that arrived
 
         if robot.has("camera"):

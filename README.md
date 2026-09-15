@@ -51,6 +51,13 @@ No envelope, no framing, no type tag: the port, or the topic, says what the byte
 anywhere in it — a caller brings a join token minted by the robot's manager, or a callable
 that mints a fresh one per join (`token=lambda: fetch()`).
 
+**And no `identity` parameter.** A participant's identity is a claim inside the token
+(`sub`), and the LiveKit server ignores whatever a client says about it — an argument for
+it would be a lie. The SDK reads it back instead: `transport.identity`, and
+`robot.info.endpoint` reads `room@url as <identity>` once joined. One token is one
+participant: two participants in a room need two tokens, or the server disconnects the
+earlier duplicate.
+
 ## Install
 
 Python 3.12 or newer.
@@ -174,8 +181,11 @@ sent.require()  # raises CommandRefusedError on Refused
   visible on `Sent.clamped`, and `Limits` rejects negative or non-finite values.
 - A capability is claimed from a track that ARRIVED. A LiveKit room publishing no video
   makes `robot.has("camera")` False and `robot.camera` raise `UnsupportedError`, rather
-  than hand out a stream that never yields; `media_timeout=` is how long a connect waits
-  for the robot's tracks before deciding.
+  than hand out a stream that never yields. `media_timeout=` bounds the wait and returns as
+  soon as the video track is up, so a robot with a camera and no microphone does not pay
+  the whole budget. A track that lands after the connect still attaches and still works; it
+  simply misses `robot.info.capabilities`, which is a snapshot — raise `media_timeout` when
+  a late track must be reflected there.
 - The state port is plain UDP: samples that do not look like this robot are dropped, an
   older datagram never overwrites a newer sample, and `state_source=` pins the one address
   state may arrive from.
@@ -206,7 +216,8 @@ make sync          # uv sync
 make check         # ruff, mypy --strict, unit tests (fake edge on the real wire)
 make integration   # the real asimov-edge UdpConnector in-process; ASIMOV_EDGE_SRC=<edge>/src
 make live          # a robot or simulator; ASIMOV_SDK_LIVE_HOST=<host>
-make livekit       # real livekit.rtc vs `livekit-server --dev`; ASIMOV_SDK_LIVEKIT_URL + _TOKEN
+make livekit       # real livekit.rtc vs `livekit-server --dev`; needs ASIMOV_SDK_LIVEKIT_URL
+                   # plus TWO tokens for one room (_TOKEN and _EDGE_TOKEN)
 make check-vendor  # vendored bindings match the pinned asimov-protocol tag
 make vendor-protocol REF=v1.1.0
 ```

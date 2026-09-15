@@ -11,6 +11,7 @@ from collections.abc import Callable
 import pytest
 
 from asimov_sdk import Applied, LinkLostError, Refused, Robot
+from asimov_sdk.transport._livekit_client import identity_from_token
 from asimov_sdk.transport.livekit import HybridTransport, LiveKitTransport
 from asimov_sdk.transport.udp import UdpTransport
 
@@ -161,11 +162,14 @@ class FakeLiveKitClient:
         *,
         tracks: tuple[str, ...] = ("camera", "microphone"),
         carry_state: bool = True,
+        token: str = "fake-token",
     ) -> None:
         self._edge = edge
         self._room_tracks = frozenset(tracks)
         self._carry_state = carry_state
+        self._token = token
         self.tracks: frozenset[str] = frozenset()
+        self.identity: str | None = None  # read out of the token at connect, as the real one does
         self.connected = False
         self.played: list = []  # AudioChunks handed to the speaker track
         self.published: list[tuple[str, bytes]] = []  # (topic, payload)
@@ -189,6 +193,7 @@ class FakeLiveKitClient:
             self._stop.clear()
             self._reader = threading.Thread(target=self._read, daemon=True)
             self._reader.start()
+        self.identity = identity_from_token(self._token)
         self.connected = True
         self._set_tracks(self._room_tracks)
 
@@ -201,6 +206,7 @@ class FakeLiveKitClient:
             self._sock.close()
             self._sock = None
         self.connected = False
+        self.identity = None
         self._set_tracks(frozenset())
 
     def wait_for_tracks(self, timeout: float) -> frozenset[str]:

@@ -35,6 +35,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   to `rgb8`, so `Frame.to_numpy()` works.
 - `Transport.silence_hint`: the transport, not `Robot`, says what to check when a connect
   hears nothing on its wire.
+- No `identity` parameter on the LiveKit lanes: a participant's identity is a claim inside
+  the access token and the server ignores what a client says about it, so the SDK reads it
+  back (`transport.identity`, and `endpoint` reads `room@url as <identity>`) instead of
+  accepting an argument it could not honour.
 - Callbacks `on_state`, `on_alert`, `on_mode_change`, `on_refused`, `on_link_lost`,
   `on_controller_change`.
 - `robot.record(path)` JSON-lines recording and `asimov_sdk.recording.load()`.

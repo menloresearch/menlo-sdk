@@ -29,7 +29,11 @@ from asimov_sdk import (
 )
 from asimov_sdk._command import Velocity
 from asimov_sdk._media import Clip
-from asimov_sdk.transport._livekit_client import _LiveKitClient, _rtc
+from asimov_sdk.transport._livekit_client import (
+    _LiveKitClient,
+    _rtc,
+    identity_from_token,
+)
 from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TOPIC, encode_command
 from asimov_sdk.transport.livekit import HybridTransport, LiveKitTransport
 from tests.conftest import FakeLiveKitClient, make_livekit_robot
@@ -419,6 +423,84 @@ def test_a_token_may_be_a_callable_so_it_can_be_refreshed():
     with pytest.raises(ConnectError) as info:
         _LiveKitClient("ws://x", "r", token="")._resolve_token()
     assert "never holds the LiveKit API secret" in str(info.value)
+
+
+def test_the_identity_is_read_out_of_the_token_never_chosen_by_the_caller():
+    """A participant's identity is a claim inside the JWT and the server ignores whatever a
+    client says about it. An `identity=` argument would therefore be a lie, so there is
+    none — the SDK reads the token's `sub` back instead."""
+    import base64
+    import inspect
+    import json
+
+    def jwt(payload: dict) -> str:
+        def seg(obj: dict) -> str:
+            raw = base64.urlsafe_b64encode(json.dumps(obj).encode()).decode()
+            return raw.rstrip("=")
+
+        return f"{seg({'alg': 'HS256'})}.{seg(payload)}.signature-we-never-check"
+
+    assert identity_from_token(jwt({"sub": "sdk", "video": {"room": "r"}})) == "sdk"
+    assert identity_from_token(jwt({"iss": "devkey"})) is None, "no sub is None, not a guess"
+    assert identity_from_token("not-a-jwt") is None
+    assert identity_from_token("") is None
+    assert identity_from_token(jwt({"sub": ""})) is None
+
+    for ctor in (LiveKitTransport.__init__, HybridTransport.__init__, _LiveKitClient.__init__):
+        assert "identity" not in inspect.signature(ctor).parameters, (
+            f"{ctor.__qualname__} takes an identity the LiveKit server would ignore"
+        )
+    for ctor in (Robot.connect_livekit, Robot.connect_hybrid):
+        assert "identity" not in inspect.signature(ctor).parameters
+
+
+def test_the_transport_reports_the_identity_it_actually_joined_as(edge):
+    """`endpoint` names it too: two SDK sessions in one room differ only by identity, and an
+    error naming the room alone would not say which of them went quiet."""
+    import base64
+    import json
+
+    payload = base64.urlsafe_b64encode(json.dumps({"sub": "operator-7"}).encode()).decode()
+    token = f"aGVhZGVy.{payload.rstrip('=')}.sig"
+    client = FakeLiveKitClient(edge, token=token)
+    tx = LiveKitTransport("ws://sfu.local", "asimov-42", token=token, client=client)
+    assert tx.identity is None and tx.endpoint == "asimov-42@ws://sfu.local"
+    tx.open()
+    try:
+        assert tx.identity == "operator-7"
+        assert tx.endpoint == "asimov-42@ws://sfu.local as operator-7"
+    finally:
+        tx.close()
+    assert tx.identity is None, "a closed room has no identity to report"
+
+
+def test_the_media_wait_resolves_as_soon_as_video_is_up(edge):
+    """A robot with a camera and no microphone is a real configuration; it must not pay the
+    whole media budget at connect."""
+    client = FakeLiveKitClient(edge, tracks=("camera",))
+    tx = LiveKitTransport("ws://fake", "r", token="t", client=client, media_timeout=30.0)
+    started = time.monotonic()
+    tx.open()
+    try:
+        assert time.monotonic() - started < 5.0, "a mic-less robot waited out the whole budget"
+        assert "camera" in tx.capabilities and "microphone" not in tx.capabilities
+    finally:
+        tx.close()
+
+
+def test_a_track_that_lands_after_the_connect_still_works(edge):
+    """It misses the RobotInfo snapshot — that is what media_timeout is the knob for — but
+    it attaches and delivers, which is the forgiving direction."""
+    client, robot = make_livekit_robot(edge, tracks=("camera",))
+    robot.open(timeout=3.0)
+    try:
+        assert not robot.has("microphone"), "the snapshot is honest about what had arrived"
+        client._set_tracks(frozenset({"camera", "microphone"}))  # the robot brought its mic up
+        assert "microphone" in robot._tx.capabilities
+        threading.Timer(0.02, client.push_audio, args=(1,)).start()
+        assert next(robot.microphone.chunks(timeout=1.0)).sequence == 1
+    finally:
+        robot.close()
 
 
 def test_a_livekit_frame_becomes_an_rgb8_Frame():

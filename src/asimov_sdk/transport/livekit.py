@@ -23,6 +23,11 @@ absent. Install it with ``pip install "asimov-sdk[livekit]"``.
 **The SDK never holds a LiveKit API secret.** There is no ``api_key``/``api_secret``
 parameter anywhere: a caller presents a token the robot's manager minted, or a callable
 that fetches a fresh one each time the room is joined.
+
+There is no ``identity`` parameter either. A participant's identity is a claim inside the
+token (``sub``) and the server ignores whatever a client says about it, so an argument for
+it would be a lie the SDK told its caller. ``identity`` is READ BACK from the token and
+reported on the transport and in ``endpoint``.
 """
 
 from __future__ import annotations
@@ -71,6 +76,12 @@ class _MediaPlane:
     _media_timeout: float
     _on_frame: list[FrameCallback]
     _on_audio: list[AudioCallback]
+
+    @property
+    def identity(self) -> str | None:
+        """Who the SDK joined the room AS, read out of the token it presented. ``None``
+        before the room is joined, and when the token claims no identity."""
+        return self._lk.identity
 
     def _wire_media(self, client: LiveKitClient, media_timeout: float) -> None:
         self._lk = client
@@ -143,14 +154,14 @@ class LiveKitTransport(_MediaPlane):
         room: str,
         *,
         token: TokenProvider,
-        identity: str = "asimov-sdk",
         media_timeout: float = MEDIA_TIMEOUT_S,
         connect_timeout: float = 10.0,
         client: LiveKitClient | None = None,
     ) -> None:
         """``client`` is the seam the unit suite fakes; leave it ``None`` to talk to a real
-        room. There is deliberately no ``api_key``/``api_secret``: bring a token."""
-        self.endpoint = f"{room}@{url}"
+        room. There is deliberately no ``api_key``/``api_secret`` (bring a token) and no
+        ``identity`` (the token claims it; :attr:`identity` reads it back)."""
+        self._room, self._url = room, url
         self._lk_open = False
         self._seq = 0
         self._lock = threading.Lock()
@@ -158,10 +169,9 @@ class LiveKitTransport(_MediaPlane):
         self._on_outcome: list[OutcomeCallback] = []
         self._on_controller: list[ControllerCallback] = []
         if client is None:
-            client = _LiveKitClient(
-                url, room, token=token, identity=identity, connect_timeout=connect_timeout
-            )
+            client = _LiveKitClient(url, room, token=token, connect_timeout=connect_timeout)
         self._wire_media(client, media_timeout)
+        self.endpoint = self._describe()
         # Registered once, here rather than in open(): a reopened transport must not end up
         # with the state topic wired twice and every sample delivered twice.
         client.on_data(STATE_TOPIC, self._on_state_packet)
@@ -173,12 +183,21 @@ class LiveKitTransport(_MediaPlane):
         _pb()  # fail here, with the protobuf install hint, not on the loop thread
         self._lk.connect()
         self._lk_open = True
+        self.endpoint = self._describe()
         self._await_media()
+
+    def _describe(self) -> str:
+        """The address, plus who we are in the room once we know — two SDK sessions in one
+        room differ only by identity, and an error naming the room alone would not say
+        which of them went quiet."""
+        who = self.identity
+        return f"{self._room}@{self._url}" + (f" as {who}" if who else "")
 
     def close(self) -> None:
         self._lk_open = False
         with contextlib.suppress(Exception):  # close() never raises
             self._lk.close()
+        self.endpoint = self._describe()
         self._refresh_capabilities()
 
     # ── subscriptions ────────────────────────────────────────────────────────
@@ -240,22 +259,21 @@ class HybridTransport(_MediaPlane):
         command_port: int = COMMAND_PORT,
         state_bind: tuple[str, int] = ("0.0.0.0", STATE_PORT),
         state_source: str | None = None,
-        identity: str = "asimov-sdk",
         media_timeout: float = MEDIA_TIMEOUT_S,
         connect_timeout: float = 10.0,
         client: LiveKitClient | None = None,
     ) -> None:
-        """``client`` is the seam the unit suite fakes. No ``api_key``/``api_secret``."""
+        """``client`` is the seam the unit suite fakes. No ``api_key``/``api_secret``, and
+        no ``identity`` — the token claims it; :attr:`identity` reads it back."""
         self._udp = UdpTransport(
             host, command_port=command_port, state_bind=state_bind, state_source=state_source
         )
-        self.endpoint = f"{self._udp.endpoint} + {room}@{livekit_url}"
+        self._room, self._url = room, livekit_url
         self._base_capabilities = self._udp.capabilities
         if client is None:
-            client = _LiveKitClient(
-                livekit_url, room, token=token, identity=identity, connect_timeout=connect_timeout
-            )
+            client = _LiveKitClient(livekit_url, room, token=token, connect_timeout=connect_timeout)
         self._wire_media(client, media_timeout)
+        self.endpoint = self._describe()
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def open(self) -> None:
@@ -265,11 +283,17 @@ class HybridTransport(_MediaPlane):
         except Exception:
             self._udp.close()  # never leave a socket and a reader thread behind
             raise
+        self.endpoint = self._describe()
         self._await_media()
+
+    def _describe(self) -> str:
+        who = self.identity
+        return f"{self._udp.endpoint} + {self._room}@{self._url}" + (f" as {who}" if who else "")
 
     def close(self) -> None:
         with contextlib.suppress(Exception):  # close() never raises
             self._lk.close()
+        self.endpoint = self._describe()
         self._refresh_capabilities()
         self._udp.close()
 

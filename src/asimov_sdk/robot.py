@@ -194,7 +194,6 @@ class Robot:
         room: str,
         *,
         token: TokenProvider,
-        identity: str = "asimov-sdk",
         timeout: float = 10.0,
         media_timeout: float = MEDIA_TIMEOUT_S,
         connect_timeout: float = 10.0,
@@ -208,21 +207,24 @@ class Robot:
         ``token`` is a LiveKit access token for ``room``, or a callable returning a fresh
         one each time the room is joined. **The SDK never holds the LiveKit API secret** —
         the robot's manager mints tokens, and there is no ``api_key``/``api_secret``
-        parameter anywhere in this SDK.
+        parameter anywhere in this SDK. There is no ``identity`` parameter either: the
+        identity is a claim inside the token and the server ignores anything a client says
+        about it, so the SDK reads it back instead and reports it on ``info.endpoint``.
 
         Needs the livekit extra (``pip install "asimov-sdk[livekit]"``); without it this
         raises :class:`ConnectError` naming the install. Returns once the first state
         packet has arrived on the ``state`` topic, the way ``connect()`` does on UDP.
-        ``media_timeout`` bounds the wait for the room's camera and microphone tracks,
-        which is what decides whether this robot reports those capabilities.
+
+        ``media_timeout`` is how long the connect waits for the room's tracks before
+        deciding what this robot carries. It returns as soon as the VIDEO track is up, so a
+        robot with a camera and no microphone does not pay the whole budget; only a room
+        publishing no video waits it out. A track that lands after the connect still
+        attaches and still works — ``robot.microphone`` will deliver — but it will not
+        appear in ``robot.info.capabilities``, which is a snapshot taken at connect. Raise
+        ``media_timeout`` when a late track must be reflected there.
         """
         tx = LiveKitTransport(
-            url,
-            room,
-            token=token,
-            identity=identity,
-            media_timeout=media_timeout,
-            connect_timeout=connect_timeout,
+            url, room, token=token, media_timeout=media_timeout, connect_timeout=connect_timeout
         )
         robot = cls(tx, limits=limits, link_timeout=link_timeout)
         robot.open(timeout=timeout, allow_version_skew=allow_version_skew)
@@ -236,7 +238,6 @@ class Robot:
         livekit_url: str,
         room: str,
         token: TokenProvider,
-        identity: str = "asimov-sdk",
         command_port: int = 8850,
         state_bind: tuple[str, int] = ("0.0.0.0", 8851),
         state_source: str | None = None,
@@ -254,15 +255,15 @@ class Robot:
         over the SFU that is already carrying them. The two fail independently — a room
         that drops takes the frames with it and leaves the robot driveable.
 
-        Same edge setup as :meth:`connect` (``--udp-control``, ``--udp-state-host``), same
-        token rule as :meth:`connect_livekit` (no API secret, ever).
+        Same edge setup as :meth:`connect` (``--udp-control``, ``--udp-state-host``), and
+        the same token and ``media_timeout`` rules as :meth:`connect_livekit` — no API
+        secret and no client-chosen identity, ever.
         """
         tx = HybridTransport(
             host,
             livekit_url=livekit_url,
             room=room,
             token=token,
-            identity=identity,
             command_port=command_port,
             state_bind=state_bind,
             state_source=state_source,

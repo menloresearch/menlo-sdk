@@ -22,7 +22,10 @@ integration:     ## the real asimov-edge UdpConnector in-process; needs ASIMOV_E
 live:            ## a robot or `menlo-studio up --container --sdk`; needs ASIMOV_SDK_LIVE_HOST
 	uv run pytest -m live -s
 
-livekit:         ## real livekit.rtc vs `livekit-server --dev`; ASIMOV_SDK_LIVEKIT_URL + _TOKEN
+livekit:         ## real livekit.rtc vs `livekit-server --dev`. Needs ASIMOV_SDK_LIVEKIT_URL and
+                 ## TWO tokens for one room (an identity is a claim inside the JWT, so one
+                 ## token is one participant): ASIMOV_SDK_LIVEKIT_TOKEN (identity `sdk`) and
+                 ## ASIMOV_SDK_LIVEKIT_EDGE_TOKEN (identity `fake-edge`). See the test module.
 	uv run --extra livekit pytest -m livekit -s
 
 vendor-protocol: ## re-vendor the generated bindings: make vendor-protocol REF=v1.1.0
