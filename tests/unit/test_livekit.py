@@ -555,3 +555,19 @@ def test_publishing_without_a_room_is_link_lost_not_an_attribute_error():
     with pytest.raises(ValueError):
         client.publish_audio(AudioChunk(48_000, 1, 960, "opus", bytes(10)))
     client.close()  # idempotent, never raises, even having never connected
+
+
+def test_bgr8_to_rgb_swaps_channels_without_flipping_the_image() -> None:
+    """`data[::-1]` reverses the whole buffer: right channels, mirrored upside-down image.
+
+    A channel swap has to reorder bytes *within* each pixel, so pixel and row order survive.
+    """
+    from asimov_sdk._media import _rgb_bytes
+
+    # Four distinguishable BGR pixels in a 2x2 frame.
+    bgr = bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    frame = Frame(width=2, height=2, encoding="bgr8", data=bgr)
+    assert _rgb_bytes(frame) == bytes([3, 2, 1, 6, 5, 4, 9, 8, 7, 12, 11, 10])
+
+    # rgb8 is handed back untouched.
+    assert _rgb_bytes(Frame(width=2, height=2, encoding="rgb8", data=bgr)) == bgr

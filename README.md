@@ -103,7 +103,7 @@ robot = Robot.connect(
     link_timeout=2.0,
 )
 robot = Robot.connect_hybrid(host, livekit_url=..., room=..., token=..., media_timeout=3.0)
-robot = Robot.connect_livekit(url, room, token=..., identity="asimov-sdk", media_timeout=3.0)
+robot = Robot.connect_livekit(url, room, token=..., media_timeout=3.0)
 robot = Robot(transport, limits=None, link_timeout=2.0)
 robot.open()  # any Transport
 

@@ -432,7 +432,14 @@ def _rgb_bytes(frame: Frame) -> bytes:
         )
     else:
         data = frame.data[: row * frame.height]
-    return data[::-1] if frame.encoding == "bgr8" else data
+    if frame.encoding != "bgr8":
+        return data
+    # Swap R and B *within each pixel*. Reversing the whole buffer (`data[::-1]`) only
+    # looks right on a single pixel: it also reverses pixel and row order, so the image
+    # comes out mirrored and upside down.
+    buf = bytearray(data)
+    buf[0::3], buf[2::3] = buf[2::3], buf[0::3]
+    return bytes(buf)
 
 
 def _pillow() -> Any:
