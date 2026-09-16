@@ -178,3 +178,21 @@ def test_first_media_attachment_happens_once_under_concurrency(media):
     for t in threads:
         t.join()
     assert len(tx.frame_cbs) == 1, "two first callers attached twice; frames would be duplicated"
+
+
+def test_has_tracks_a_media_capability_disappearing_mid_session(media):
+    """`has()` must answer for NOW, not for what was true at connect.
+
+    `RobotInfo` is frozen at connect, but a room lane loses its camera when the track
+    unsubscribes. A script gating on `has("camera")` — the documented safe pattern —
+    should then skip cleanly instead of taking the UnsupportedError it was avoiding.
+    """
+    tx, robot = media
+    assert robot.has("camera")
+    assert "camera" in robot.info.capabilities  # the connect-time snapshot keeps it
+
+    tx.capabilities = frozenset(c for c in tx.capabilities if c != "camera")
+
+    assert not robot.has("camera"), "has() must follow the transport, not the snapshot"
+    with pytest.raises(UnsupportedError):
+        robot.require("camera")

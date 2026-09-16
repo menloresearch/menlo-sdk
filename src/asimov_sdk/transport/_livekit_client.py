@@ -374,8 +374,12 @@ class _LiveKitClient:
         packet = args[0] if args else None
         payload = getattr(packet, "data", None)
         topic = getattr(packet, "topic", None)
-        if payload is None:  # pragma: no cover - the pre-1.0 (data, participant, kind, topic)
-            payload, topic = args[0], args[3] if len(args) > 3 else None
+        if payload is None and len(args) > 1:
+            # Pre-1.0 positional shape (data, participant, kind, topic). `args[0]` IS the
+            # payload there — it has no `.data`, which is exactly how we got here.
+            payload, topic = args[0], (args[3] if len(args) > 3 else None)
+        if payload is None:
+            return  # nothing recognisable on this event; a malformed packet is not fatal
         for cb in tuple(self._data_cbs.get(topic or "", ())):
             try:
                 cb(bytes(payload))

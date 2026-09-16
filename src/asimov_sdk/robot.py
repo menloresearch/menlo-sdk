@@ -141,6 +141,7 @@ class Robot:
         self._closed = True
         self._link_lost: LinkLostError | None = None
         self._info: RobotInfo | None = None
+        self._derived_caps: frozenset[str] = frozenset()
         self._microphone = Microphone("microphone", transport)
         self._camera = Camera("camera", transport, self._microphone)  # capture_clip records both
         self._speaker = Speaker(transport)
@@ -301,7 +302,7 @@ class Robot:
             self._tx.close()
             raise ConnectError(
                 f"no state from the robot at {self._tx.endpoint} within {timeout:.1f}s. "
-                f"{self._tx.silence_hint}"
+                f"{getattr(self._tx, 'silence_hint', '')}"
             )
         first = self._state
         assert first is not None
@@ -319,6 +320,10 @@ class Robot:
         capabilities = set(self._tx.capabilities)
         if first.battery is not None:
             capabilities.add("battery")
+        # What the robot told us about itself, as opposed to what the wire carries. The
+        # transport can lose a track mid-session and `has()` follows it down; these don't
+        # come from the transport, so they can't be taken away by one.
+        self._derived_caps = frozenset(capabilities) - frozenset(self._tx.capabilities)
         self._info = RobotInfo(
             transport=self._tx.kind,
             endpoint=self._tx.endpoint,
@@ -374,8 +379,19 @@ class Robot:
         return not self._closed and self._link_lost is None
 
     def has(self, capability: Capability | str) -> bool:
-        """Does this robot, over this transport, provide ``capability``? See ``Capability``."""
-        return self.info.has(capability)
+        """Does this robot, over this transport, provide ``capability`` **right now**?
+
+        Reads the transport's **live** set rather than ``info.capabilities``, which is a
+        snapshot taken at connect (``RobotInfo`` is frozen). On a room lane a camera goes
+        away mid-session when its track unsubscribes, and a script gating on ``has()`` —
+        the documented safe pattern — should then skip cleanly instead of taking the
+        ``UnsupportedError`` it was trying to avoid.
+
+        Capabilities the robot reported about *itself* (``battery``) are not the wire's to
+        lose, so they stay until the session ends.
+        """
+        cap = str(capability)
+        return cap in self._tx.capabilities or cap in self._derived_caps
 
     def require(self, *capabilities: Capability | str) -> None:
         """Raise :class:`UnsupportedError` for the first capability this robot lacks. For the

@@ -6,8 +6,9 @@ them, :class:`~asimov_sdk._outcome.Outcome` verdicts) back. It owns encoding, so
 and threads. It knows nothing about latching, clamping, waits or the error model — those
 live in :class:`~asimov_sdk.robot.Robot`, once, for every transport.
 
-One transport ships, ``UdpTransport`` (the robot's LAN lane). Any other wire implements
-this protocol; ``Robot`` does not know which it is on.
+Three transports ship: ``UdpTransport`` (the robot's LAN lane), ``LiveKitTransport``
+(commands and media over a room) and ``HybridTransport`` (UDP commands, room media). Any
+other wire implements this protocol; ``Robot`` does not know which it is on.
 """
 
 from __future__ import annotations
