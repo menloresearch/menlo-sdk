@@ -14,7 +14,7 @@ LiveKit is an EXTRA (``pip install "asimov-sdk[livekit]"``). The import happens 
 The room convention, agreed with the edge team:
 
 * data topic ``commands``  -> one bare serialized ``asimov.io.RobotCommand`` per packet
-* data topic ``state``     <- one bare serialized ``asimov.io.RobotState`` per packet
+* data track ``state``     <- one bare serialized ``asimov.io.RobotState`` per frame
 * the robot publishes its camera as a video track and its microphone as an audio track;
   the SDK publishes one audio track back for the speaker.
 
@@ -77,7 +77,8 @@ def identity_from_token(token: str) -> str | None:
     try:
         payload = token.split(".")[1]
         raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
-        sub = json.loads(raw).get("sub")
+        claims = json.loads(raw)
+        sub = claims.get("sub") if isinstance(claims, dict) else None
     except (IndexError, ValueError, binascii.Error, UnicodeDecodeError):
         return None
     return str(sub) if isinstance(sub, str) and sub else None
