@@ -9,16 +9,22 @@ accepts ``play_audio``; one that does not raises :class:`UnsupportedError` from
 
 from __future__ import annotations
 
+import contextlib
+import math
 import threading
 import time
+import wave
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from asimov_sdk._errors import UnsupportedError, WaitTimeoutError
 
 if TYPE_CHECKING:
+    import os
+
     from asimov_sdk.transport.base import Transport
 
 
@@ -107,28 +113,53 @@ class AudioChunk:
 class _Stream[T]:
     """Latest-value store with a condition variable; the base of Camera and Microphone."""
 
-    def __init__(self, capability: str, transport: Transport) -> None:
+    def __init__(self, capability: str, transport: Transport | Callable[[], Transport]) -> None:
         self._capability = capability
-        self._tx = transport
+        # A Robot bound to a ConnectionConfig swaps transports between connects, so the
+        # stream asks for the current one each time instead of holding a reference.
+        self._get_tx: Callable[[], Transport] = (
+            transport if callable(transport) else (lambda: transport)
+        )
         self._latest: T | None = None
         self._count = 0
         self._cv = threading.Condition()
         self._subscribers: list[Callable[[T], None]] = []
         self._attached = False
 
+    @property
+    def _tx(self) -> Transport:
+        return self._get_tx()
+
+    def _rebind(self) -> None:
+        """The Robot switched transports: attach again on first use, forget the old items."""
+        with self._cv:
+            self._attached = False
+            self._latest = None
+
     def _require(self) -> None:
         if self._capability not in self._tx.capabilities:
             raise UnsupportedError(self._capability, self._tx.kind)
 
-    def _attach(self) -> None:
+    def _attach(self, tx: Transport) -> None:
         raise NotImplementedError
+
+    def _sink(self, tx: Transport) -> Callable[[T], None]:
+        """The callback handed to ``tx``: it delivers only while ``tx`` is still the Robot's
+        transport, so a lane this stream has left cannot feed the next session."""
+
+        def deliver(item: T) -> None:
+            if self._get_tx() is tx:
+                self._on_item(item)
+
+        return deliver
 
     def _ensure(self) -> None:
         self._require()
+        tx = self._tx
         with self._cv:  # two first callers must not both attach: every item would arrive twice
             if self._attached:
                 return
-            self._attach()
+            self._attach(tx)
             self._attached = True
 
     def _on_item(self, item: T) -> None:
@@ -162,6 +193,7 @@ class _Stream[T]:
         self._ensure()
         seen = self._count
         while True:
+            self._ensure()  # a generator held across a reconnect attaches to the new lane
             item = self._wait_past(seen, timeout)
             if item is None:
                 raise WaitTimeoutError(f"no {self._capability} data for {timeout:.1f}s", last=None)
@@ -170,14 +202,74 @@ class _Stream[T]:
 
 
 class Camera(_Stream[Frame]):
-    """``robot.camera``: the robot's camera as :class:`Frame` objects."""
+    """``robot.camera``: the robot's camera as :class:`Frame` objects.
 
-    def _attach(self) -> None:
-        self._tx.subscribe_frames(self._on_item)
+    Latest-wins: a slow consumer sees the newest frame, not a backlog. For audio, which
+    must not skip, see :class:`Microphone`.
+    """
+
+    def __init__(
+        self,
+        capability: str,
+        transport: Transport | Callable[[], Transport],
+        microphone: Microphone | None = None,
+    ) -> None:
+        super().__init__(capability, transport)
+        self._mic = microphone  # only capture_clip() needs it
+
+    def _attach(self, tx: Transport) -> None:
+        tx.subscribe_frames(self._sink(tx))
 
     def frames(self, *, timeout: float = 5.0) -> Iterator[Frame]:
         """Frames as they arrive; see :meth:`_Stream.stream`."""
         return self.stream(timeout=timeout)
+
+    def photo(self, *, timeout: float = 5.0) -> Frame:
+        """ONE fresh frame — the next one to arrive, never a cached sample from before the
+        call. Raises :class:`WaitTimeoutError` when the camera says nothing for ``timeout``
+        seconds, and :class:`UnsupportedError` when this transport carries no video."""
+        self._ensure()
+        frame = self._wait_past(self._count, timeout)
+        if frame is None:
+            raise WaitTimeoutError(f"no camera frame for {timeout:.1f}s", last=None)
+        return frame
+
+    def capture_clip(self, seconds: float, *, audio: bool = True) -> Clip:
+        """Record ``seconds`` of video (and, by default, microphone audio) into a
+        :class:`Clip` held in memory.
+
+        Blocks for ``seconds``. With ``audio=True`` on a transport that carries no
+        microphone this raises :class:`UnsupportedError` rather than return a silent clip;
+        pass ``audio=False`` when a video-only room is expected. Raises
+        :class:`WaitTimeoutError` when not one frame arrived in that time — an empty clip
+        is a dead camera, not a short recording.
+        """
+        if not (math.isfinite(seconds) and seconds > 0):
+            raise ValueError(f"seconds must be a positive finite number, got {seconds!r}")
+        self._ensure()
+        mic = self._mic if audio else None
+        if audio and (mic is None or "microphone" not in self._tx.capabilities):
+            raise UnsupportedError("microphone", self._tx.kind)
+        frames: list[Frame] = []
+        chunks: list[AudioChunk] = []
+        if mic is not None:
+            mic._ensure()
+            mic._subscribers.append(chunks.append)
+        self._subscribers.append(frames.append)
+        started_at = time.time()
+        try:
+            time.sleep(seconds)
+        finally:
+            with contextlib.suppress(ValueError):
+                self._subscribers.remove(frames.append)
+            if mic is not None:
+                with contextlib.suppress(ValueError):
+                    mic._subscribers.remove(chunks.append)
+        if not frames:
+            raise WaitTimeoutError(
+                f"the camera sent nothing during the {seconds:.1f}s clip", last=None
+            )
+        return Clip(frames=tuple(frames), audio=tuple(chunks), started_at=started_at)
 
 
 class Microphone(_Stream[AudioChunk]):
@@ -188,13 +280,19 @@ class Microphone(_Stream[AudioChunk]):
 
     QUEUE = 256  # chunks (2.5 s of 10 ms audio)
 
-    def __init__(self, capability: str, transport: Transport) -> None:
+    def __init__(self, capability: str, transport: Transport | Callable[[], Transport]) -> None:
         super().__init__(capability, transport)
         self._queue: deque[AudioChunk] = deque(maxlen=self.QUEUE)
         self.dropped = 0
 
-    def _attach(self) -> None:
-        self._tx.subscribe_audio(self._on_item)
+    def _attach(self, tx: Transport) -> None:
+        tx.subscribe_audio(self._sink(tx))
+
+    def _rebind(self) -> None:
+        super()._rebind()
+        with self._cv:  # the previous session's audio must not replay into the next one
+            self._queue.clear()
+            self.dropped = 0
 
     def _on_item(self, item: AudioChunk) -> None:
         with self._cv:
@@ -208,6 +306,7 @@ class Microphone(_Stream[AudioChunk]):
         without audio."""
         self._ensure()
         while True:
+            self._ensure()  # a generator held across a reconnect attaches to the new lane
             with self._cv:
                 if not self._cv.wait_for(lambda: bool(self._queue), timeout):
                     raise WaitTimeoutError(f"no microphone audio for {timeout:.1f}s", last=None)
@@ -218,8 +317,14 @@ class Microphone(_Stream[AudioChunk]):
 class Speaker:
     """``robot.speaker``: play audio on the robot."""
 
-    def __init__(self, transport: Transport) -> None:
-        self._tx = transport
+    def __init__(self, transport: Transport | Callable[[], Transport]) -> None:
+        self._get_tx: Callable[[], Transport] = (
+            transport if callable(transport) else (lambda: transport)
+        )
+
+    @property
+    def _tx(self) -> Transport:
+        return self._get_tx()
 
     def play(self, chunk: AudioChunk) -> None:
         """Send one chunk to the robot's speaker. Raises :class:`UnsupportedError` when this
@@ -244,3 +349,153 @@ class Speaker:
                 timestamp_ns=time.time_ns(),
             )
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Clip:
+    """What :meth:`Camera.capture_clip` recorded: the frames and the audio blocks, in
+    arrival order, plus the wall clock the recording started at.
+
+    Everything here is in memory and lossless — the frames are the pixels the transport
+    delivered. Exporting to JPEG or MP4 needs an imaging library the SDK does not depend
+    on (``Pillow``, ``opencv-python``); :meth:`save_wav` and :meth:`frames_as_numpy` are
+    the exports that need nothing beyond the standard library and numpy.
+    """
+
+    frames: tuple[Frame, ...]
+    audio: tuple[AudioChunk, ...]
+    started_at: float  # time.time() when the recording began
+
+    @property
+    def duration_s(self) -> float:
+        """Seconds of audio when there is any, else the span the frames cover."""
+        if self.audio:
+            return sum(c.duration_s for c in self.audio)
+        if len(self.frames) < 2:
+            return 0.0
+        return self.frames[-1].received_at - self.frames[0].received_at
+
+    @property
+    def fps(self) -> float:
+        """Measured frame rate over the clip; 0.0 when it is too short to measure."""
+        span = (
+            self.frames[-1].received_at - self.frames[0].received_at
+            if len(self.frames) > 1
+            else 0.0
+        )
+        return (len(self.frames) - 1) / span if span > 0 else 0.0
+
+    def save_wav(self, path: str | os.PathLike[str]) -> Path:
+        """Write the audio to a RIFF/WAVE file (stdlib ``wave``). Raises ``ValueError``
+        when the clip has no audio, or carries anything but ``pcm_s16le`` — a WAV file of
+        opus frames would be silence-shaped noise."""
+        if not self.audio:
+            raise ValueError("this clip has no audio; capture it with audio=True")
+        bad = {c.encoding for c in self.audio} - {"pcm_s16le"}
+        if bad:
+            raise ValueError(f"save_wav writes pcm_s16le; this clip carries {sorted(bad)}")
+        rates = {(c.sample_rate_hz, c.channels) for c in self.audio}
+        if len(rates) != 1:
+            raise ValueError(f"the clip's audio changes format mid-way: {sorted(rates)}")
+        rate, channels = rates.pop()
+        out = Path(path)
+        with wave.open(str(out), "wb") as wav:
+            wav.setnchannels(channels)
+            wav.setsampwidth(2)  # pcm_s16le
+            wav.setframerate(rate)
+            wav.writeframes(b"".join(c.data for c in self.audio))
+        return out
+
+    def frames_as_numpy(self) -> Any:
+        """The clip as one ``ndarray`` of shape (frames, height, width, channels). Every
+        frame must be a raw pixel array of the same shape; see :meth:`Frame.to_numpy`.
+        Needs ``numpy`` installed."""
+        if not self.frames:
+            raise ValueError("this clip has no frames")
+        np = _numpy()
+        return np.stack([f.to_numpy() for f in self.frames])
+
+    def save_frames(
+        self, directory: str | os.PathLike[str], *, prefix: str = "frame", quality: int = 90
+    ) -> list[Path]:
+        """Write every frame as a JPEG into ``directory``. Needs ``Pillow``; raises
+        ``ImportError`` naming it when it is absent. The SDK takes no imaging dependency."""
+        image = _pillow()
+        out = Path(directory)
+        out.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        for i, frame in enumerate(self.frames):
+            img = image.frombytes("RGB", (frame.width, frame.height), bytes(_rgb_bytes(frame)))
+            target = out / f"{prefix}_{i:05d}.jpg"
+            img.save(target, quality=quality)
+            written.append(target)
+        return written
+
+    def save_mp4(self, path: str | os.PathLike[str], *, fps: float | None = None) -> Path:
+        """Write the video to an MP4. Needs ``opencv-python`` and ``numpy``; raises
+        ``ImportError`` naming them when either is absent. Audio is not muxed in — pair it
+        with :meth:`save_wav`."""
+        cv2 = _cv2()
+        np = _numpy()
+        if not self.frames:
+            raise ValueError("this clip has no frames")
+        rate = fps if fps is not None else (self.fps or 30.0)
+        first = self.frames[0]
+        out = Path(path)
+        writer = cv2.VideoWriter(
+            str(out), cv2.VideoWriter_fourcc(*"mp4v"), rate, (first.width, first.height)
+        )
+        try:
+            for frame in self.frames:
+                rgb = np.frombuffer(_rgb_bytes(frame), dtype=np.uint8).reshape(
+                    frame.height, frame.width, 3
+                )
+                writer.write(rgb[:, :, ::-1])  # OpenCV writes BGR
+        finally:
+            writer.release()
+        return out
+
+
+def _rgb_bytes(frame: Frame) -> bytes:
+    """A frame's pixels as tightly packed RGB. Raises ``ValueError`` for an encoding that
+    is not a raw RGB array — an encoded frame has to be decoded first."""
+    if frame.encoding not in ("rgb8", "bgr8"):
+        raise ValueError(
+            f"{frame.encoding} frames are not raw RGB; decode them with your imaging library"
+        )
+    row = frame.width * 3
+    if frame.stride_bytes and frame.stride_bytes != row:
+        data = b"".join(
+            frame.data[y * frame.stride_bytes : y * frame.stride_bytes + row]
+            for y in range(frame.height)
+        )
+    else:
+        data = frame.data[: row * frame.height]
+    if frame.encoding != "bgr8":
+        return data
+    # Swap R and B *within each pixel*. Reversing the whole buffer (`data[::-1]`) only
+    # looks right on a single pixel: it also reverses pixel and row order, so the image
+    # comes out mirrored and upside down.
+    buf = bytearray(data)
+    buf[0::3], buf[2::3] = buf[2::3], buf[0::3]
+    return bytes(buf)
+
+
+def _pillow() -> Any:
+    try:
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - environment
+        raise ImportError(
+            "JPEG export needs Pillow, which the SDK does not depend on: pip install Pillow"
+        ) from exc
+    return Image
+
+
+def _cv2() -> Any:
+    try:
+        import cv2
+    except ImportError as exc:  # pragma: no cover - environment
+        raise ImportError(
+            "MP4 export needs OpenCV, which the SDK does not depend on: pip install opencv-python"
+        ) from exc
+    return cv2

@@ -11,7 +11,7 @@ standing, not after a guessed delay.
 import sys
 import time
 
-from asimov_sdk import Mode, Robot
+from asimov_sdk import ConnectionConfig, Mode, Robot, UdpConfig
 
 
 def gz(state) -> str:
@@ -27,7 +27,7 @@ def say(msg: str) -> None:
     print(f"[{time.monotonic() - t0:5.1f}s] {msg}", flush=True)
 
 
-with Robot.connect(host) as robot:
+with Robot(ConnectionConfig(udp=UdpConfig(host))).connect("udp") as robot:
     say(f"connected: {robot.info}")
     if robot.state.mode is not Mode.DAMP:
         # A previous run leaves the robot balancing in MOVE. STAND would stiffen it and

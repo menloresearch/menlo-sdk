@@ -52,7 +52,16 @@ import sys
 import threading
 import time
 
-from asimov_sdk import AsimovError, ConnectError, Mode, Robot, State, WaitTimeoutError
+from asimov_sdk import (
+    AsimovError,
+    ConnectError,
+    ConnectionConfig,
+    Mode,
+    Robot,
+    State,
+    UdpConfig,
+    WaitTimeoutError,
+)
 
 STALE_S = 0.5  # a sample older than this means we are flying blind: stop
 #: How long the gyro must stay under --quiet-rad-s before the body counts as settled.
@@ -562,7 +571,7 @@ def main() -> int:
 
     print(f"connecting to {args.host} …")
     try:
-        robot = Robot.connect(args.host)
+        robot = Robot(ConnectionConfig(udp=UdpConfig(args.host))).connect("udp")
     except ConnectError as exc:
         print(f"FAIL connect: {exc}")
         return 2

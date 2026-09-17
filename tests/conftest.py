@@ -10,7 +10,9 @@ from collections.abc import Callable
 
 import pytest
 
-from asimov_sdk import Applied, Refused, Robot
+from asimov_sdk import Applied, LinkLostError, Refused, Robot
+from asimov_sdk.transport._livekit_client import identity_from_token
+from asimov_sdk.transport.livekit import HybridTransport, LiveKitTransport
 from asimov_sdk.transport.udp import UdpTransport
 
 
@@ -117,6 +119,33 @@ class FakeEdge:
         self._sock.close()
 
 
+def connect_udp(
+    host: str,
+    *,
+    command_port: int = 8850,
+    state_bind: tuple[str, int] = ("0.0.0.0", 8851),
+    state_source: str | None = None,
+    limits=None,
+    link_timeout: float | None = None,
+    **connect_kw,
+) -> Robot:
+    """``Robot(ConnectionConfig(udp=...)).connect("udp", ...)`` in one call, for tests that
+    only care about the UDP lane."""
+    from asimov_sdk.connection import ConnectionConfig, UdpConfig
+
+    cfg = ConnectionConfig(
+        udp=UdpConfig(
+            host, command_port=command_port, state_bind=state_bind, state_source=state_source
+        )
+    )
+    robot_kw = {}
+    if limits is not None:
+        robot_kw["limits"] = limits
+    if link_timeout is not None:
+        robot_kw["link_timeout"] = link_timeout
+    return Robot(cfg, **robot_kw).connect("udp", **connect_kw)
+
+
 @pytest.fixture
 def edge():
     e = FakeEdge()
@@ -140,6 +169,193 @@ def robot(edge):
     r = Robot(tx)
     r.open(timeout=3.0)
     yield r
+    r.close()
+
+
+class FakeLiveKitClient:
+    """The ``LiveKitClient`` seam with the room replaced by loopback UDP to the FakeEdge.
+
+    This is why no unit test needs livekit installed, or a server running: the SDK's only
+    ``livekit`` imports live behind this seam, so faking the seam exercises everything
+    above it — the topics, the wire bytes, the capability honesty, the media plumbing.
+
+    ``carry_state=False`` is the hybrid lane's shape: media only, because control and state
+    are on the UDP transport beside it.
+    """
+
+    def __init__(
+        self,
+        edge: FakeEdge,
+        *,
+        tracks: tuple[str, ...] = ("camera", "microphone"),
+        carry_state: bool = True,
+        token: str = "fake-token",
+    ) -> None:
+        self._edge = edge
+        self._room_tracks = frozenset(tracks)
+        self._carry_state = carry_state
+        self._token = token
+        self.tracks: frozenset[str] = frozenset()
+        self.identity: str | None = None  # read out of the token at connect, as the real one does
+        self.connected = False
+        self.played: list = []  # AudioChunks handed to the speaker track
+        self.published: list[tuple[str, bytes]] = []  # (topic, payload)
+        self._data_track_cbs: dict[str, list] = {}
+        self._video_cbs: list = []
+        self._audio_cbs: list = []
+        self._track_cbs: list = []
+        self._sock: socket.socket | None = None
+        self._reader: threading.Thread | None = None
+        self._stop = threading.Event()
+
+    # ── the seam ─────────────────────────────────────────────────────────────
+    def connect(self) -> None:
+        if self.connected:
+            raise RuntimeError("already connected")
+        if self._carry_state:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(("127.0.0.1", self._edge.state_port))
+            sock.settimeout(0.1)
+            self._sock = sock
+            self._stop.clear()
+            self._reader = threading.Thread(target=self._read, daemon=True)
+            self._reader.start()
+        self.identity = identity_from_token(self._token)
+        self.connected = True
+        self._set_tracks(self._room_tracks)
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._reader is not None:
+            self._reader.join(timeout=1.0)
+            self._reader = None
+        if self._sock is not None:
+            self._sock.close()
+            self._sock = None
+        self.connected = False
+        self.identity = None
+        self._set_tracks(frozenset())
+
+    def wait_for_tracks(self, timeout: float) -> frozenset[str]:
+        return self.tracks
+
+    def publish_data(self, payload: bytes, *, topic: str) -> None:
+        if not self.connected:
+            raise LinkLostError("the fake room is not joined")
+        self.published.append((topic, payload))
+        out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        out.sendto(payload, ("127.0.0.1", self._edge.command_port))
+        out.close()
+
+    def publish_audio(self, chunk) -> None:
+        if not self.connected:
+            raise LinkLostError("the fake room is not joined")
+        self.played.append(chunk)
+
+    def on_data_track(self, name: str, callback) -> None:
+        self._data_track_cbs.setdefault(name, []).append(callback)
+
+    def on_video(self, callback) -> None:
+        self._video_cbs.append(callback)
+
+    def on_audio(self, callback) -> None:
+        self._audio_cbs.append(callback)
+
+    def on_tracks(self, callback) -> None:
+        self._track_cbs.append(callback)
+
+    # ── plumbing + test helpers ──────────────────────────────────────────────
+    def _read(self) -> None:
+        while not self._stop.is_set():
+            sock = self._sock
+            if sock is None:
+                return
+            try:
+                data, _ = sock.recvfrom(65535)
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            # The FakeEdge speaks UDP, which carries no edge clock: user_timestamp=None.
+            for cb in tuple(self._data_track_cbs.get("state", ())):
+                cb(data, None)
+
+    def _set_tracks(self, tracks: frozenset[str]) -> None:
+        if tracks == self.tracks:
+            return
+        self.tracks = tracks
+        for cb in tuple(self._track_cbs):
+            cb(tracks)
+
+    def push_frame(self, n: int):
+        from asimov_sdk import Frame
+
+        f = Frame(width=4, height=2, encoding="rgb8", data=bytes(24), stride_bytes=12, sequence=n)
+        for cb in tuple(self._video_cbs):
+            cb(f)
+        return f
+
+    def push_audio(self, n: int, *, samples: int = 160):
+        from asimov_sdk import AudioChunk
+
+        a = AudioChunk(16_000, 1, samples, "pcm_s16le", bytes(2 * samples), sequence=n)
+        for cb in tuple(self._audio_cbs):
+            cb(a)
+        return a
+
+
+def make_livekit_robot(edge: FakeEdge, **kw) -> tuple[FakeLiveKitClient, Robot]:
+    """Mode B: everything over the (faked) room."""
+    client = FakeLiveKitClient(edge, **kw)
+    tx = LiveKitTransport("ws://fake", "asimov-room", token="test-token", client=client)
+    return client, Robot(tx)
+
+
+def make_hybrid_robot(edge: FakeEdge, **kw) -> tuple[FakeLiveKitClient, Robot]:
+    """Mode A: UDP control, (faked) room media."""
+    client = FakeLiveKitClient(edge, carry_state=False, **kw)
+    tx = HybridTransport(
+        "127.0.0.1",
+        livekit_url="ws://fake",
+        room="asimov-room",
+        token="test-token",
+        command_port=edge.command_port,
+        state_bind=("127.0.0.1", edge.state_port),
+        client=client,
+    )
+    return client, Robot(tx)
+
+
+@pytest.fixture
+def livekit_robot(edge):
+    client, r = make_livekit_robot(edge)
+    r.open(timeout=3.0)
+    yield client, r
+    r.close()
+
+
+@pytest.fixture
+def hybrid_robot(edge):
+    client, r = make_hybrid_robot(edge)
+    r.open(timeout=3.0)
+    yield client, r
+    r.close()
+
+
+@pytest.fixture(params=["udp", "hybrid", "livekit"])
+def any_robot(request, edge):
+    """The same robot over each of the three lanes. A behaviour that is not mode-agnostic
+    is not done: every promise below is asserted three times."""
+    if request.param == "udp":
+        tx = SeamUdpTransport(
+            "127.0.0.1", command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port)
+        )
+        r: Robot = Robot(tx)
+    else:
+        maker = make_hybrid_robot if request.param == "hybrid" else make_livekit_robot
+        _client, r = maker(edge)
+    r.open(timeout=3.0)
+    yield request.param, r
     r.close()
 
 

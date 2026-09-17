@@ -40,7 +40,7 @@ ASIMOV_1_BIPED_JOINTS: tuple[str, ...] = (
 
 #: The ``asimov.io`` protocol version this SDK was built against. The firmware rejects
 #: commands carrying any other value (``netrx_thread.c: ASIMOV_PROTOCOL_VERSION``), and
-#: echoes its own in ``RobotState.protocol_version``; ``Robot.connect_*`` compares the two.
+#: echoes its own in ``RobotState.protocol_version``; ``Robot.connect()`` compares the two.
 PROTOCOL_VERSION = 1
 
 

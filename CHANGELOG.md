@@ -6,8 +6,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## 0.1.0 — unreleased
 
 ### Added
-- `Robot.connect(host, ...)` over the robot's LAN lane (`UdpTransport`: `RobotCommand` →
-  udp/8850, `RobotState` ← udp/8851); `Robot(transport)` for any `Transport`.
+- `ConnectionConfig(udp=UdpConfig(...), livekit=LiveKitConfig(...) | ManagerConfig(...))`
+  describes a robot's lanes, one typed class each; `Robot(cfg)` binds without touching the
+  network; `robot.connect("udp" | "hybrid" | "livekit", timeout=, media_timeout=,
+  connect_timeout=)` attaches and returns the robot; `close()` then `connect()` again switches
+  lanes on the same `Robot`. `cfg.available_modes()` says what a config can reach; a mode
+  the config cannot carry is a `ConnectError` naming the missing slot, before any I/O.
+- `ManagerConfig(url, credential, label=)`: the SDK asks the robot's manager
+  (`POST /api/livekit/token`) for the LiveKit URL, the room and a fresh join token on every
+  connect, so a user or agent never holds a LiveKit token. `LiveKitConfig(url, room, token)`
+  is for people running their own SFU.
+- The UDP lane: `UdpTransport` (`RobotCommand` → udp/8850, `RobotState` ← udp/8851);
+  `Robot(transport)` + `open()` for any `Transport`.
 - Verbs `set_velocity(vx, vy, vyaw, duration=)`, `stop()`, `stand()`, `damp()`,
   `trajectory(positions, kp=, kd=)`, `goto(positions, duration=, hz=, wait=)`; each returns a
   `Sent` with the encoded command, the clamp flag and an outcome handle.
@@ -20,9 +30,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `WaitTimeoutError`, `StateStaleError`, `RobotFaultedError`, `CommandRefusedError`.
 - Media API `robot.camera`, `robot.microphone`, `robot.speaker` (`Frame`, `AudioChunk`)
   through the `Transport` seam; `UnsupportedError` on a transport that does not carry them.
+- Two more lanes, both first-class: `"hybrid"` (UDP control + LiveKit media) and
+  `"livekit"` (commands and
+  state as bare `RobotCommand`/`RobotState`: reliable data packets on the `commands` topic in,
+  frames of a data track named `state` out (ordered; `State.edge_timestamp_us` is the frame's
+  `user_timestamp`, the edge's receive clock) —
+  the same protobufs the UDP lane sends, no envelope, no type tag). `HybridTransport` and
+  `LiveKitTransport` underneath; `robot.py` does not know which wire it is on.
+- LiveKit is an EXTRA (`pip install "asimov-sdk[livekit]"`): the core still depends on
+  protobuf alone, every `livekit` import is lazy inside `transport/_livekit_client.py`, and
+  `connect("udp")` never reaches it.
+- `Camera.photo(timeout=)` returns ONE fresh `Frame`; `Camera.capture_clip(seconds,
+  audio=True)` returns a `Clip` with `save_wav()` (stdlib `wave`), `frames_as_numpy()`,
+  `save_frames()` (Pillow) and `save_mp4()` (OpenCV) — the last three raise `ImportError`
+  naming the package rather than adding a dependency. LiveKit video is converted from I420
+  to `rgb8`, so `Frame.to_numpy()` works.
+- `Transport.silence_hint`: the transport, not `Robot`, says what to check when a connect
+  hears nothing on its wire.
+- No `identity` parameter on the LiveKit lanes: a participant's identity is a claim inside
+  the access token and the server ignores what a client says about it, so the SDK reads it
+  back (`transport.identity`, and `endpoint` reads `room@url as <identity>`) instead of
+  accepting an argument it could not honour.
 - Callbacks `on_state`, `on_alert`, `on_mode_change`, `on_refused`, `on_link_lost`,
   `on_controller_change`.
 - `robot.record(path)` JSON-lines recording and `asimov_sdk.recording.load()`.
+- Capability honesty on the room lanes: `camera`/`microphone` are claimed only once the
+  matching track is actually subscribed, and dropped when the room goes; a room with no
+  video raises `UnsupportedError` instead of yielding nothing.
 - Liveness: 10 Hz hold with a generation fence and bounded `duration`; `LinkLostError`
   after `link_timeout` seconds of silence, with a zero velocity sent; `close()` zeroes a
   held velocity; reopen with `close()` + `open()`.

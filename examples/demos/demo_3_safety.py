@@ -16,11 +16,20 @@ suppresses the next STAND until the rig restarts).
 import sys
 import time
 
-from asimov_sdk import Applied, Mode, Refused, Robot, Unknown, WaitTimeoutError
+from asimov_sdk import (
+    Applied,
+    ConnectionConfig,
+    Mode,
+    Refused,
+    Robot,
+    UdpConfig,
+    Unknown,
+    WaitTimeoutError,
+)
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect(host) as robot:
+with Robot(ConnectionConfig(udp=UdpConfig(host))).connect("udp") as robot:
     print("1) a command sent while the firmware is DAMPed")
     robot.damp()
     robot.wait_for(Mode.DAMP, timeout=5.0)

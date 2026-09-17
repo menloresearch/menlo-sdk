@@ -11,6 +11,7 @@ import pytest
 from asimov_sdk import AudioChunk, Frame, Robot, UnsupportedError, WaitTimeoutError
 from asimov_sdk._command import Velocity
 from asimov_sdk._state import Joint, Mode, State
+from tests.conftest import connect_udp
 
 
 def _state(seq: int = 1) -> State:
@@ -32,7 +33,7 @@ def _state(seq: int = 1) -> State:
 class FakeMediaTransport:
     """A transport that carries everything, driven by the test."""
 
-    kind = "direct"
+    kind = "udp"
     endpoint = "fake:0"
     default_outcome_timeout = 0.1
     capabilities = frozenset({"drive", "state", "camera", "microphone", "speaker"})
@@ -141,7 +142,7 @@ def test_the_udp_lane_says_unsupported_not_silence(edge, robot):
     assert not robot.has("camera")
     with pytest.raises(UnsupportedError) as info:
         robot.camera.latest()
-    assert info.value.capability == "camera" and "direct" in str(info.value)
+    assert info.value.capability == "camera" and "udp" in str(info.value)
     with pytest.raises(UnsupportedError):
         robot.microphone.latest()
     with pytest.raises(UnsupportedError):
@@ -153,7 +154,7 @@ def test_battery_is_a_capability_when_the_robot_reports_one(edge):
     edge.state.battery.voltage_v = 48.2
     edge.state.battery.soc_percent = 77.0
     time.sleep(0.05)
-    with Robot.connect(
+    with connect_udp(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),
@@ -178,3 +179,21 @@ def test_first_media_attachment_happens_once_under_concurrency(media):
     for t in threads:
         t.join()
     assert len(tx.frame_cbs) == 1, "two first callers attached twice; frames would be duplicated"
+
+
+def test_has_tracks_a_media_capability_disappearing_mid_session(media):
+    """`has()` must answer for NOW, not for what was true at connect.
+
+    `RobotInfo` is frozen at connect, but a room lane loses its camera when the track
+    unsubscribes. A script gating on `has("camera")` — the documented safe pattern —
+    should then skip cleanly instead of taking the UnsupportedError it was avoiding.
+    """
+    tx, robot = media
+    assert robot.has("camera")
+    assert "camera" in robot.info.capabilities  # the connect-time snapshot keeps it
+
+    tx.capabilities = frozenset(c for c in tx.capabilities if c != "camera")
+
+    assert not robot.has("camera"), "has() must follow the transport, not the snapshot"
+    with pytest.raises(UnsupportedError):
+        robot.require("camera")

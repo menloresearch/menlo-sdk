@@ -3,9 +3,13 @@
 Drive an Asimov robot from Python.
 
 ```python
-from asimov_sdk import Mode, Robot
+from asimov_sdk import ConnectionConfig, ManagerConfig, Mode, Robot, UdpConfig
 
-with Robot.connect("asimov.local") as robot:
+cfg = ConnectionConfig(
+    udp=UdpConfig(host="asimov.local"),  # the LAN lane
+    livekit=ManagerConfig(url="http://asimov.local:8080", credential=CRED),  # the robot's manager
+)
+with Robot(cfg).connect("hybrid") as robot:  # or "udp" / "livekit" — same Robot, pick per session
     if robot.state.mode is Mode.DAMP:  # STAND is the wake-up verb; never stiffen a balancing robot
         robot.stand()
         robot.wait_for(Mode.STAND, timeout=15)
@@ -17,10 +21,58 @@ with Robot.connect("asimov.local") as robot:
     print(robot.state.joint("L_Knee").pos, robot.state.battery)  # battery is None without a BMS
 ```
 
-One `Robot`, one API, pluggable transports. `UdpTransport` speaks the robot's LAN lane:
-`asimov.io.RobotCommand` datagrams to the robot's edge on udp/8850, `asimov.io.RobotState`
-pushed back on udp/8851. Commands land in the edge's arbiter beside the robot's other
-controllers and pass the same safety layer.
+One `Robot`, one API, and the lane is chosen last. Describe the robot's wires once in a
+`ConnectionConfig` — one typed class per lane, nothing mixed — bind a `Robot` to it, then
+`connect(mode)`; `close()` and `connect()` again to switch lanes on the same `Robot`.
+Commands land in the edge's arbiter beside the robot's other controllers and pass the same
+safety layer, whichever lane they arrive on.
+
+## Three ways to reach a robot
+
+| `connect(mode)` | control + state | video + audio | needs a LiveKit server | config slots |
+|---|---|---|---|---|
+| `"udp"` | UDP 8850 / 8851 | — | no | `udp=UdpConfig(host)` |
+| `"hybrid"` | UDP 8850 / 8851 | LiveKit | yes | `udp=…` and `livekit=…` |
+| `"livekit"` | LiveKit data packets / data track | LiveKit | yes | `livekit=…` |
+
+The `livekit` slot is either `ManagerConfig(url, credential)` — the SDK asks the robot's
+manager for the room and a fresh join token on every connect, so you never hold a LiveKit
+token — or `LiveKitConfig(url, room, token)` when you run your own SFU.
+`cfg.available_modes()` says which modes a config can reach.
+
+Same verbs, same waits, same error model on all three: `robot.py` does not know which wire
+it is on. Pick **udp** on the LAN when you need no camera, **hybrid** on the LAN when you
+do, and **livekit** when the robot is not routable from your machine.
+
+**LiveKit is optional.** `pip install asimov-sdk` with no extra drives a robot over UDP;
+every `livekit` import in the SDK is lazy and confined to one module. Add the media lane
+with `pip install "asimov-sdk[livekit]"`.
+
+### The wire
+
+```
+udp / hybrid      commands -> udp/8850            one bare asimov.io.RobotCommand per datagram
+                  state    <- udp/8851            one bare asimov.io.RobotState per datagram
+livekit           commands -> data topic "commands"   the SAME RobotCommand bytes, reliable packets
+                  state    <- data track "state"      the SAME RobotState bytes, one per frame,
+                                                      ordered; user_timestamp = edge receive clock
+                  camera   <- a video track, decoded to rgb8 Frames
+                  mic      <- an audio track, as pcm_s16le AudioChunks
+                  speaker  -> an audio track the SDK publishes
+```
+
+No envelope, no framing, no type tag: the port, or the topic, says what the bytes are.
+
+**The SDK never holds a LiveKit API secret.** There is no `api_key`/`api_secret` parameter
+anywhere in it — a caller brings a join token minted by the robot's manager, or a callable
+that mints a fresh one per join (`token=lambda: fetch()`).
+
+**And no `identity` parameter.** A participant's identity is a claim inside the token
+(`sub`), and the LiveKit server ignores whatever a client says about it — an argument for
+it would be a lie. The SDK reads it back instead: `transport.identity`, and
+`robot.info.endpoint` reads `room@url as <identity>` once joined. One token is one
+participant: two participants in a room need two tokens, or the server disconnects the
+earlier duplicate.
 
 ## Install
 
@@ -29,31 +81,45 @@ Python 3.12 or newer.
 ```bash
 uv add "asimov-sdk @ git+https://github.com/menloresearch/asimov-sdk.git"
 # or: pip install "asimov-sdk @ git+https://github.com/menloresearch/asimov-sdk.git"
+
+# the media lane (hybrid and livekit modes):
+uv add "asimov-sdk[livekit] @ git+https://github.com/menloresearch/asimov-sdk.git"
 ```
 
-The only runtime dependency is `protobuf`. The generated `asimov.io` bindings ship inside
+The core's only runtime dependency is `protobuf`, and `[livekit]` is the one extra — a
+robot drives without it. The generated `asimov.io` bindings ship inside
 the package, pinned to an `asimov-protocol` tag (`src/asimov_sdk/_vendor/VENDORED.md`). If
 the `asimov-protocol` package is installed as well and is the same release, the SDK uses
 that copy so one process holds one set of descriptors.
 
 ## The robot side
 
-The edge must run with `--udp-control` and push state to your machine
-(`--udp-state-host <your ip>`). To run against a simulated robot instead of hardware:
-`menlo-studio up --container --sdk`, then `Robot.connect("127.0.0.1")`.
+For **udp** and **hybrid**, the edge must run with `--udp-control` and push state to
+your machine (`--udp-state-host <your ip>`). To run against a simulated robot instead of
+hardware: `menlo-studio up --container --sdk`, then `Robot(ConnectionConfig(udp=UdpConfig("127.0.0.1"))).connect("udp")`.
+
+For **hybrid** and **livekit**, the robot's edge joins a LiveKit room — one per robot,
+named by its id — publishes its camera and microphone as ordinary tracks, and (in livekit
+mode) answers on the `state` data track. With `ManagerConfig` the SDK gets the room name
+and a token from the robot's manager itself. `examples/agent_room.py` documents the
+room/identity/topic convention and shows a
+LiveKit *agent* joining the same room: `livekit-plugins-google`'s
+`RealtimeModel(video_input=True)` already turns the robot's video track into what Gemini
+Live wants (about 1 fps of JPEG plus 16 kHz PCM), so this SDK adds no model glue.
 
 ## API in one screen
 
 ```python
-robot = Robot.connect(
-    host,
-    command_port=8850,
-    state_bind=("0.0.0.0", 8851),
-    timeout=5.0,
-    limits=None,
-    state_source=None,
-    link_timeout=2.0,
+cfg = ConnectionConfig(
+    udp=UdpConfig(host, command_port=8850, state_bind=("0.0.0.0", 8851), state_source=None),
+    livekit=ManagerConfig(url="http://host:8080", credential=CRED, label=None),
+    # or: livekit=LiveKitConfig(url="ws://host:7880", room="robot-<serial>", token=str_or_callable)
 )
+cfg.available_modes()  # ("udp", "hybrid", "livekit")
+robot = Robot(cfg, limits=None, link_timeout=2.0)  # bound, no network yet
+robot.connect("hybrid", timeout=5.0, media_timeout=3.0, connect_timeout=10.0)  # returns robot
+robot.close()
+robot.connect("udp")  # switch lanes on the same Robot
 robot = Robot(transport, limits=None, link_timeout=2.0)
 robot.open()  # any Transport
 
@@ -83,10 +149,16 @@ robot.has("camera")
 robot.require("drive", "battery")
 
 # media — UnsupportedError when this robot/transport does not carry it
+robot.camera.photo(timeout=5)  # ONE fresh rgb8 Frame; WaitTimeoutError if the camera is quiet
 robot.camera.latest()
-robot.camera.frames(timeout=5)
+robot.camera.frames(timeout=5)  # latest-wins iterator
 robot.camera.subscribe(cb)
-robot.microphone.chunks()
+clip = robot.camera.capture_clip(5.0, audio=True)  # Clip(frames, audio, started_at)
+clip.save_wav("clip.wav")  # stdlib wave
+clip.frames_as_numpy()  # (n, h, w, 3); needs numpy
+clip.save_frames("out/")  # JPEG; needs Pillow, else ImportError naming it
+clip.save_mp4("clip.mp4")  # needs opencv-python
+robot.microphone.chunks()  # ordered, bounded; robot.microphone.dropped counts the losses
 robot.speaker.play_pcm(pcm_s16le, sample_rate_hz=16000)
 
 # callbacks (transport thread; keep them short)
@@ -113,7 +185,7 @@ sent.require()  # raises CommandRefusedError on Refused
 - `duration=` bounds a hold on the client; the SDK sends the zero itself when time is up.
 - `close()` sends a zero if a velocity was held and stops re-sending a held trajectory.
   `LinkLostError` (no state for `link_timeout` seconds) does the same, then every verb raises
-  until you `close()` and `open()` again. A trajectory that is no longer re-sent is DAMPed by
+  until you `close()` and `connect()` again. A trajectory that is no longer re-sent is DAMPed by
   the edge two seconds later; there is no neutral setpoint the SDK could send instead.
 - A verb is never dropped as superseded; only the keepalive's re-sends are. A new verb ends
   any running `goto()`.
@@ -139,6 +211,13 @@ sent.require()  # raises CommandRefusedError on Refused
 - `damp()` folds a standing biped. It is deliberate and never implied by anything else.
 - Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s), the clamp is
   visible on `Sent.clamped`, and `Limits` rejects negative or non-finite values.
+- A capability is claimed from a track that ARRIVED. A LiveKit room publishing no video
+  makes `robot.has("camera")` False and `robot.camera` raise `UnsupportedError`, rather
+  than hand out a stream that never yields. `media_timeout=` bounds the wait and returns as
+  soon as the video track is up, so a robot with a camera and no microphone does not pay
+  the whole budget. A track that lands after the connect still attaches and still works; it
+  simply misses `robot.info.capabilities`, which is a snapshot — raise `media_timeout` when
+  a late track must be reflected there.
 - The state port is plain UDP: samples that do not look like this robot are dropped, an
   older datagram never overwrites a newer sample, and `state_source=` pins the one address
   state may arrive from.
@@ -156,7 +235,7 @@ sent.require()  # raises CommandRefusedError on Refused
 | Exception | When |
 |---|---|
 | `ConnectError` / `ProtocolMismatchError` | no state within `timeout`; protocol version differs |
-| `NotConnectedError` | a call before `open()` or after `close()` |
+| `NotConnectedError` | a call before `connect()` or after `close()` |
 | `LinkLostError` | no state for `link_timeout` s; the session is over |
 | `WaitTimeoutError` (also `TimeoutError`) | a wait's condition was not met in time; `.last` is the last state |
 | `StateStaleError` | the stream went quiet during a wait |
@@ -174,6 +253,8 @@ make sync          # uv sync
 make check         # ruff, mypy --strict, unit tests (fake edge on the real wire)
 make integration   # the real asimov-edge UdpConnector in-process; ASIMOV_EDGE_SRC=<edge>/src
 make live          # a robot or simulator; ASIMOV_SDK_LIVE_HOST=<host>
+make livekit       # real livekit.rtc vs `livekit-server --dev`; needs ASIMOV_SDK_LIVEKIT_URL
+                   # plus TWO tokens for one room (_TOKEN and _EDGE_TOKEN)
 make check-vendor  # vendored bindings match the pinned asimov-protocol tag
 make vendor-protocol REF=v1.1.0
 ```
@@ -192,9 +273,12 @@ src/asimov_sdk/
   recording.py      JSON-lines recording and load()
   _errors.py        the exception taxonomy
   robots.py         per-robot tables: joint names, protocol version
-  transport/        Transport protocol and UdpTransport
+  transport/        Transport protocol, UdpTransport, LiveKitTransport, HybridTransport,
+                    _wire.py (the protobufs both lanes share) and _livekit_client.py
+                    (the ONE module that imports livekit, lazily)
   _vendor/          generated asimov.io bindings at the pinned tag
-examples/           runnable scripts; examples/demos/ are the three walkthroughs
+examples/           runnable scripts; examples/demos/ are the three walkthroughs,
+                    examples/agent_room.py is the LiveKit-agent room convention
 ```
 
 ## License

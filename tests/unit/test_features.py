@@ -14,12 +14,12 @@ from asimov_sdk import (
     BatteryProtection,
     Frame,
     Mode,
-    Robot,
     UnsupportedError,
     WaitTimeoutError,
 )
 from asimov_sdk._media import AudioChunk
 from asimov_sdk.recording import load
+from tests.conftest import connect_udp
 
 
 def test_battery_protection_flags_are_named_and_charging_follows_the_sign():
@@ -147,7 +147,7 @@ def test_alerts_sent_every_20th_frame_are_carried_forward_for_stable_reads():
 
     edge = FakeEdge(state_hz=200.0, alerts_every=20)
     try:
-        with Robot.connect(
+        with connect_udp(
             "127.0.0.1",
             command_port=edge.command_port,
             state_bind=("127.0.0.1", edge.state_port),

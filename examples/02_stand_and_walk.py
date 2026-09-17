@@ -11,11 +11,11 @@ Zero velocity in MOVE is how a robot that nothing is holding stands still.
 import sys
 import time
 
-from asimov_sdk import Mode, Robot
+from asimov_sdk import ConnectionConfig, Mode, Robot, UdpConfig
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect(host) as robot:
+with Robot(ConnectionConfig(udp=UdpConfig(host))).connect("udp") as robot:
     if robot.state.mode is not Mode.DAMP:
         # A previous run left it balancing in MOVE. STAND would stiffen it and tip it over;
         # DAMP it (supported) or restart the firmware, then run this again.

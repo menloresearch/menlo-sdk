@@ -2,9 +2,10 @@
 
 ::
 
-    from asimov_sdk import Robot, Mode
+    from asimov_sdk import ConnectionConfig, Mode, Robot, UdpConfig
 
-    with Robot.connect("asimov.local") as robot:
+    cfg = ConnectionConfig(udp=UdpConfig("asimov.local"))
+    with Robot(cfg).connect("udp") as robot:
         if robot.state.mode is Mode.DAMP:          # STAND is the wake-up verb only
             robot.stand()
             robot.wait_for(Mode.STAND, timeout=8.0)
@@ -65,7 +66,7 @@ import os
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from typing import Literal, Self
+from typing import TYPE_CHECKING, Literal, Self
 
 from asimov_sdk import robots
 from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity
@@ -84,9 +85,16 @@ from asimov_sdk._errors import (
 from asimov_sdk._media import Camera, Microphone, Speaker
 from asimov_sdk._outcome import Applied, Refused, Sent
 from asimov_sdk._state import Alert, Capability, Mode, RobotInfo, State
+from asimov_sdk.connection import ConnectionConfig, ConnectMode
 from asimov_sdk.recording import Recording
 from asimov_sdk.transport.base import Transport
-from asimov_sdk.transport.udp import UdpTransport
+
+# Importing the LiveKit transports does NOT import livekit: every `livekit` import in the
+# SDK is lazy, inside `transport/_livekit_client.py`. `connect("udp")` never touches it.
+from asimov_sdk.transport.livekit import MEDIA_TIMEOUT_S
+
+if TYPE_CHECKING:
+    pass
 
 log = logging.getLogger(__name__)
 
@@ -121,14 +129,20 @@ class Robot:
 
     def __init__(
         self,
-        transport: Transport,
+        source: ConnectionConfig | Transport,
         *,
         limits: Limits | None = None,
         link_timeout: float = DEFAULT_LINK_TIMEOUT_S,
     ) -> None:
-        """Build a robot over an already-constructed transport. Prefer the ``connect_*``
-        classmethods; this is the seam a new transport plugs into."""
-        self._tx = transport
+        """Bind a robot to a :class:`ConnectionConfig` (then :meth:`connect` picks the lane),
+        or to an already-constructed transport (then :meth:`open` attaches it — the seam a
+        new transport plugs into). Nothing touches the network here."""
+        self._config: ConnectionConfig | None
+        self._transport: Transport | None
+        if isinstance(source, ConnectionConfig):
+            self._config, self._transport = source, None
+        else:
+            self._config, self._transport = None, source
         self.limits = limits if limits is not None else Limits()
         self.link_timeout = _positive_finite("link_timeout", link_timeout)
         self._lock = threading.RLock()
@@ -151,9 +165,11 @@ class Robot:
         self._closed = True
         self._link_lost: LinkLostError | None = None
         self._info: RobotInfo | None = None
-        self._camera = Camera("camera", transport)
-        self._microphone = Microphone("microphone", transport)
-        self._speaker = Speaker(transport)
+        self._derived_caps: frozenset[str] = frozenset()
+        tx = self._current_transport
+        self._microphone = Microphone("microphone", tx)
+        self._camera = Camera("camera", tx, self._microphone)  # capture_clip records both
+        self._speaker = Speaker(tx)
         self.on_refused: Callable[[Refused], None] | None = None
         #: Every accepted state sample, on the transport's reader thread. Keep it short.
         self.on_state: Callable[[State], None] | None = None
@@ -165,45 +181,78 @@ class Robot:
         self.on_controller_change: Callable[[str | None, str | None, str], None] | None = None
         self.on_link_lost: Callable[[LinkLostError], None] | None = None
 
-    # ── constructors ─────────────────────────────────────────────────────────
-    @classmethod
+    # ── the transport, and choosing it ───────────────────────────────────────
+    @property
+    def _tx(self) -> Transport:
+        tx = self._transport
+        if tx is None:
+            raise NotConnectedError(
+                "this Robot is not connected: call connect(mode) with one of "
+                + ", ".join(repr(m) for m in self.config.available_modes())
+            )
+        return tx
+
+    def _current_transport(self) -> Transport:
+        return self._tx
+
+    @property
+    def config(self) -> ConnectionConfig:
+        """The :class:`ConnectionConfig` this Robot was bound to."""
+        if self._config is None:
+            raise RuntimeError("this Robot was built over a transport, not a ConnectionConfig")
+        return self._config
+
     def connect(
-        cls,
-        host: str,
+        self,
+        mode: ConnectMode,
         *,
-        command_port: int = 8850,
-        state_bind: tuple[str, int] = ("0.0.0.0", 8851),
         timeout: float = 5.0,
+        media_timeout: float = MEDIA_TIMEOUT_S,
+        connect_timeout: float = 10.0,
         allow_version_skew: bool = False,
-        limits: Limits | None = None,
-        state_source: str | None = None,
-        link_timeout: float = DEFAULT_LINK_TIMEOUT_S,
-    ) -> Robot:
-        """Attach to a robot over its LAN UDP lane.
+    ) -> Self:
+        """Attach on ``mode`` — ``"udp"``, ``"hybrid"`` (UDP control + LiveKit media) or
+        ``"livekit"`` — using the lanes described by this Robot's :class:`ConnectionConfig`.
 
-        The edge must be running with ``--udp-control`` and pushing state to this machine
-        (``--udp-state-host <this ip>``). Returns once the first state sample has arrived
-        and its protocol version matches; raises :class:`ConnectError` otherwise, because
-        a UDP socket that hears nothing is talking to nobody.
+        Returns the robot once the first state sample has arrived and its protocol version
+        matches, so ``with robot.connect("hybrid"):`` works. Raises :class:`ConnectError`
+        before touching the network when the config lacks a slot the mode needs, and after
+        ``timeout`` seconds of silence otherwise. ``close()`` and call again with another mode
+        to switch lanes on the same Robot: limits, joint table and hooks are kept.
 
-        ``state_source`` pins the address state may arrive from; datagrams from anyone else
-        are dropped before decoding. Leave it ``None`` when the robot's state leaves from a
-        different address than it listens on (the studio container does this).
+        ``media_timeout`` is how long a LiveKit lane waits for the robot's tracks before
+        deciding what it carries; ``connect_timeout`` bounds the room join itself.
         """
-        tx = UdpTransport(
-            host, command_port=command_port, state_bind=state_bind, state_source=state_source
+        config = self.config  # a transport-bound Robot has none: that error comes first
+        with self._lock:
+            if not self._closed:
+                raise RuntimeError("this Robot is already connected; close() it first")
+        tx = config.transport_for(
+            mode, media_timeout=media_timeout, connect_timeout=connect_timeout
         )
-        robot = cls(tx, limits=limits, link_timeout=link_timeout)
-        robot.open(timeout=timeout, allow_version_skew=allow_version_skew)
-        return robot
+        with self._lock:  # a second connect() racing this one must not swap the lane twice
+            if not self._closed:
+                raise RuntimeError("this Robot is already connected; close() it first")
+            self._transport = tx
+            self._subscribed = False  # the new transport has not heard our callbacks yet
+            self._derived_caps = frozenset()  # the previous robot's battery is not this one's
+        self._camera._rebind()
+        self._microphone._rebind()
+        self.open(timeout=timeout, allow_version_skew=allow_version_skew)
+        return self
 
     def open(self, *, timeout: float = 5.0, allow_version_skew: bool = False) -> None:
         if not self._closed:
             raise RuntimeError("this Robot is already open")
+        if self._transport is None:
+            raise NotConnectedError(
+                "this Robot is bound to a ConnectionConfig: call connect(mode) instead of open()"
+            )
         if not self._subscribed:  # a failed open() followed by a retry must not double-subscribe
-            self._tx.subscribe_state(self._on_state)
-            self._tx.subscribe_outcome(self._on_outcome)
-            self._tx.subscribe_controller_change(self._on_controller)
+            tx = self._tx
+            tx.subscribe_state(self._only_from(tx, self._on_state))
+            tx.subscribe_outcome(self._only_from(tx, self._on_outcome))
+            tx.subscribe_controller_change(self._only_from(tx, self._on_controller))
             self._subscribed = True
         # Every open() waits for a FRESH sample: a Robot reopened after close() must not
         # pass the protocol check on what the previous session left behind.
@@ -218,14 +267,14 @@ class Robot:
             self._pending.clear()
             self._refusals.clear()
         self._tx.open()
-        self._stop.clear()
         # Verbs stay refused (NotConnectedError) until the handshake below has passed.
         if not self._state_seen.wait(timeout):
             self._tx.close()
+            # A transport MAY carry a ``silence_hint``: what to check when a connect hears no
+            # state on its wire. It knows the setup that feeds it; this class does not.
             raise ConnectError(
                 f"no state from the robot at {self._tx.endpoint} within {timeout:.1f}s. "
-                "Is the edge running with --udp-control, and is its --udp-state-host "
-                "pointing at this machine?"
+                f"{getattr(self._tx, 'silence_hint', '')}"
             )
         first = self._state
         assert first is not None
@@ -243,6 +292,10 @@ class Robot:
         capabilities = set(self._tx.capabilities)
         if first.battery is not None:
             capabilities.add("battery")
+        # What the robot told us about itself, as opposed to what the wire carries. The
+        # transport can lose a track mid-session and `has()` follows it down; these don't
+        # come from the transport, so they can't be taken away by one.
+        self._derived_caps = frozenset(capabilities) - frozenset(self._tx.capabilities)
         self._info = RobotInfo(
             transport=self._tx.kind,
             endpoint=self._tx.endpoint,
@@ -253,10 +306,27 @@ class Robot:
             capabilities=frozenset(capabilities),
         )
         self._closed = False
+        # One stop flag per session. close() may run ON the keepalive thread (an on_link_lost
+        # handler that reconnects); a shared flag that open() cleared would un-signal that
+        # thread's exit before it woke, leaving two keepalives re-sending into the edge.
+        stop = threading.Event()
+        self._stop = stop
         self._keepalive = threading.Thread(
-            target=self._keepalive_loop, name="asimov-sdk-keepalive", daemon=True
+            target=self._keepalive_loop, args=(stop,), name="asimov-sdk-keepalive", daemon=True
         )
         self._keepalive.start()
+
+    def _only_from[**P](self, tx: Transport, handler: Callable[P, None]) -> Callable[P, None]:
+        """Wrap a transport callback so only the transport this Robot is CURRENTLY on may call
+        it. A closed transport keeps its subscriber list and its reader thread is joined
+        best-effort, so a late sample from the previous lane must not become this session's
+        state, frame or handshake."""
+
+        def guarded(*args: P.args, **kwargs: P.kwargs) -> None:
+            if self._transport is tx:
+                handler(*args, **kwargs)
+
+        return guarded
 
     def close(self) -> None:
         """Zero velocity if one is held, stop re-sending a held trajectory, then drop the link.
@@ -266,6 +336,7 @@ class Robot:
             if self._closed:
                 return
             self._closed = True
+            tx = self._transport  # pinned here: a connect() racing us may swap the lane
             had_velocity = self._latched is not None
             self._latched = None
             self._generation += 1
@@ -276,9 +347,11 @@ class Robot:
             if self._keepalive is not threading.current_thread():
                 self._keepalive.join(timeout=2.0)
             self._keepalive = None
+        if tx is None:
+            return
         if had_velocity:
-            self._send_safety_zero("close")
-        self._tx.close()
+            self._send_safety_zero("close", tx)
+        tx.close()
 
     def __enter__(self) -> Self:
         return self
@@ -298,8 +371,21 @@ class Robot:
         return not self._closed and self._link_lost is None
 
     def has(self, capability: Capability | str) -> bool:
-        """Does this robot, over this transport, provide ``capability``? See ``Capability``."""
-        return self.info.has(capability)
+        """Does this robot, over this transport, provide ``capability`` **right now**?
+
+        Reads the transport's **live** set rather than ``info.capabilities``, which is a
+        snapshot taken at connect (``RobotInfo`` is frozen). On a room lane a camera goes
+        away mid-session when its track unsubscribes, and a script gating on ``has()`` —
+        the documented safe pattern — should then skip cleanly instead of taking the
+        ``UnsupportedError`` it was trying to avoid.
+
+        Capabilities the robot reported about *itself* (``battery``) are not the wire's to
+        lose, so they stay until the session ends.
+        """
+        if self._closed:
+            raise NotConnectedError("not connected: has() describes a live session")
+        cap = str(capability)
+        return cap in self._tx.capabilities or cap in self._derived_caps
 
     def require(self, *capabilities: Capability | str) -> None:
         """Raise :class:`UnsupportedError` for the first capability this robot lacks. For the
@@ -653,10 +739,10 @@ class Robot:
             self._call(hook, sent)
         return sent
 
-    def _keepalive_loop(self) -> None:
+    def _keepalive_loop(self, stop: threading.Event) -> None:
         interval = 1.0 / KEEPALIVE_HZ
         last_seen = time.monotonic()
-        while not self._stop.wait(interval):
+        while not stop.wait(interval):
             s = self._state
             if s is not None:
                 last_seen = s.received_at
@@ -665,7 +751,7 @@ class Robot:
                     LinkLostError(
                         f"no state from {self._tx.endpoint} for {self.link_timeout:.1f}s; "
                         "a zero velocity was sent and any held trajectory stopped; "
-                        "close() and open() to reconnect"
+                        "close() and connect() again to reconnect"
                     )
                 )
             with self._lock:
@@ -704,13 +790,13 @@ class Robot:
             except Exception:
                 log.exception("on_link_lost raised")
 
-    def _send_safety_zero(self, why: str) -> None:
+    def _send_safety_zero(self, why: str, tx: Transport | None = None) -> None:
         """Best-effort zero velocity on close() and link loss. Bypasses the closed/lost
         checks in ``_send`` on purpose, but still reaches the recording hook: a log whose
         last word is a nonzero setpoint would misreport what actually went out."""
         zero = Velocity()
         try:
-            seq = self._tx.send(zero)
+            seq = (tx if tx is not None else self._tx).send(zero)
         except Exception:
             log.debug("%s: the zero-velocity frame did not go out", why, exc_info=True)
             return

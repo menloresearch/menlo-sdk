@@ -6,11 +6,19 @@ A wait that keeps checking a frozen snapshot would happily "succeed" on a dead r
 
 import sys
 
-from asimov_sdk import Mode, Robot, RobotFaultedError, StateStaleError, WaitTimeoutError
+from asimov_sdk import (
+    ConnectionConfig,
+    Mode,
+    Robot,
+    RobotFaultedError,
+    StateStaleError,
+    UdpConfig,
+    WaitTimeoutError,
+)
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect(host) as robot:
+with Robot(ConnectionConfig(udp=UdpConfig(host))).connect("udp") as robot:
     robot.stand()
     try:
         s = robot.wait_until(
