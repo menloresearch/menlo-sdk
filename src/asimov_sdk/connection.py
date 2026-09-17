@@ -14,8 +14,8 @@ token, ``LiveKitConfig`` has no host, ``ManagerConfig`` is a manager URL and a c
 
 The ``livekit`` slot takes either the LiveKit details themselves or a ``ManagerConfig``. With
 the manager form the SDK asks the robot's manager for the URL, the room and a fresh join
-token on every join and every reconnect, so the caller never holds a LiveKit token and the
-LiveKit secret never leaves the manager.
+token on every ``connect()``, so the caller never holds a LiveKit token and the LiveKit
+secret never leaves the manager.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
 from asimov_sdk._errors import ConnectError
@@ -33,8 +33,12 @@ from asimov_sdk.transport.livekit import MEDIA_TIMEOUT_S, HybridTransport, LiveK
 from asimov_sdk.transport.udp import COMMAND_PORT, STATE_PORT, UdpTransport
 
 #: The lanes a ``Robot`` can be connected on. ``hybrid`` = UDP control + LiveKit media.
-Mode = Literal["udp", "hybrid", "livekit"]
-MODES: tuple[Mode, ...] = get_args(Mode)
+#: (``asimov_sdk.Mode`` is the robot's control mode — DAMP/STAND/MOVE — a different thing.)
+ConnectMode = Literal["udp", "hybrid", "livekit"]
+MODES: tuple[ConnectMode, ...] = get_args(ConnectMode)
+
+#: A manager answer larger than this is not a token reply.
+_MAX_REPLY_BYTES = 64 * 1024
 
 #: Which ``ConnectionConfig`` slots each mode needs.
 _SLOTS: dict[str, tuple[str, ...]] = {
@@ -66,7 +70,7 @@ class LiveKitConfig:
 
     url: str
     room: str
-    token: TokenProvider
+    token: TokenProvider = field(repr=False)  # a join grant; keep it out of logs and tracebacks
 
     def resolve(self) -> LiveKitConfig:
         return self
@@ -79,19 +83,27 @@ class ManagerConfig:
     session may drive and talk (``control``) or only watch (``observe``)."""
 
     url: str
-    credential: str
+    credential: str = field(repr=False)  # a bearer secret; keep it out of logs and tracebacks
     #: Optional suffix for this session's room identity (``sdk-<credential id>-<label>``),
     #: so two sessions on one credential can be told apart in the room.
     label: str | None = None
     #: HTTP timeout for each request to the manager.
     timeout: float = 5.0
 
+    def __post_init__(self) -> None:
+        if not self.timeout > 0:
+            raise ValueError(f"ManagerConfig.timeout must be positive, not {self.timeout!r}")
+
     def resolve(self) -> LiveKitConfig:
-        """Ask the manager once for url + room, and hand the transport a token callable that
-        asks again on every join."""
+        """Ask the manager once for url + room + a token, and hand the transport a token
+        callable: the first join uses that token, every later join mints a fresh one. Nothing
+        minted is thrown away — each token is a live grant on the room."""
         first = self._mint()
+        unused = [str(first["token"])]
 
         def mint() -> str:
+            if unused:
+                return unused.pop()
             return str(self._mint()["token"])
 
         return LiveKitConfig(url=str(first["url"]), room=str(first["room"]), token=mint)
@@ -112,9 +124,17 @@ class ManagerConfig:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                payload = json.loads(response.read().decode() or "{}")
+            with _opener.open(request, timeout=self.timeout) as response:
+                raw = response.read(_MAX_REPLY_BYTES + 1)
+                content_type = response.headers.get("Content-Type", "")
         except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                # Never follow: urllib would carry the bearer credential to the new host.
+                raise ConnectError(
+                    f"the manager at {self.url} redirected to {exc.headers.get('Location')!r}; "
+                    "use that address as ManagerConfig.url (the credential is only ever sent "
+                    "to the URL you configured)"
+                ) from exc
             detail = _error_detail(exc)
             raise ConnectError(
                 f"the manager at {self.url} refused to mint a LiveKit token "
@@ -125,6 +145,24 @@ class ManagerConfig:
                 f"could not reach the manager at {self.url} ({exc}). Is asimov-manager "
                 "running there, and is this machine on the robot's network?"
             ) from exc
+        if len(raw) > _MAX_REPLY_BYTES:
+            raise ConnectError(
+                f"the manager at {self.url} answered with more than {_MAX_REPLY_BYTES} bytes; "
+                "that is not a token reply — is this the manager's URL?"
+            )
+        try:
+            payload = json.loads(raw.decode() or "{}")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ConnectError(
+                f"the manager at {self.url} did not answer with JSON "
+                f"(Content-Type {content_type!r}); a login page or a proxy may be in the way — "
+                "is this the manager's URL?"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ConnectError(
+                f"the manager at {self.url} answered with a JSON {type(payload).__name__}, "
+                "not an object; is this the manager's URL?"
+            )
         missing = [k for k in ("url", "room", "token") if not payload.get(k)]
         if missing:
             raise ConnectError(
@@ -134,9 +172,19 @@ class ManagerConfig:
         return dict(payload)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib re-sends the ``Authorization`` header to the new URL."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def _error_detail(exc: urllib.error.HTTPError) -> str:
     try:
-        raw = exc.read().decode()
+        raw = exc.read(_MAX_REPLY_BYTES).decode()
         data = json.loads(raw)
         if isinstance(data, dict):
             return str(data.get("error") or data.get("detail") or raw)
@@ -156,7 +204,7 @@ class ConnectionConfig:
     udp: UdpConfig | None = None
     livekit: LiveKitSource | None = None
 
-    def available_modes(self) -> tuple[Mode, ...]:
+    def available_modes(self) -> tuple[ConnectMode, ...]:
         """The modes this config can connect on, given which slots are set."""
         return tuple(
             mode for mode in MODES if all(getattr(self, s) is not None for s in _SLOTS[mode])
@@ -164,7 +212,7 @@ class ConnectionConfig:
 
     def transport_for(
         self,
-        mode: Mode,
+        mode: ConnectMode,
         *,
         media_timeout: float = MEDIA_TIMEOUT_S,
         connect_timeout: float = 10.0,
@@ -215,10 +263,10 @@ class ConnectionConfig:
 
 __all__ = [
     "MODES",
+    "ConnectMode",
     "ConnectionConfig",
     "LiveKitConfig",
     "LiveKitSource",
     "ManagerConfig",
-    "Mode",
     "UdpConfig",
 ]

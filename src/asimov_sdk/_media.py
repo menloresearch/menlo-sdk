@@ -140,15 +140,26 @@ class _Stream[T]:
         if self._capability not in self._tx.capabilities:
             raise UnsupportedError(self._capability, self._tx.kind)
 
-    def _attach(self) -> None:
+    def _attach(self, tx: Transport) -> None:
         raise NotImplementedError
+
+    def _sink(self, tx: Transport) -> Callable[[T], None]:
+        """The callback handed to ``tx``: it delivers only while ``tx`` is still the Robot's
+        transport, so a lane this stream has left cannot feed the next session."""
+
+        def deliver(item: T) -> None:
+            if self._get_tx() is tx:
+                self._on_item(item)
+
+        return deliver
 
     def _ensure(self) -> None:
         self._require()
+        tx = self._tx
         with self._cv:  # two first callers must not both attach: every item would arrive twice
             if self._attached:
                 return
-            self._attach()
+            self._attach(tx)
             self._attached = True
 
     def _on_item(self, item: T) -> None:
@@ -182,6 +193,7 @@ class _Stream[T]:
         self._ensure()
         seen = self._count
         while True:
+            self._ensure()  # a generator held across a reconnect attaches to the new lane
             item = self._wait_past(seen, timeout)
             if item is None:
                 raise WaitTimeoutError(f"no {self._capability} data for {timeout:.1f}s", last=None)
@@ -205,8 +217,8 @@ class Camera(_Stream[Frame]):
         super().__init__(capability, transport)
         self._mic = microphone  # only capture_clip() needs it
 
-    def _attach(self) -> None:
-        self._tx.subscribe_frames(self._on_item)
+    def _attach(self, tx: Transport) -> None:
+        tx.subscribe_frames(self._sink(tx))
 
     def frames(self, *, timeout: float = 5.0) -> Iterator[Frame]:
         """Frames as they arrive; see :meth:`_Stream.stream`."""
@@ -273,8 +285,14 @@ class Microphone(_Stream[AudioChunk]):
         self._queue: deque[AudioChunk] = deque(maxlen=self.QUEUE)
         self.dropped = 0
 
-    def _attach(self) -> None:
-        self._tx.subscribe_audio(self._on_item)
+    def _attach(self, tx: Transport) -> None:
+        tx.subscribe_audio(self._sink(tx))
+
+    def _rebind(self) -> None:
+        super()._rebind()
+        with self._cv:  # the previous session's audio must not replay into the next one
+            self._queue.clear()
+            self.dropped = 0
 
     def _on_item(self, item: AudioChunk) -> None:
         with self._cv:
@@ -288,6 +306,7 @@ class Microphone(_Stream[AudioChunk]):
         without audio."""
         self._ensure()
         while True:
+            self._ensure()  # a generator held across a reconnect attaches to the new lane
             with self._cv:
                 if not self._cv.wait_for(lambda: bool(self._queue), timeout):
                     raise WaitTimeoutError(f"no microphone audio for {timeout:.1f}s", last=None)

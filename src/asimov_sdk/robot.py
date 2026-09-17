@@ -85,8 +85,7 @@ from asimov_sdk._errors import (
 from asimov_sdk._media import Camera, Microphone, Speaker
 from asimov_sdk._outcome import Applied, Refused, Sent
 from asimov_sdk._state import Alert, Capability, Mode, RobotInfo, State
-from asimov_sdk.connection import ConnectionConfig
-from asimov_sdk.connection import Mode as ConnectMode
+from asimov_sdk.connection import ConnectionConfig, ConnectMode
 from asimov_sdk.recording import Recording
 from asimov_sdk.transport.base import Transport
 
@@ -225,13 +224,18 @@ class Robot:
         deciding what it carries; ``connect_timeout`` bounds the room join itself.
         """
         config = self.config  # a transport-bound Robot has none: that error comes first
-        if not self._closed:
-            raise RuntimeError("this Robot is already connected; close() it first")
+        with self._lock:
+            if not self._closed:
+                raise RuntimeError("this Robot is already connected; close() it first")
         tx = config.transport_for(
             mode, media_timeout=media_timeout, connect_timeout=connect_timeout
         )
-        self._transport = tx
-        self._subscribed = False  # the new transport has not heard our callbacks yet
+        with self._lock:  # a second connect() racing this one must not swap the lane twice
+            if not self._closed:
+                raise RuntimeError("this Robot is already connected; close() it first")
+            self._transport = tx
+            self._subscribed = False  # the new transport has not heard our callbacks yet
+            self._derived_caps = frozenset()  # the previous robot's battery is not this one's
         self._camera._rebind()
         self._microphone._rebind()
         self.open(timeout=timeout, allow_version_skew=allow_version_skew)
@@ -245,9 +249,10 @@ class Robot:
                 "this Robot is bound to a ConnectionConfig: call connect(mode) instead of open()"
             )
         if not self._subscribed:  # a failed open() followed by a retry must not double-subscribe
-            self._tx.subscribe_state(self._on_state)
-            self._tx.subscribe_outcome(self._on_outcome)
-            self._tx.subscribe_controller_change(self._on_controller)
+            tx = self._tx
+            tx.subscribe_state(self._only_from(tx, self._on_state))
+            tx.subscribe_outcome(self._only_from(tx, self._on_outcome))
+            tx.subscribe_controller_change(self._only_from(tx, self._on_controller))
             self._subscribed = True
         # Every open() waits for a FRESH sample: a Robot reopened after close() must not
         # pass the protocol check on what the previous session left behind.
@@ -262,7 +267,6 @@ class Robot:
             self._pending.clear()
             self._refusals.clear()
         self._tx.open()
-        self._stop.clear()
         # Verbs stay refused (NotConnectedError) until the handshake below has passed.
         if not self._state_seen.wait(timeout):
             self._tx.close()
@@ -300,10 +304,27 @@ class Robot:
             capabilities=frozenset(capabilities),
         )
         self._closed = False
+        # One stop flag per session. close() may run ON the keepalive thread (an on_link_lost
+        # handler that reconnects); a shared flag that open() cleared would un-signal that
+        # thread's exit before it woke, leaving two keepalives re-sending into the edge.
+        stop = threading.Event()
+        self._stop = stop
         self._keepalive = threading.Thread(
-            target=self._keepalive_loop, name="asimov-sdk-keepalive", daemon=True
+            target=self._keepalive_loop, args=(stop,), name="asimov-sdk-keepalive", daemon=True
         )
         self._keepalive.start()
+
+    def _only_from[**P](self, tx: Transport, handler: Callable[P, None]) -> Callable[P, None]:
+        """Wrap a transport callback so only the transport this Robot is CURRENTLY on may call
+        it. A closed transport keeps its subscriber list and its reader thread is joined
+        best-effort, so a late sample from the previous lane must not become this session's
+        state, frame or handshake."""
+
+        def guarded(*args: P.args, **kwargs: P.kwargs) -> None:
+            if self._transport is tx:
+                handler(*args, **kwargs)
+
+        return guarded
 
     def close(self) -> None:
         """Zero velocity if one is held, stop re-sending a held trajectory, then drop the link.
@@ -313,6 +334,7 @@ class Robot:
             if self._closed:
                 return
             self._closed = True
+            tx = self._transport  # pinned here: a connect() racing us may swap the lane
             had_velocity = self._latched is not None
             self._latched = None
             self._generation += 1
@@ -323,9 +345,11 @@ class Robot:
             if self._keepalive is not threading.current_thread():
                 self._keepalive.join(timeout=2.0)
             self._keepalive = None
+        if tx is None:
+            return
         if had_velocity:
-            self._send_safety_zero("close")
-        self._tx.close()
+            self._send_safety_zero("close", tx)
+        tx.close()
 
     def __enter__(self) -> Self:
         return self
@@ -711,10 +735,10 @@ class Robot:
             self._call(hook, sent)
         return sent
 
-    def _keepalive_loop(self) -> None:
+    def _keepalive_loop(self, stop: threading.Event) -> None:
         interval = 1.0 / KEEPALIVE_HZ
         last_seen = time.monotonic()
-        while not self._stop.wait(interval):
+        while not stop.wait(interval):
             s = self._state
             if s is not None:
                 last_seen = s.received_at
@@ -723,7 +747,7 @@ class Robot:
                     LinkLostError(
                         f"no state from {self._tx.endpoint} for {self.link_timeout:.1f}s; "
                         "a zero velocity was sent and any held trajectory stopped; "
-                        "close() and open() to reconnect"
+                        "close() and connect() again to reconnect"
                     )
                 )
             with self._lock:
@@ -762,13 +786,13 @@ class Robot:
             except Exception:
                 log.exception("on_link_lost raised")
 
-    def _send_safety_zero(self, why: str) -> None:
+    def _send_safety_zero(self, why: str, tx: Transport | None = None) -> None:
         """Best-effort zero velocity on close() and link loss. Bypasses the closed/lost
         checks in ``_send`` on purpose, but still reaches the recording hook: a log whose
         last word is a nonzero setpoint would misreport what actually went out."""
         zero = Velocity()
         try:
-            seq = self._tx.send(zero)
+            seq = (tx if tx is not None else self._tx).send(zero)
         except Exception:
             log.debug("%s: the zero-velocity frame did not go out", why, exc_info=True)
             return

@@ -37,6 +37,9 @@ jobs:
       - name: Ruff (format)
         run: uv run ruff format --check .
 
+      - name: No merge-conflict markers (they pass ruff, mypy and pytest inside a docstring)
+        run: '! git grep -nE "^(<{7}|>{7})( |$)" -- .'
+
       - name: Mypy (strict)
         run: uv run mypy
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from asimov_sdk import (
     ConnectError,
     ConnectionConfig,
+    LinkLostError,
     LiveKitConfig,
     ManagerConfig,
     NotConnectedError,
@@ -88,13 +90,30 @@ class _Manager(HTTPServer):
             "expires_at": "2099-01-01T00:00:00Z",
         }
         self.minted = 0
+        self.raw_body: bytes | None = None  # when set, answered verbatim with raw_type
+        self.raw_type = "text/html"
+        self.redirect_to: str | None = None  # when set, every request is a 302 there
         server = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 length = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(length) or b"{}")
+                raw = self.rfile.read(length)
+                body = json.loads(raw) if raw.startswith(b"{") else {}
                 server.requests.append((dict(self.headers), body))
+                if server.redirect_to:
+                    self.send_response(302)
+                    self.send_header("Location", server.redirect_to)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if server.raw_body is not None:
+                    self.send_response(200)
+                    self.send_header("Content-Type", server.raw_type)
+                    self.send_header("Content-Length", str(len(server.raw_body)))
+                    self.end_headers()
+                    self.wfile.write(server.raw_body)
+                    return
                 server.minted += 1
                 reply = dict(server.reply)
                 if server.status == 200:
@@ -131,10 +150,12 @@ def test_manager_config_asks_the_manager_with_the_credential_and_mints_per_join(
     assert headers["Authorization"] == "Bearer cred-123"
     assert body == {"label": "laptop"}
     assert manager.requests[0][0]["Content-Type"] == "application/json"
-    # the token is a callable: every join asks again, so a reconnect gets a fresh token
+    # the token is a callable: the first join uses the token already minted (nothing minted
+    # is thrown away), every later join asks the manager again
     assert callable(lk.token)
+    assert lk.token() == "jwt-1"
     assert lk.token() == "jwt-2"
-    assert lk.token() == "jwt-3"
+    assert manager.minted == 2
 
 
 def test_manager_config_builds_the_livekit_transport_from_the_managers_answer(manager):
@@ -142,7 +163,7 @@ def test_manager_config_builds_the_livekit_transport_from_the_managers_answer(ma
     tx = cfg.transport_for("livekit")
     assert isinstance(tx, LiveKitTransport)
     assert tx.endpoint.startswith("robot-menlo-0042@ws://robot:7880")
-    assert manager.minted == 1  # one round trip to learn url + room; the join mints again
+    assert manager.minted == 1  # one round trip; its token is the one the first join uses
 
 
 def test_a_manager_that_refuses_is_a_connect_error_carrying_its_reason(manager):
@@ -160,6 +181,46 @@ def test_an_old_manager_without_the_token_fields_is_reported(manager):
     manager.reply = {"status": "ok"}
     with pytest.raises(ConnectError, match="answered without url, room"):
         ManagerConfig(url=manager.url, credential="c").resolve()
+
+
+def test_a_redirecting_manager_is_refused_and_the_credential_stays_home(manager):
+    """urllib follows redirects WITH the Authorization header; the SDK must not."""
+    elsewhere = _Manager()
+    try:
+        manager.redirect_to = elsewhere.url + "/api/livekit/token"
+        with pytest.raises(ConnectError, match=r"redirected to .*use that address"):
+            ManagerConfig(url=manager.url, credential="bearer-secret").resolve()
+        assert elsewhere.requests == []  # the credential never left for the other host
+        assert manager.requests[0][0]["Authorization"] == "Bearer bearer-secret"
+    finally:
+        elsewhere.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("body", "ctype", "match"),
+    [
+        (b"<html>login</html>", "text/html", "did not answer with JSON"),
+        (b"[1, 2, 3]", "application/json", "JSON list, not an object"),
+        (b'"nope"', "application/json", "JSON str, not an object"),
+        (b"\xff\xfe", "application/octet-stream", "did not answer with JSON"),
+        (b"x" * (70 * 1024), "application/json", "more than"),
+    ],
+)
+def test_a_non_token_answer_is_a_connect_error_not_a_traceback(manager, body, ctype, match):
+    manager.raw_body, manager.raw_type = body, ctype
+    with pytest.raises(ConnectError, match=match):
+        ManagerConfig(url=manager.url, credential="c").resolve()
+
+
+def test_secrets_stay_out_of_repr():
+    cfg = ConnectionConfig(
+        udp=UdpConfig("h"),
+        livekit=ManagerConfig(url="http://m", credential="sdk_live_SECRET"),
+    )
+    assert "SECRET" not in repr(cfg)
+    assert "tok-SECRET" not in repr(LiveKitConfig("ws://x", "r", "tok-SECRET"))
+    with pytest.raises(ValueError, match="timeout must be positive"):
+        ManagerConfig(url="http://m", credential="c", timeout=0)
 
 
 # ── Robot(cfg).connect(mode): bind, then choose, then switch ─────────────────────────
@@ -248,6 +309,90 @@ def test_the_same_robot_switches_lanes_and_keeps_its_identity(edge):
         robot.close()
 
 
+def test_a_lane_this_robot_left_cannot_write_into_the_next_session(edge):
+    """A closed transport keeps its subscriber list and its reader may outlive close();
+    nothing it delivers may become the new session's frame, audio or state."""
+    cfg = _FakeLanes(edge)
+    robot = Robot(cfg).connect("livekit", timeout=3.0)
+    try:
+        assert robot.camera.latest() is None
+        assert robot.microphone.latest() is None  # both streams attached to this lane
+        old = cfg.clients[-1]
+        old.push_frame(1)
+        old.push_audio(1)
+        old.push_audio(2)
+        assert robot.camera.latest() is not None
+        assert next(iter(robot.microphone.chunks(timeout=1.0))).sequence == 1
+    finally:
+        robot.close()
+
+    robot.connect("hybrid", timeout=3.0)
+    try:
+        assert robot.camera.latest() is None  # attaches to the new lane
+        assert robot.microphone.latest() is None
+        old.push_frame(1234)  # the previous room speaks after we left it
+        old.push_audio(3)
+        assert robot.camera.latest() is None
+        with pytest.raises(TimeoutError):
+            next(iter(robot.microphone.chunks(timeout=0.2)))  # chunk 2 did not replay either
+        assert robot.microphone.dropped == 0
+        cfg.clients[-1].push_frame(7)
+        cfg.clients[-1].push_audio(9)
+        assert robot.camera.latest().sequence == 7
+        assert next(iter(robot.microphone.chunks(timeout=1.0))).sequence == 9
+    finally:
+        robot.close()
+
+
+def _keepalive_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name == "asimov-sdk-keepalive"]
+
+
+def test_reconnecting_from_on_link_lost_leaves_exactly_one_keepalive(edge):
+    """close()+connect() inside on_link_lost runs ON the keepalive thread. The old thread
+    must exit; a second one re-sending into the edge would double the command rate."""
+    before = len(_keepalive_threads())
+    robot = Robot(_FakeLanes(edge))
+    reconnected = threading.Event()
+
+    def reconnect(exc: LinkLostError) -> None:
+        robot.link_timeout = 2.0  # back to normal before the new session starts
+        robot.close()
+        robot.connect("udp", timeout=3.0)
+        reconnected.set()
+
+    robot.on_link_lost = reconnect
+    robot.connect("udp", timeout=3.0)
+    try:
+        robot.link_timeout = 0.0  # the next keepalive tick declares the link lost
+        assert reconnected.wait(3.0)
+        time.sleep(0.3)  # long enough for a stale thread to take its next tick
+        assert len(_keepalive_threads()) == before + 1
+        assert robot.connected
+    finally:
+        robot.close()
+    time.sleep(0.3)
+    assert len(_keepalive_threads()) == before
+
+
+def test_a_frames_generator_held_across_a_reconnect_follows_the_new_lane(edge):
+    cfg = _FakeLanes(edge)
+    robot = Robot(cfg).connect("livekit", timeout=3.0)
+    frames: Iterator = robot.camera.frames(timeout=1.0)  # a generator: nothing runs until next()
+    try:
+        threading.Timer(0.2, lambda: cfg.clients[-1].push_frame(1)).start()
+        assert next(frames).sequence == 1
+    finally:
+        robot.close()
+    robot.connect("hybrid", timeout=3.0)
+    try:
+        # next() itself must attach to the new lane; the frame arrives while it is waiting
+        threading.Timer(0.2, lambda: cfg.clients[-1].push_frame(2)).start()
+        assert next(frames).sequence == 2
+    finally:
+        robot.close()
+
+
 def test_connect_while_connected_raises_and_leaves_the_session_alone(edge):
     robot = Robot(_FakeLanes(edge)).connect("udp", timeout=3.0)
     try:
@@ -297,7 +442,7 @@ def test_manager_config_end_to_end_reaches_the_fake_room(edge, manager, monkeypa
     robot = Robot(cfg).connect("livekit", timeout=3.0)
     try:
         assert robot.info.transport == "livekit"
-        assert seen_tokens == ["jwt-2"]  # first call learned url+room, the join minted #2
+        assert seen_tokens == ["jwt-1"]  # the join uses the token the first call minted
         assert manager.requests[-1][0]["Authorization"] == "Bearer cred"
     finally:
         robot.close()

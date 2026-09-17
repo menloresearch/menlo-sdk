@@ -43,7 +43,13 @@ from asimov_sdk._state import (
     RobotInfo,
     State,
 )
-from asimov_sdk.connection import ConnectionConfig, LiveKitConfig, ManagerConfig, UdpConfig
+from asimov_sdk.connection import (
+    ConnectionConfig,
+    ConnectMode,
+    LiveKitConfig,
+    ManagerConfig,
+    UdpConfig,
+)
 from asimov_sdk.recording import Recording
 from asimov_sdk.robot import Robot
 from asimov_sdk.transport import HybridTransport, LiveKitTransport, Transport, UdpTransport
@@ -63,6 +69,7 @@ __all__ = [
     "Command",
     "CommandRefusedError",
     "ConnectError",
+    "ConnectMode",
     "ConnectionConfig",
     "Frame",
     "HybridTransport",

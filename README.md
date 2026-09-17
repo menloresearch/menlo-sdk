@@ -185,7 +185,7 @@ sent.require()  # raises CommandRefusedError on Refused
 - `duration=` bounds a hold on the client; the SDK sends the zero itself when time is up.
 - `close()` sends a zero if a velocity was held and stops re-sending a held trajectory.
   `LinkLostError` (no state for `link_timeout` seconds) does the same, then every verb raises
-  until you `close()` and `open()` again. A trajectory that is no longer re-sent is DAMPed by
+  until you `close()` and `connect()` again. A trajectory that is no longer re-sent is DAMPed by
   the edge two seconds later; there is no neutral setpoint the SDK could send instead.
 - A verb is never dropped as superseded; only the keepalive's re-sends are. A new verb ends
   any running `goto()`.
@@ -235,7 +235,7 @@ sent.require()  # raises CommandRefusedError on Refused
 | Exception | When |
 |---|---|
 | `ConnectError` / `ProtocolMismatchError` | no state within `timeout`; protocol version differs |
-| `NotConnectedError` | a call before `open()` or after `close()` |
+| `NotConnectedError` | a call before `connect()` or after `close()` |
 | `LinkLostError` | no state for `link_timeout` s; the session is over |
 | `WaitTimeoutError` (also `TimeoutError`) | a wait's condition was not met in time; `.last` is the last state |
 | `StateStaleError` | the stream went quiet during a wait |

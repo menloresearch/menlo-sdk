@@ -17,7 +17,9 @@ from typing import Literal
 
 from asimov_sdk._command import Limits
 
-TransportKind = str  # a transport names its wire: UdpTransport says "udp"
+#: A transport names its wire. A Literal, so a check against a name that no longer exists
+#: is a type error rather than a test that can never pass.
+TransportKind = Literal["udp", "hybrid", "livekit"]
 
 #: What a robot, over a given transport, can do for a script. ``drive`` and ``state`` are
 #: what every transport must carry; the rest depend on the robot and the wire.
