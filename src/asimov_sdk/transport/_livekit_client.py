@@ -110,8 +110,8 @@ class LiveKitClient(Protocol):
         """Leave the room and stop the loop thread. Idempotent; never raises."""
 
     def wait_for_tracks(self, timeout: float) -> frozenset[str]:
-        """Block until both media tracks are subscribed, or ``timeout`` passes. Returns
-        whatever is subscribed by then."""
+        """Block until the robot's video track is subscribed (audio, if any, follows on its
+        own), or ``timeout`` passes. Returns whatever is subscribed by then."""
 
     def publish_data(self, payload: bytes, *, topic: str) -> None:
         """One reliable data packet. Returns as soon as the packet is queued on the loop —

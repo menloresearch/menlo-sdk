@@ -106,8 +106,11 @@ def main() -> int:
     p.add_argument("--timeout", type=float, default=25.0)
     args = p.parse_args()
 
-    if args.mode != "udp" and not args.token:
-        p.error("--token is required for hybrid and livekit modes (the SDK never mints one)")
+    if args.mode != "udp" and not (args.token or args.manager):
+        p.error(
+            "hybrid and livekit modes need --manager (the SDK mints the token through it) "
+            "or --token (one you already hold)"
+        )
 
     robot = connect(args)
     print(f"connected: {robot.info.dof} joints over {robot.info.transport}", flush=True)
@@ -150,8 +153,9 @@ def main() -> int:
 
             time.sleep(max(0.0, interval - (time.monotonic() - tick_started)))
 
+        # End at zero velocity, still balancing in MOVE. On a free-standing biped damp()
+        # drops the robot where it stands; leave that to the operator.
         robot.stop()
-        robot.damp()
     finally:
         try:
             robot.stop()

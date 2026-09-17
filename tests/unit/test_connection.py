@@ -272,6 +272,8 @@ def test_a_bound_robot_touches_nothing_until_connect(edge):
         robot.camera.latest()  # media resolves the transport lazily: none yet
     with pytest.raises(NotConnectedError, match=r"call connect\(mode\) instead of open"):
         robot.open()
+    with pytest.raises(NotConnectedError, match="live session"):
+        robot.has("camera")  # not False: nothing is known about a robot we never reached
     assert edge.received == []
 
 

@@ -270,6 +270,8 @@ class Robot:
         # Verbs stay refused (NotConnectedError) until the handshake below has passed.
         if not self._state_seen.wait(timeout):
             self._tx.close()
+            # A transport MAY carry a ``silence_hint``: what to check when a connect hears no
+            # state on its wire. It knows the setup that feeds it; this class does not.
             raise ConnectError(
                 f"no state from the robot at {self._tx.endpoint} within {timeout:.1f}s. "
                 f"{getattr(self._tx, 'silence_hint', '')}"
@@ -380,6 +382,8 @@ class Robot:
         Capabilities the robot reported about *itself* (``battery``) are not the wire's to
         lose, so they stay until the session ends.
         """
+        if self._closed:
+            raise NotConnectedError("not connected: has() describes a live session")
         cap = str(capability)
         return cap in self._tx.capabilities or cap in self._derived_caps
 
