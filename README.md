@@ -2,28 +2,49 @@
 
 Drive an Asimov robot from Python.
 
-```python
-from asimov_sdk import ConnectionConfig, ManagerConfig, Mode, Robot, UdpConfig
+```bash
+asimov login http://asimov.local --credential <from `asimovctl sdk-token create` on the robot>
+```
 
-cfg = ConnectionConfig(
-    udp=UdpConfig(host="asimov.local"),  # the LAN lane
-    livekit=ManagerConfig(url="http://asimov.local:8080", credential=CRED),  # the robot's manager
-)
-with Robot(cfg).connect("hybrid") as robot:  # or "udp" / "livekit" — same Robot, pick per session
+```python
+from asimov_sdk import Mode, Robot
+
+with Robot().connect() as robot:  # the robot you logged in to; returns once it has reported state
     if robot.state.mode is Mode.DAMP:  # STAND is the wake-up verb; never stiffen a balancing robot
         robot.stand()
         robot.wait_for(Mode.STAND, timeout=15)
-    robot.set_velocity(vx=0.25, duration=4.0)  # m/s, held for 4 s, then zero
+    robot.set_velocity(vx=0.25, duration=4.0, wait=True)  # m/s, held 4 s, zero sent, then returns
     robot.wait_for(Mode.MOVE)
-    # Leaving the block zeroes the velocity (so does the hold ending). Either way the
-    # robot stays in MOVE at zero velocity, balancing — that is how it stands still.
+    # The robot is now in MOVE at zero velocity, balancing — that is how it stands still.
     # Do not ask for STAND here: it is a stiffen with no balance loop — see below.
     print(robot.state.joint("L_Knee").pos, robot.state.battery)  # battery is None without a BMS
+    print(robot.camera.photo().to_jpeg()[:4])  # camera, microphone and speaker ride the same room
+```
+
+`Robot()` with no config finds the robot: `ASIMOV_MANAGER_URL` + `ASIMOV_CREDENTIAL` in the
+environment, else the default in `~/.asimov/robots.toml` (written by `asimov login`, or by
+`connect(persist=True)` / `ASIMOV_PERSIST=1` after a connect that worked), else a
+`ConnectError` naming both. `asimov robots`, `asimov use <name>` and `asimov logout <name>`
+manage the store; `$ASIMOV_HOME` moves it; the file is 0600. Writing agents: start from
+[`docs/SKILL.md`](docs/SKILL.md).
+
+Or say where the robot is, lane by lane:
+
+```python
+from asimov_sdk import ConnectionConfig, ManagerConfig, Robot, UdpConfig
+
+cfg = ConnectionConfig(
+    udp=UdpConfig(host="asimov.local"),  # the LAN lane
+    livekit=ManagerConfig(url="http://asimov.local", credential=CRED),  # the robot's manager
+)
+with Robot(cfg).connect("hybrid") as robot:  # or "udp" / "livekit" — same Robot, pick per session
+    ...
 ```
 
 One `Robot`, one API, and the lane is chosen last. Describe the robot's wires once in a
 `ConnectionConfig` — one typed class per lane, nothing mixed — bind a `Robot` to it, then
 `connect(mode)`; `close()` and `connect()` again to switch lanes on the same `Robot`.
+`connect()` with no mode takes the config's one lane (a manager alone is `"livekit"`).
 Commands land in the edge's arbiter beside the robot's other controllers and pass the same
 safety layer, whichever lane they arrive on.
 
@@ -38,7 +59,11 @@ safety layer, whichever lane they arrive on.
 The `livekit` slot is either `ManagerConfig(url, credential)` — the SDK asks the robot's
 manager for the room and a fresh join token on every connect, so you never hold a LiveKit
 token — or `LiveKitConfig(url, room, token)` when you run your own SFU.
-`cfg.available_modes()` says which modes a config can reach.
+`cfg.available_modes()` says which modes a config can reach. The manager URL is whatever
+the robot's web UI answers on — `http://192.168.22.32` (port 80), `http://asimov.local:8080`,
+or a bare host (`http://` assumed); no port is assumed. A manager whose SFU runs beside the
+edge reports `ws://localhost:7880`; the SDK substitutes the manager's host so the room is
+reachable from your machine.
 
 Same verbs, same waits, same error model on all three: `robot.py` does not know which wire
 it is on. Pick **udp** on the LAN when you need no camera, **hybrid** on the LAN when you
@@ -72,7 +97,10 @@ that mints a fresh one per join (`token=lambda: fetch()`).
 it would be a lie. The SDK reads it back instead: `transport.identity`, and
 `robot.info.endpoint` reads `room@url as <identity>` once joined. One token is one
 participant: two participants in a room need two tokens, or the server disconnects the
-earlier duplicate.
+earlier duplicate. With `ManagerConfig` every session gets its own identity,
+`sdk-<credential id>-<host>-<6 random hex>`, so two scripts on one credential coexist;
+`ManagerConfig(label="agent")` fixes the suffix when you want a recognisable name — and two
+sessions with the same label then evict each other.
 
 ## Install
 
@@ -110,21 +138,26 @@ Live wants (about 1 fps of JPEG plus 16 kHz PCM), so this SDK adds no model glue
 ## API in one screen
 
 ```python
+robot = Robot()  # ASIMOV_MANAGER_URL + ASIMOV_CREDENTIAL, else ~/.asimov/robots.toml
 cfg = ConnectionConfig(
     udp=UdpConfig(host, command_port=8850, state_bind=("0.0.0.0", 8851), state_source=None),
-    livekit=ManagerConfig(url="http://host:8080", credential=CRED, label=None),
+    livekit=ManagerConfig(url="http://host", credential=CRED, label=None),
     # or: livekit=LiveKitConfig(url="ws://host:7880", room="robot-<serial>", token=str_or_callable)
 )
 cfg.available_modes()  # ("udp", "hybrid", "livekit")
 robot = Robot(cfg, limits=None, link_timeout=2.0)  # bound, no network yet
 robot.connect("hybrid", timeout=5.0, media_timeout=3.0, connect_timeout=10.0)  # returns robot
+robot.connect()  # the config's one lane; ValueError when it has several
+robot.connect("livekit", require_state=False)  # media now; state/verbs unlock when the firmware reports
+robot.connect("livekit", persist=True)  # save URL + credential to the store after success
 robot.close()
 robot.connect("udp")  # switch lanes on the same Robot
 robot = Robot(transport, limits=None, link_timeout=2.0)
 robot.open()  # any Transport
 
 # verbs — each returns a Sent immediately; the wire's own vocabulary
-robot.set_velocity(vx, vy, vyaw, duration=None)  # held at 10 Hz until superseded/stop/duration
+robot.set_velocity(vx, vy, vyaw, duration=None, wait=False)  # held at 10 Hz until superseded/stop/duration
+robot.set_velocity(vx=0.25, duration=1.0, wait=True)  # blocks until the hold ended and its zero left
 robot.stop()  # zero velocity; stays in MOVE at rest, still balancing — how it stands still
 robot.stand()  # one-shot; STIFFEN to a pose, no balance loop — see the warning below
 robot.damp()  # one-shot; motors compliant NOW — the emergency verb
@@ -142,6 +175,7 @@ s = robot.state  # latest sample: mode, joints, gravity, gyro, quat, euler, aler
 s.age_s
 s.upright
 s.faulted
+s.yaw  # heading, rad, counter-clockwise; a turn is math.remainder(after - before, math.tau)
 s.joint("L_Knee").pos
 s.battery.soc_percent
 robot.info  # transport, endpoint, dof, joint_names, protocol_version, limits, capabilities
@@ -150,6 +184,7 @@ robot.require("drive", "battery")
 
 # media — UnsupportedError when this robot/transport does not carry it
 robot.camera.photo(timeout=5)  # ONE fresh rgb8 Frame; WaitTimeoutError if the camera is quiet
+robot.camera.photo().to_jpeg(quality=85)  # bytes; needs Pillow, else ImportError naming it
 robot.camera.latest()
 robot.camera.frames(timeout=5)  # latest-wins iterator
 robot.camera.subscribe(cb)
@@ -183,6 +218,9 @@ sent.require()  # raises CommandRefusedError on Refused
 - A held velocity is re-sent at 10 Hz. The edge zeroes velocity two seconds after the last
   one it received; the robot then stands in place in MOVE.
 - `duration=` bounds a hold on the client; the SDK sends the zero itself when time is up.
+  `set_velocity` returns at once either way — the next verb, or `close()` at the end of a
+  `with` block, cuts an unexpired hold short. `wait=True` blocks until the hold has ended
+  and its zero has gone out.
 - `close()` sends a zero if a velocity was held and stops re-sending a held trajectory.
   `LinkLostError` (no state for `link_timeout` seconds) does the same, then every verb raises
   until you `close()` and `connect()` again. A trajectory that is no longer re-sent is DAMPed by
@@ -235,7 +273,7 @@ sent.require()  # raises CommandRefusedError on Refused
 | Exception | When |
 |---|---|
 | `ConnectError` / `ProtocolMismatchError` | no state within `timeout`; protocol version differs |
-| `NotConnectedError` | a call before `connect()` or after `close()` |
+| `NotConnectedError` | a call before `connect()` or after `close()`; `state`/verbs in a `require_state=False` session before the robot reported |
 | `LinkLostError` | no state for `link_timeout` s; the session is over |
 | `WaitTimeoutError` (also `TimeoutError`) | a wait's condition was not met in time; `.last` is the last state |
 | `StateStaleError` | the stream went quiet during a wait |
@@ -266,6 +304,9 @@ absent: the real-edge integration job and the vendored-bindings check.
 ```
 src/asimov_sdk/
   robot.py          Robot: verbs, waits, keepalive, callbacks, goto
+  connection.py     ConnectionConfig, UdpConfig, LiveKitConfig, ManagerConfig
+  store.py          ~/.asimov/robots.toml, the zero-config lookup, persist
+  cli.py            the `asimov` console script: login / robots / use / logout
   _state.py         State, Joint, Alert, Battery, RobotInfo, Mode
   _command.py       Velocity, ModeCommand, Trajectory, Limits
   _outcome.py       Sent, Applied, Refused, Unknown, Refusal
@@ -279,6 +320,7 @@ src/asimov_sdk/
   _vendor/          generated asimov.io bindings at the pinned tag
 examples/           runnable scripts; examples/demos/ are the three walkthroughs,
                     examples/agent_room.py is the LiveKit-agent room convention
+docs/SKILL.md       the two-page reference for an agent writing a script against this SDK
 ```
 
 ## License

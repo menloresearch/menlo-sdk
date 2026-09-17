@@ -92,7 +92,7 @@ def main() -> int:
     )
     p.add_argument(
         "--credential",
-        default=os.environ.get("ASIMOV_SDK_CREDENTIAL", ""),
+        default=os.environ.get("ASIMOV_CREDENTIAL", ""),
         help="SDK credential from the manager's /sdk page (with --manager)",
     )
     p.add_argument("--host", default="127.0.0.1", help="the edge's UDP lane")

@@ -43,7 +43,7 @@ Running it
     # the agent FRAMEWORK's LiveKit credentials — never the SDK's:
     export LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=...
     # the SDK's: the robot's manager and a credential from its /sdk page
-    export ASIMOV_MANAGER_URL=http://<robot>:8080 ASIMOV_SDK_CREDENTIAL=...
+    export ASIMOV_MANAGER_URL=http://<robot> ASIMOV_CREDENTIAL=...   # or: asimov login
     python examples/agent_room.py dev
 
 ``LIVEKIT_API_KEY``/``LIVEKIT_API_SECRET`` belong to the agent framework, which is a server
@@ -60,7 +60,7 @@ from asimov_sdk import ConnectionConfig, ManagerConfig, Mode, Robot
 
 # The robot's manager, and a credential from its /sdk page. No LiveKit token anywhere.
 MANAGER = os.environ.get("ASIMOV_MANAGER_URL", "http://127.0.0.1:8080")
-CREDENTIAL = os.environ.get("ASIMOV_SDK_CREDENTIAL", "")
+CREDENTIAL = os.environ.get("ASIMOV_CREDENTIAL", "")
 
 
 def drive_from_the_same_room() -> None:
@@ -115,7 +115,7 @@ def agent_entrypoint(ctx: object) -> None:
 if __name__ == "__main__":
     if not CREDENTIAL:
         raise SystemExit(
-            "set ASIMOV_SDK_CREDENTIAL to a credential from the robot's manager (/sdk page). "
+            "set ASIMOV_CREDENTIAL to a credential from the robot's manager (/sdk page). "
             "The SDK asks the manager for the room and a LiveKit token itself."
         )
     drive_from_the_same_room()
