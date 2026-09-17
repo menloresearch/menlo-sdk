@@ -55,7 +55,7 @@ __all__ = ["COMMAND_PORT", "STATE_PORT", "UdpTransport", "state_from_robot_state
 class UdpTransport:
     """RobotCommand out, RobotState in. See the module docstring for the contract."""
 
-    kind: TransportKind = "direct"
+    kind: TransportKind = "udp"
     default_outcome_timeout: float = 0.5
     silence_hint: str = (
         "Is the edge running with --udp-control, and is its --udp-state-host pointing at "

@@ -29,6 +29,7 @@ from asimov_sdk import (
     WaitTimeoutError,
 )
 from asimov_sdk.robot import KEEPALIVE_HZ
+from tests.conftest import connect_udp
 
 # ── connect ───────────────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ from asimov_sdk.robot import KEEPALIVE_HZ
 def test_connect_waits_for_the_first_state_and_describes_the_robot(edge, robot):
     assert robot.connected
     assert robot.info.dof == 25
-    assert robot.info.transport == "direct"
+    assert robot.info.transport == "udp"
     assert robot.info.joint_names is not None and robot.info.joint_names[3] == "L_Knee"
     assert robot.state.mode is Mode.DAMP
     assert robot.state.upright is True
@@ -45,21 +46,21 @@ def test_connect_waits_for_the_first_state_and_describes_the_robot(edge, robot):
 def test_connect_refuses_when_nobody_answers():
     """A UDP socket that hears nothing is talking to nobody. Say so, and say the fix."""
     with pytest.raises(ConnectError) as exc:
-        Robot.connect("127.0.0.1", command_port=1, state_bind=("127.0.0.1", 0), timeout=0.3)
+        connect_udp("127.0.0.1", command_port=1, state_bind=("127.0.0.1", 0), timeout=0.3)
     assert "--udp-control" in str(exc.value)
 
 
 def test_connect_refuses_a_protocol_version_it_was_not_built_for(edge):
     edge.state.protocol_version = 99
     with pytest.raises(ProtocolMismatchError) as exc:
-        Robot.connect(
+        connect_udp(
             "127.0.0.1",
             command_port=edge.command_port,
             state_bind=("127.0.0.1", edge.state_port),
             timeout=2,
         )
     assert exc.value.observed == 99 and exc.value.expected == 1
-    r = Robot.connect(
+    r = connect_udp(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),
@@ -287,7 +288,7 @@ def test_close_without_a_held_velocity_sends_nothing(edge, robot):
 
 
 def test_with_block_closes_and_the_state_names_joints(edge):
-    with Robot.connect(
+    with connect_udp(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),
@@ -503,8 +504,8 @@ def test_a_resolved_outcome_leaves_the_pending_table(edge, robot):
 def test_state_source_allowlist_drops_everyone_else(edge):
     kw = dict(command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port))
     with pytest.raises(ConnectError):
-        Robot.connect("127.0.0.1", timeout=0.5, state_source="10.255.255.1", **kw)
-    with Robot.connect("127.0.0.1", timeout=2.0, state_source="localhost", **kw) as r:
+        connect_udp("127.0.0.1", timeout=0.5, state_source="10.255.255.1", **kw)
+    with connect_udp("127.0.0.1", timeout=2.0, state_source="localhost", **kw) as r:
         assert r.connected
 
 
@@ -612,7 +613,7 @@ def test_an_outcome_for_a_sequence_we_never_sent_is_dropped(edge, robot):
 
 
 def test_connect_direct_takes_link_timeout(edge):
-    with Robot.connect(
+    with connect_udp(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),

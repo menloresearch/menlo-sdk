@@ -113,14 +113,28 @@ class AudioChunk:
 class _Stream[T]:
     """Latest-value store with a condition variable; the base of Camera and Microphone."""
 
-    def __init__(self, capability: str, transport: Transport) -> None:
+    def __init__(self, capability: str, transport: Transport | Callable[[], Transport]) -> None:
         self._capability = capability
-        self._tx = transport
+        # A Robot bound to a ConnectionConfig swaps transports between connects, so the
+        # stream asks for the current one each time instead of holding a reference.
+        self._get_tx: Callable[[], Transport] = (
+            transport if callable(transport) else (lambda: transport)
+        )
         self._latest: T | None = None
         self._count = 0
         self._cv = threading.Condition()
         self._subscribers: list[Callable[[T], None]] = []
         self._attached = False
+
+    @property
+    def _tx(self) -> Transport:
+        return self._get_tx()
+
+    def _rebind(self) -> None:
+        """The Robot switched transports: attach again on first use, forget the old items."""
+        with self._cv:
+            self._attached = False
+            self._latest = None
 
     def _require(self) -> None:
         if self._capability not in self._tx.capabilities:
@@ -185,7 +199,7 @@ class Camera(_Stream[Frame]):
     def __init__(
         self,
         capability: str,
-        transport: Transport,
+        transport: Transport | Callable[[], Transport],
         microphone: Microphone | None = None,
     ) -> None:
         super().__init__(capability, transport)
@@ -254,7 +268,7 @@ class Microphone(_Stream[AudioChunk]):
 
     QUEUE = 256  # chunks (2.5 s of 10 ms audio)
 
-    def __init__(self, capability: str, transport: Transport) -> None:
+    def __init__(self, capability: str, transport: Transport | Callable[[], Transport]) -> None:
         super().__init__(capability, transport)
         self._queue: deque[AudioChunk] = deque(maxlen=self.QUEUE)
         self.dropped = 0
@@ -284,8 +298,14 @@ class Microphone(_Stream[AudioChunk]):
 class Speaker:
     """``robot.speaker``: play audio on the robot."""
 
-    def __init__(self, transport: Transport) -> None:
-        self._tx = transport
+    def __init__(self, transport: Transport | Callable[[], Transport]) -> None:
+        self._get_tx: Callable[[], Transport] = (
+            transport if callable(transport) else (lambda: transport)
+        )
+
+    @property
+    def _tx(self) -> Transport:
+        return self._get_tx()
 
     def play(self, chunk: AudioChunk) -> None:
         """Send one chunk to the robot's speaker. Raises :class:`UnsupportedError` when this

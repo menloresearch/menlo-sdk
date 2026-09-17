@@ -5,7 +5,7 @@ robot publishes its camera and microphone as ordinary LiveKit tracks, so an agen
 framework subscribes to them the way it subscribes to a human's webcam, and the SDK joins
 the same room as one more participant to do the driving.
 
-    ┌──────────────┐        LiveKit room "asimov-<robot id>"        ┌──────────────┐
+    ┌──────────────┐       LiveKit room "robot-<robot serial>"       ┌──────────────┐
     │ robot's edge │  video+audio tracks ─────────────────────────> │ agent        │
     │              │  <──────────── data topic "commands" ───────── │ (this file)  │
     │              │  ─────────────  data track "state" ──────────> │ + asimov_sdk │
@@ -13,13 +13,13 @@ the same room as one more participant to do the driving.
 
 The room convention
 -------------------
-* **room**: one per robot, named by the robot's id — every participant that may drive it
-  is admitted to that room and nowhere else.
+* **room**: one per robot, ``robot-<sanitized serial>`` — every participant that may drive it
+  is admitted to that room and nowhere else. The manager tells the SDK the name.
 * **identity**: a claim INSIDE each participant's token (``sub``), not something a client
-  chooses — the edge's token says ``robot``, a human operator's says their user id, this
-  agent's says something recognisable like ``agent-gemini``. The edge's arbiter decides who
-  holds the body by identity, so the manager mints one token per participant. The SDK has
-  no ``identity`` argument; it reads the token's back and reports it.
+  chooses — the edge's is its serial, an SDK session's is ``sdk-<credential id>[-<label>]``
+  as the manager mints it. The edge's arbiter tracks who is driving by identity, so the
+  manager mints one token per participant. The SDK has no ``identity`` argument; it reads
+  the token's back and reports it (``ManagerConfig(label=...)`` names your session).
 * **data topic "commands"**: one bare serialized ``asimov.io.RobotCommand`` per packet,
   reliable, exactly the protobuf the UDP lane sends. ``asimov_sdk`` writes these for you.
 * **data track "state"**: one bare serialized ``asimov.io.RobotState`` per frame, pushed
@@ -40,29 +40,33 @@ The SDK's job is the robot: verbs, state, waits, safety.
 Running it
 ----------
     pip install "asimov-sdk[livekit]" "livekit-agents[google]~=1.0"
-    export LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=...   # the AGENT's, not the SDK's
-    export ASIMOV_ROOM=asimov-42 ASIMOV_SDK_TOKEN=<join token for that room>
+    # the agent FRAMEWORK's LiveKit credentials — never the SDK's:
+    export LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=...
+    # the SDK's: the robot's manager and a credential from its /sdk page
+    export ASIMOV_MANAGER_URL=http://<robot>:8080 ASIMOV_SDK_CREDENTIAL=...
     python examples/agent_room.py dev
 
 ``LIVEKIT_API_KEY``/``LIVEKIT_API_SECRET`` belong to the agent framework, which is a server
-process. **The SDK never sees them**: it takes a join token, minted by the robot's manager,
-and has no parameter for a secret anywhere.
+process. **The SDK never sees them, or a token**: with ``ManagerConfig`` it asks the robot's
+manager for the room and a fresh join token on every connect, and has no parameter for a
+secret anywhere.
 """
 
 from __future__ import annotations
 
 import os
 
-from asimov_sdk import Mode, Robot
+from asimov_sdk import ConnectionConfig, ManagerConfig, Mode, Robot
 
-ROOM = os.environ.get("ASIMOV_ROOM", "asimov-42")
-URL = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")
-TOKEN = os.environ.get("ASIMOV_SDK_TOKEN", "")
+# The robot's manager, and a credential from its /sdk page. No LiveKit token anywhere.
+MANAGER = os.environ.get("ASIMOV_MANAGER_URL", "http://127.0.0.1:8080")
+CREDENTIAL = os.environ.get("ASIMOV_SDK_CREDENTIAL", "")
 
 
 def drive_from_the_same_room() -> None:
     """The SDK half: join the robot's room, look, and walk. This is all of it."""
-    with Robot.connect_livekit(URL, ROOM, token=TOKEN) as robot:
+    cfg = ConnectionConfig(livekit=ManagerConfig(url=MANAGER, credential=CREDENTIAL, label="agent"))
+    with Robot(cfg).connect("livekit") as robot:
         # endpoint reads "<room>@<url> as <identity>" — the identity the TOKEN claimed.
         print(robot.info)  # transport=livekit, dof, capabilities from the tracks that arrived
 
@@ -109,9 +113,9 @@ def agent_entrypoint(ctx: object) -> None:
 
 
 if __name__ == "__main__":
-    if not TOKEN:
+    if not CREDENTIAL:
         raise SystemExit(
-            "set ASIMOV_SDK_TOKEN to a LiveKit join token for the robot's room. The SDK "
-            "never mints one: ask the robot's manager."
+            "set ASIMOV_SDK_CREDENTIAL to a credential from the robot's manager (/sdk page). "
+            "The SDK asks the manager for the room and a LiveKit token itself."
         )
     drive_from_the_same_room()

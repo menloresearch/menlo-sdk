@@ -9,7 +9,7 @@ fakes this seam in forty lines and never needs livekit installed.
 
 LiveKit is an EXTRA (``pip install "asimov-sdk[livekit]"``). The import happens inside
 :func:`_rtc`, when a room is actually joined — importing the SDK, and
-``Robot.connect()`` on the UDP lane, must work with livekit absent.
+``robot.connect("udp")``, must work with livekit absent.
 
 The room convention, agreed with the edge team:
 
@@ -60,7 +60,7 @@ def _rtc() -> Any:
         raise ConnectError(
             "the LiveKit lane needs the livekit extra, which is not part of the core SDK "
             '(`pip install "asimov-sdk[livekit]"`, or `pip install "livekit>=1.1,<2"`). '
-            "The UDP lane (Robot.connect) needs none of it."
+            "The UDP lane (connect('udp')) needs none of it."
         ) from exc
     return rtc
 
@@ -211,7 +211,8 @@ class _LiveKitClient:
             raise ConnectError(
                 "a LiveKit access token is required. The SDK never holds the LiveKit API "
                 "secret: ask the robot's manager for a token (or pass a callable that "
-                "fetches one) and hand it to connect_livekit()/connect_hybrid()."
+                "fetches one) as LiveKitConfig(token=...), or use ManagerConfig and let the "
+                "SDK ask."
             )
         return token
 

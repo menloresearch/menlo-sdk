@@ -7,11 +7,11 @@ the FIRMWARE reports standing, and raises early if it faults or stops talking in
 import sys
 import time
 
-from asimov_sdk import Mode, Robot
+from asimov_sdk import ConnectionConfig, Mode, Robot, UdpConfig
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect(host) as robot:
+with Robot(ConnectionConfig(udp=UdpConfig(host))).connect("udp") as robot:
     print("standing …")
     robot.stand()
     s = robot.wait_for(Mode.STAND, timeout=15.0)

@@ -17,7 +17,7 @@ from typing import Literal
 
 from asimov_sdk._command import Limits
 
-TransportKind = str  # a transport names its wire: UdpTransport says "direct"
+TransportKind = str  # a transport names its wire: UdpTransport says "udp"
 
 #: What a robot, over a given transport, can do for a script. ``drive`` and ``state`` are
 #: what every transport must carry; the rest depend on the robot and the wire.

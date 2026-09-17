@@ -119,6 +119,33 @@ class FakeEdge:
         self._sock.close()
 
 
+def connect_udp(
+    host: str,
+    *,
+    command_port: int = 8850,
+    state_bind: tuple[str, int] = ("0.0.0.0", 8851),
+    state_source: str | None = None,
+    limits=None,
+    link_timeout: float | None = None,
+    **connect_kw,
+) -> Robot:
+    """``Robot(ConnectionConfig(udp=...)).connect("udp", ...)`` in one call, for tests that
+    only care about the UDP lane."""
+    from asimov_sdk.connection import ConnectionConfig, UdpConfig
+
+    cfg = ConnectionConfig(
+        udp=UdpConfig(
+            host, command_port=command_port, state_bind=state_bind, state_source=state_source
+        )
+    )
+    robot_kw = {}
+    if limits is not None:
+        robot_kw["limits"] = limits
+    if link_timeout is not None:
+        robot_kw["link_timeout"] = link_timeout
+    return Robot(cfg, **robot_kw).connect("udp", **connect_kw)
+
+
 @pytest.fixture
 def edge():
     e = FakeEdge()
@@ -315,11 +342,11 @@ def hybrid_robot(edge):
     r.close()
 
 
-@pytest.fixture(params=["direct", "hybrid", "livekit"])
+@pytest.fixture(params=["udp", "hybrid", "livekit"])
 def any_robot(request, edge):
     """The same robot over each of the three lanes. A behaviour that is not mode-agnostic
     is not done: every promise below is asserted three times."""
-    if request.param == "direct":
+    if request.param == "udp":
         tx = SeamUdpTransport(
             "127.0.0.1", command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port)
         )

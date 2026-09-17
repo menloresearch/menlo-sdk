@@ -54,7 +54,7 @@ class UnsupportedError(AsimovError):
 
 
 class NotConnectedError(AsimovError):
-    """A verb was called before ``open()`` / ``Robot.connect()`` or after ``close``."""
+    """A verb was called before ``robot.connect(mode)`` / ``open()`` or after ``close``."""
 
 
 class LinkLostError(AsimovError):

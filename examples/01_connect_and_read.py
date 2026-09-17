@@ -6,11 +6,11 @@ Against a real robot: its edge must run with --udp-control --udp-state-host <thi
 
 import sys
 
-from asimov_sdk import Robot
+from asimov_sdk import ConnectionConfig, Robot, UdpConfig
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 
-with Robot.connect(host) as robot:
+with Robot(ConnectionConfig(udp=UdpConfig(host))).connect("udp") as robot:
     print(robot.info)  # transport, endpoint, dof, protocol version
     s = robot.state
     print(f"mode      {s.mode.name}")

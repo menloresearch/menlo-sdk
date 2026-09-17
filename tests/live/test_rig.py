@@ -14,13 +14,14 @@ import time
 
 import pytest
 
-from asimov_sdk import Mode, Robot, Unknown
+from asimov_sdk import Mode, Unknown
+from tests.conftest import connect_udp
 
 pytestmark = pytest.mark.live
 
 
 def test_stand_walk_stop_damp(live_host):
-    with Robot.connect(live_host, timeout=5.0) as robot:
+    with connect_udp(live_host, timeout=5.0) as robot:
         print(robot.info)
         assert robot.info.dof == 25
         assert robot.state.age_s < 0.5, "state should be streaming"

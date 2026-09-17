@@ -3,9 +3,13 @@
 Drive an Asimov robot from Python.
 
 ```python
-from asimov_sdk import Mode, Robot
+from asimov_sdk import ConnectionConfig, ManagerConfig, Mode, Robot, UdpConfig
 
-with Robot.connect("asimov.local") as robot:
+cfg = ConnectionConfig(
+    udp=UdpConfig(host="asimov.local"),  # the LAN lane
+    livekit=ManagerConfig(url="http://asimov.local:8080", credential=CRED),  # the robot's manager
+)
+with Robot(cfg).connect("hybrid") as robot:  # or "udp" / "livekit" — same Robot, pick per session
     robot.stand()
     robot.wait_for(Mode.STAND, timeout=15)
     robot.set_velocity(vx=0.25, duration=4.0)  # m/s, held for 4 s, then zero
@@ -14,20 +18,28 @@ with Robot.connect("asimov.local") as robot:
     print(robot.state.joint("L_Knee").pos, robot.state.battery)  # battery is None without a BMS
 ```
 
-One `Robot`, one API, pluggable transports. Commands land in the edge's arbiter beside the
-robot's other controllers and pass the same safety layer, whichever lane they arrive on.
+One `Robot`, one API, and the lane is chosen last. Describe the robot's wires once in a
+`ConnectionConfig` — one typed class per lane, nothing mixed — bind a `Robot` to it, then
+`connect(mode)`; `close()` and `connect()` again to switch lanes on the same `Robot`.
+Commands land in the edge's arbiter beside the robot's other controllers and pass the same
+safety layer, whichever lane they arrive on.
 
 ## Three ways to reach a robot
 
-| | control + state | video + audio | needs a LiveKit server | constructor |
+| `connect(mode)` | control + state | video + audio | needs a LiveKit server | config slots |
 |---|---|---|---|---|
-| **direct** | UDP 8850 / 8851 | — | no | `Robot.connect(host)` |
-| **hybrid** | UDP 8850 / 8851 | LiveKit | yes | `Robot.connect_hybrid(host, livekit_url=…, room=…, token=…)` |
-| **livekit** | LiveKit data packets / data track | LiveKit | yes | `Robot.connect_livekit(url, room, token=…)` |
+| `"udp"` | UDP 8850 / 8851 | — | no | `udp=UdpConfig(host)` |
+| `"hybrid"` | UDP 8850 / 8851 | LiveKit | yes | `udp=…` and `livekit=…` |
+| `"livekit"` | LiveKit data packets / data track | LiveKit | yes | `livekit=…` |
+
+The `livekit` slot is either `ManagerConfig(url, credential)` — the SDK asks the robot's
+manager for the room and a fresh join token on every connect, so you never hold a LiveKit
+token — or `LiveKitConfig(url, room, token)` when you run your own SFU.
+`cfg.available_modes()` says which modes a config can reach.
 
 Same verbs, same waits, same error model on all three: `robot.py` does not know which wire
-it is on. Pick **direct** on the LAN when you need no camera, **hybrid** on the LAN when
-you do, and **livekit** when the robot is not routable from your machine.
+it is on. Pick **udp** on the LAN when you need no camera, **hybrid** on the LAN when you
+do, and **livekit** when the robot is not routable from your machine.
 
 **LiveKit is optional.** `pip install asimov-sdk` with no extra drives a robot over UDP;
 every `livekit` import in the SDK is lazy and confined to one module. Add the media lane
@@ -36,7 +48,7 @@ with `pip install "asimov-sdk[livekit]"`.
 ### The wire
 
 ```
-direct / hybrid   commands -> udp/8850            one bare asimov.io.RobotCommand per datagram
+udp / hybrid      commands -> udp/8850            one bare asimov.io.RobotCommand per datagram
                   state    <- udp/8851            one bare asimov.io.RobotState per datagram
 livekit           commands -> data topic "commands"   the SAME RobotCommand bytes, reliable packets
                   state    <- data track "state"      the SAME RobotState bytes, one per frame,
@@ -79,14 +91,15 @@ that copy so one process holds one set of descriptors.
 
 ## The robot side
 
-For **direct** and **hybrid**, the edge must run with `--udp-control` and push state to
+For **udp** and **hybrid**, the edge must run with `--udp-control` and push state to
 your machine (`--udp-state-host <your ip>`). To run against a simulated robot instead of
-hardware: `menlo-studio up --container --sdk`, then `Robot.connect("127.0.0.1")`.
+hardware: `menlo-studio up --container --sdk`, then `Robot(ConnectionConfig(udp=UdpConfig("127.0.0.1"))).connect("udp")`.
 
 For **hybrid** and **livekit**, the robot's edge joins a LiveKit room — one per robot,
 named by its id — publishes its camera and microphone as ordinary tracks, and (in livekit
-mode) answers on the `state` data track. Your token for that room comes from the robot's
-manager. `examples/agent_room.py` documents the room/identity/topic convention and shows a
+mode) answers on the `state` data track. With `ManagerConfig` the SDK gets the room name
+and a token from the robot's manager itself. `examples/agent_room.py` documents the
+room/identity/topic convention and shows a
 LiveKit *agent* joining the same room: `livekit-plugins-google`'s
 `RealtimeModel(video_input=True)` already turns the robot's video track into what Gemini
 Live wants (about 1 fps of JPEG plus 16 kHz PCM), so this SDK adds no model glue.
@@ -94,17 +107,16 @@ Live wants (about 1 fps of JPEG plus 16 kHz PCM), so this SDK adds no model glue
 ## API in one screen
 
 ```python
-robot = Robot.connect(
-    host,
-    command_port=8850,
-    state_bind=("0.0.0.0", 8851),
-    timeout=5.0,
-    limits=None,
-    state_source=None,
-    link_timeout=2.0,
+cfg = ConnectionConfig(
+    udp=UdpConfig(host, command_port=8850, state_bind=("0.0.0.0", 8851), state_source=None),
+    livekit=ManagerConfig(url="http://host:8080", credential=CRED, label=None),
+    # or: livekit=LiveKitConfig(url="ws://host:7880", room="robot-<serial>", token=str_or_callable)
 )
-robot = Robot.connect_hybrid(host, livekit_url=..., room=..., token=..., media_timeout=3.0)
-robot = Robot.connect_livekit(url, room, token=..., media_timeout=3.0)
+cfg.available_modes()  # ("udp", "hybrid", "livekit")
+robot = Robot(cfg, limits=None, link_timeout=2.0)  # bound, no network yet
+robot.connect("hybrid", timeout=5.0, media_timeout=3.0, connect_timeout=10.0)  # returns robot
+robot.close()
+robot.connect("udp")  # switch lanes on the same Robot
 robot = Robot(transport, limits=None, link_timeout=2.0)
 robot.open()  # any Transport
 

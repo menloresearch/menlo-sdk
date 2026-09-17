@@ -11,7 +11,7 @@ frozen robot from a still one is not a monitor.
 import sys
 import time
 
-from asimov_sdk import Mode, Robot, StateStaleError
+from asimov_sdk import ConnectionConfig, Mode, Robot, StateStaleError, UdpConfig
 
 
 def gz(state) -> str:
@@ -22,7 +22,7 @@ def gz(state) -> str:
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 6.0
 
-with Robot.connect(host) as robot:
+with Robot(ConnectionConfig(udp=UdpConfig(host))).connect("udp") as robot:
     info = robot.info
     print(f"{info.dof} joints, protocol v{info.protocol_version}, via {info.transport}")
     print(f"endpoint: {info.endpoint}")

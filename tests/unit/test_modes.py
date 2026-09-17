@@ -1,4 +1,4 @@
-"""The same promises, three times: direct (A0), hybrid (A) and pure LiveKit (B).
+"""The same promises, three times: udp (A0), hybrid (A) and pure LiveKit (B).
 
 The rule this file exists to enforce: if a feature only works in one mode, it is not done.
 Every test here is mode-agnostic behaviour — a verb, a hold, a wait, the error model — and
@@ -19,7 +19,7 @@ from asimov_sdk import LinkLostError, Mode, NotConnectedError, StateStaleError, 
 from asimov_sdk.recording import load
 from asimov_sdk.robot import KEEPALIVE_HZ
 
-MODES = {"direct", "hybrid", "livekit"}
+MODES = {"udp", "hybrid", "livekit"}
 
 
 def test_every_mode_is_exercised(any_robot):

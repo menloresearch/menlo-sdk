@@ -11,6 +11,7 @@ import pytest
 from asimov_sdk import AudioChunk, Frame, Robot, UnsupportedError, WaitTimeoutError
 from asimov_sdk._command import Velocity
 from asimov_sdk._state import Joint, Mode, State
+from tests.conftest import connect_udp
 
 
 def _state(seq: int = 1) -> State:
@@ -32,7 +33,7 @@ def _state(seq: int = 1) -> State:
 class FakeMediaTransport:
     """A transport that carries everything, driven by the test."""
 
-    kind = "direct"
+    kind = "udp"
     endpoint = "fake:0"
     default_outcome_timeout = 0.1
     capabilities = frozenset({"drive", "state", "camera", "microphone", "speaker"})
@@ -141,7 +142,7 @@ def test_the_udp_lane_says_unsupported_not_silence(edge, robot):
     assert not robot.has("camera")
     with pytest.raises(UnsupportedError) as info:
         robot.camera.latest()
-    assert info.value.capability == "camera" and "direct" in str(info.value)
+    assert info.value.capability == "camera" and "udp" in str(info.value)
     with pytest.raises(UnsupportedError):
         robot.microphone.latest()
     with pytest.raises(UnsupportedError):
@@ -153,7 +154,7 @@ def test_battery_is_a_capability_when_the_robot_reports_one(edge):
     edge.state.battery.voltage_v = 48.2
     edge.state.battery.soc_percent = 77.0
     time.sleep(0.05)
-    with Robot.connect(
+    with connect_udp(
         "127.0.0.1",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),

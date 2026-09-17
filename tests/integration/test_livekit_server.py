@@ -35,6 +35,7 @@ import pytest
 
 from asimov_sdk import ConnectError, Robot
 from asimov_sdk._command import Velocity
+from asimov_sdk.connection import ConnectionConfig, LiveKitConfig
 from asimov_sdk.transport._livekit_client import _LiveKitClient, identity_from_token
 from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
 from asimov_sdk.transport.livekit import LiveKitTransport
@@ -132,11 +133,13 @@ def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token, e
         edge.close()
 
 
-def test_connect_livekit_reports_a_room_that_has_no_robot_in_it(livekit_url, token):
+def test_connecting_on_livekit_reports_a_room_that_has_no_robot_in_it(livekit_url, token):
     """A room the SDK can join but no edge answers in is a ConnectError naming the topic —
     never a Robot that looks connected."""
     with pytest.raises(ConnectError) as info:
-        Robot.connect_livekit(livekit_url, ROOM, token=token, timeout=2.0, media_timeout=0.5)
+        Robot(ConnectionConfig(livekit=LiveKitConfig(livekit_url, ROOM, token))).connect(
+            "livekit", timeout=2.0, media_timeout=0.5
+        )
     assert "state" in str(info.value)
 
 

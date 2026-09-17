@@ -25,12 +25,13 @@ What the run proves is that a frame off the robot's camera moved a real motor.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
 import numpy as np
 
-from asimov_sdk import Mode, Robot
+from asimov_sdk import ConnectionConfig, LiveKitConfig, ManagerConfig, Mode, Robot, UdpConfig
 
 # ── the target, straight from assets/scenes/chase_ball/README.md ──────────────────────
 # Magenta is RGBA "1 0 1 1" with emission 0.8. In RGB that is a high red, a near-zero
@@ -70,25 +71,30 @@ def find_ball(frame) -> tuple[float, float] | None:
 
 
 def connect(args) -> Robot:
-    if args.mode == "udp":
-        return Robot.connect(args.host, command_port=args.command_port, timeout=args.timeout)
-    if args.mode == "hybrid":
-        return Robot.connect_hybrid(
-            args.host,
-            livekit_url=args.livekit_url,
-            room=args.room,
-            token=args.token,
-            command_port=args.command_port,
-            timeout=args.timeout,
-        )
-    return Robot.connect_livekit(
-        args.livekit_url, args.room, token=args.token, timeout=args.timeout
+    """One ConnectionConfig for the rig; `--mode` picks the lane at connect time."""
+    udp = UdpConfig(args.host, command_port=args.command_port)
+    livekit = (
+        ManagerConfig(url=args.manager, credential=args.credential)
+        if args.manager
+        else LiveKitConfig(url=args.livekit_url, room=args.room, token=args.token)
     )
+    cfg = ConnectionConfig(udp=udp, livekit=livekit)
+    return Robot(cfg).connect(args.mode, timeout=args.timeout)
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", choices=("hybrid", "livekit", "udp"), default="hybrid")
+    p.add_argument(
+        "--manager",
+        default=os.environ.get("ASIMOV_MANAGER_URL", ""),
+        help="the robot's manager, e.g. http://10.0.0.5:8080 — mints the LiveKit token for you",
+    )
+    p.add_argument(
+        "--credential",
+        default=os.environ.get("ASIMOV_SDK_CREDENTIAL", ""),
+        help="SDK credential from the manager's /sdk page (with --manager)",
+    )
     p.add_argument("--host", default="127.0.0.1", help="the edge's UDP lane")
     p.add_argument(
         "--command-port", type=int, default=8850, help="UDP command port (studio: 18850)"

@@ -3,7 +3,7 @@
 Two transports live here, and with ``UdpTransport`` they are the three ways to reach a
 robot. All three are first-class; nothing above the transport knows which is in use::
 
-    A0  direct    commands UDP 8850 / state UDP 8851         no media, no server
+    A0  udp       commands UDP 8850 / state UDP 8851         no media, no server
     A   hybrid    commands UDP 8850 / state UDP 8851         video+audio over LiveKit
     B   livekit   commands and state over LiveKit data       video+audio over LiveKit
 
