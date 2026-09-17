@@ -10,6 +10,7 @@ accepts ``play_audio``; one that does not raises :class:`UnsupportedError` from
 from __future__ import annotations
 
 import contextlib
+import io
 import math
 import threading
 import time
@@ -43,7 +44,8 @@ AudioEncoding = Literal["pcm_s16le", "pcm_f32le", "opus", "unknown"]
 @dataclass(frozen=True, slots=True)
 class Frame:
     """One complete camera frame. ``data`` is the raw or encoded bytes as the edge sent them;
-    ``stride_bytes`` is 0 for encoded frames. Decode with your imaging library of choice."""
+    ``stride_bytes`` is 0 for encoded frames. :meth:`to_numpy` for pixels, :meth:`to_jpeg`
+    for bytes to hand on; anything else, decode with your imaging library of choice."""
 
     width: int
     height: int
@@ -79,6 +81,26 @@ class Frame:
         )
         arr = arr[:, : self.width * channels]
         return arr.reshape(self.height, self.width, channels) if channels > 1 else arr
+
+    def to_jpeg(self, quality: int = 85) -> bytes:
+        """This frame as JPEG bytes — what a vision model or an HTTP upload wants. A frame
+        the edge already sent as JPEG is returned as it came; ``rgb8``, ``bgr8`` and
+        ``gray8`` are encoded with Pillow, which the SDK does not depend on (``ImportError``
+        naming it when absent). ``ValueError`` for an encoding that is not pixels (h264)."""
+        if not 1 <= quality <= 100:
+            raise ValueError(f"quality is a JPEG quality from 1 to 100, got {quality!r}")
+        if self.encoding == "jpeg":
+            return self.data
+        if self.encoding == "gray8":
+            row = self.stride_bytes or self.width
+            pixels = b"".join(self.data[y * row : y * row + self.width] for y in range(self.height))
+            mode: str = "L"
+        else:
+            pixels, mode = _rgb_bytes(self), "RGB"  # ValueError for h264/yuv420/unknown
+        image = _pillow().frombytes(mode, (self.width, self.height), pixels)
+        out = io.BytesIO()
+        image.save(out, format="JPEG", quality=quality)
+        return out.getvalue()
 
 
 @dataclass(frozen=True, slots=True)
