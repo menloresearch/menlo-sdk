@@ -450,6 +450,21 @@ def test_a_frames_generator_held_across_a_reconnect_follows_the_new_lane(edge):
         robot.close()
 
 
+def test_connect_without_requiring_state_returns_before_the_robot_reports(edge):
+    edge.pushing = False
+    cfg = _FakeLanes(edge)
+    robot = Robot(cfg).connect("livekit", timeout=0.2, require_state=False)
+    try:
+        assert robot.connected and robot.has("camera")
+        assert robot.camera.latest() is None  # attaches to the lane
+        frame = cfg.clients[-1].push_frame(1)
+        assert robot.camera.latest() is frame
+        with pytest.raises(NotConnectedError, match="has not reported state"):
+            robot.set_velocity(vx=0.1)
+    finally:
+        robot.close()
+
+
 def test_connect_while_connected_raises_and_leaves_the_session_alone(edge):
     robot = Robot(_FakeLanes(edge)).connect("udp", timeout=3.0)
     try:
