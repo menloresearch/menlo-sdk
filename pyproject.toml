@@ -28,7 +28,7 @@ dependencies = [
 # robot over UDP, and every `livekit` import in the SDK is lazy and lives in one module
 # (src/asimov_sdk/transport/_livekit_client.py).
 [project.optional-dependencies]
-livekit = ["livekit>=1.1,<2"]
+livekit = ["livekit>=1.1.4,<2"]  # 1.1.4: first release with data tracks (the state carrier)
 
 [project.urls]
 Repository = "https://github.com/menloresearch/asimov-sdk"
