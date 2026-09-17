@@ -4,6 +4,7 @@ fields live on their own class, and nothing touches the network before connect()
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -156,6 +157,60 @@ def test_manager_config_asks_the_manager_with_the_credential_and_mints_per_join(
     assert lk.token() == "jwt-1"
     assert lk.token() == "jwt-2"
     assert manager.minted == 2
+
+
+@pytest.mark.parametrize(
+    "minted", ["ws://localhost:7880", "ws://127.0.0.1:7880", "ws://0.0.0.0:7880"]
+)
+def test_a_loopback_livekit_url_from_the_manager_is_rewritten_to_the_managers_host(manager, minted):
+    """The manager reports the URL it gave the EDGE. On a robot whose SFU runs beside the
+    edge that is ws://localhost:7880 — right on the robot, "connection refused" here."""
+    manager.reply["url"] = minted
+    lk = ManagerConfig(url=manager.url, credential="c").resolve()
+    assert lk.url == "ws://127.0.0.1:7880"  # the manager fixture lives on 127.0.0.1
+    assert lk.room == "robot-menlo-0042"
+
+
+def test_a_livekit_url_naming_a_real_host_is_left_alone(manager):
+    manager.reply["url"] = "wss://sfu.example.net:443"
+    assert (
+        ManagerConfig(url=manager.url, credential="c").resolve().url == "wss://sfu.example.net:443"
+    )
+
+
+def test_the_manager_url_needs_neither_scheme_nor_port():
+    plain = ManagerConfig(url="192.168.22.32", credential="c")
+    assert plain.url == "http://192.168.22.32" and plain.host == "192.168.22.32"
+    assert plain._reachable("ws://localhost:7880") == "ws://192.168.22.32:7880"
+    assert ManagerConfig(url="http://asimov.local:8080/", credential="c").url == (
+        "http://asimov.local:8080"
+    )
+    assert (
+        ManagerConfig(url="http://[::1]:8080", credential="c")._reachable("ws://localhost:7880")
+        == "ws://[::1]:7880"
+    )
+    with pytest.raises(ValueError, match="url is empty"):
+        ManagerConfig(url="  ", credential="c")
+
+
+def test_two_sessions_on_one_credential_never_share_a_default_identity(manager):
+    """A duplicate identity EVICTS the earlier participant. Without a label every session
+    on one credential is `sdk-<id>`, and the second connect kicks the first out."""
+    cfg = ManagerConfig(url=manager.url, credential="c")
+    first = cfg.resolve()
+    second = cfg.resolve()
+    labels = [body["label"] for _headers, body in manager.requests]
+    assert len(labels) == 2 and labels[0] != labels[1]
+    for label in labels:
+        assert re.fullmatch(r"[a-z0-9_.-]{1,50}", label), label
+        assert len(label) <= 50  # sdk-<8 hex id>- leaves this much of the 64-char identity
+    # one session keeps ONE identity: a rejoin mints with the same label, not a new one
+    first.token()
+    first.token()
+    assert manager.requests[-1][1]["label"] == labels[0]
+    second.token()
+    second.token()
+    assert manager.requests[-1][1]["label"] == labels[1]
 
 
 def test_manager_config_builds_the_livekit_transport_from_the_managers_answer(manager):
