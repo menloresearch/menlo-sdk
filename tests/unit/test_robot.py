@@ -553,6 +553,62 @@ def test_an_older_reordered_state_sample_never_overwrites_a_newer_one(edge, robo
     assert robot.state.sequence == 0 and robot.state.mode is Mode.MOVE
 
 
+def test_a_restarted_firmware_counter_is_followed_not_dropped(edge, robot):
+    """The firmware rebooted under a live link: its sequence counter restarts at 0. Dropping
+    every sample until it climbed past the old value froze robot.state for minutes."""
+    from asimov_sdk.transport.udp import state_from_robot_state
+
+    edge.pushing = False
+    time.sleep(0.05)
+
+    def sample(seq: int, mode: int, *, clock_us: int = 0):
+        m = edge.state.__class__()
+        m.CopyFrom(edge.state)
+        m.sequence, m.current_mode, m.timestamp_us = seq, mode, clock_us
+        return state_from_robot_state(m, None)
+
+    robot._on_state(sample(5000, 0))
+    robot._on_state(sample(5001, 0))
+    assert robot.state.sequence == 5001 and robot.state.mode is Mode.DAMP
+    robot._on_state(sample(0, 2))  # the counter restarted: a NEW stream, not an old datagram
+    assert robot.state.sequence == 0 and robot.state.mode is Mode.MOVE
+    robot._on_state(sample(1, 2))
+    assert robot.state.sequence == 1, "and it keeps advancing from there"
+    robot._on_state(sample(0, 0))  # a genuinely reordered straggler of the new stream: dropped
+    assert robot.state.sequence == 1 and robot.state.mode is Mode.MOVE
+    # a small backwards step is still the UDP reorder case, and still dropped
+    robot._on_state(sample(900, 0))
+    robot._on_state(sample(400, 1))
+    assert robot.state.sequence == 900
+    # inside the window, a firmware clock a second in the past is a restart too
+    robot._on_state(sample(950, 0, clock_us=20_000_000))
+    robot._on_state(sample(300, 2, clock_us=1_000_000))
+    assert robot.state.sequence == 300 and robot.state.mode is Mode.MOVE
+
+
+def test_a_wait_sees_a_restarted_stream_as_fresh_not_stale(edge, robot):
+    """Staleness is the age of the last ACCEPTED sample, so following the restarted
+    counter is what keeps a wait alive across a firmware reboot."""
+    from asimov_sdk.transport.udp import state_from_robot_state
+
+    edge.pushing = False
+    time.sleep(0.05)
+    m = edge.state.__class__()
+    m.CopyFrom(edge.state)
+    m.sequence = 7000
+    robot._on_state(state_from_robot_state(m, None))
+
+    def restart_arrives() -> None:
+        m.sequence, m.current_mode = 3, 2
+        robot._on_state(state_from_robot_state(m, None))
+
+    threading.Timer(0.15, restart_arrives).start()  # inside stale_after: a reboot, not silence
+    s = robot.wait_until(lambda s: s.mode is Mode.MOVE, timeout=2.0, stale_after=0.3)
+    assert s.sequence == 3 and s.age_s < 0.3, "the restarted stream's sample is the fresh one"
+    with pytest.raises(StateStaleError):  # and once nothing follows, it is stale again
+        robot.wait_until(lambda s: False, timeout=2.0, stale_after=0.3)
+
+
 def test_reopen_after_link_lost_is_a_working_reconnect(edge, robot):
     robot.link_timeout = 0.3
     robot.set_velocity(vx=0.1)

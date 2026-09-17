@@ -126,6 +126,12 @@ DEFAULT_LINK_TIMEOUT_S = 2.0
 ALERT_HOLD_S = 0.3
 #: A goto() refuses to plan from a reported pose older than this.
 GOTO_MAX_POSE_AGE_S = 0.5
+#: A state sample whose sequence is behind the last accepted one by at most this many is
+#: a reordered datagram and is dropped; behind by more, the counter has restarted — the
+#: firmware rebooted under a live link — and the sample is the new stream.
+STATE_REORDER_WINDOW = 1000
+#: A firmware clock that went back by more than this, sequence aside, is also a restart.
+STATE_CLOCK_RESET_S = 1.0
 
 
 class Robot:
@@ -995,8 +1001,12 @@ class Robot:
         # or the caller reads the robot going backwards in time (seen at 20% reorder:
         # 196 backwards steps in one demo). Half-range compare: a counter that wrapped
         # to 0 is NEWER (difference > 2**31); an unstamped stream (all zeros) differs by 0.
+        # But a counter that RESTARTED — the firmware rebooted while the edge and this
+        # session stayed up — is behind by thousands, and dropping until it climbed past
+        # the old value froze robot.state for minutes. Behind by more than the reorder
+        # window, or with the firmware clock a second in the past, is a new stream.
         prev = self._state
-        if prev is not None and 0 < (prev.sequence - state.sequence) % 2**32 < 2**31:
+        if prev is not None and self._is_stale_sample(prev, state):
             return
         if state.joints and not state.joints[0].name:
             names = robots.joint_names_for(len(state.joints))
@@ -1015,6 +1025,32 @@ class Robot:
         self._state = state
         self._state_seen.set()
         self._fire_state_callbacks(prev, state)
+
+    @staticmethod
+    def _is_stale_sample(prev: State, state: State) -> bool:
+        """Is ``state`` a reordered datagram from BEHIND ``prev`` (drop it), as opposed to
+        newer, or the first of a restarted stream (accept it)?"""
+        back = (prev.sequence - state.sequence) % 2**32
+        if not 0 < back < 2**31:
+            return False  # newer, a duplicate, or an unstamped stream
+        if back > STATE_REORDER_WINDOW:
+            log.info(
+                "state sequence restarted (%d -> %d): the firmware restarted; following it",
+                prev.sequence,
+                state.sequence,
+            )
+            return False
+        if (
+            prev.fw_timestamp_us
+            and state.fw_timestamp_us
+            and prev.fw_timestamp_us - state.fw_timestamp_us > STATE_CLOCK_RESET_S * 1e6
+        ):
+            log.info(
+                "the firmware clock went back %.1fs: the firmware restarted; following it",
+                (prev.fw_timestamp_us - state.fw_timestamp_us) / 1e6,
+            )
+            return False
+        return True
 
     def _carry_alerts(self, state: State) -> State:
         """The firmware puts its alert block in every 20th frame (10 Hz at 200 Hz) and an
