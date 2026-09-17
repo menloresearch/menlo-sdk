@@ -80,6 +80,22 @@ def test_a_bounded_hold_ends_with_a_zero_on_every_lane(edge, any_robot):
     assert edge.wait_for(lambda rx: edge.velocities()[-1:] == [(0.0, 0.0, 0.0)], timeout=2.0)
 
 
+def test_a_waited_hold_returns_after_its_zero_went_out_on_every_lane(edge, any_robot):
+    """set_velocity() returns at once and a script that moves on cuts the walk short. With
+    wait=True it returns only once the hold has ended AND the zero has left."""
+    _mode, robot = any_robot
+    started = time.monotonic()
+    robot.set_velocity(vx=0.2, duration=0.4, wait=True)
+    elapsed = time.monotonic() - started
+    assert 0.4 <= elapsed < 1.0, f"wait=True returned after {elapsed:.2f}s"
+    # The zero was SENT before we returned; the fake edge's socket reads it a moment later.
+    assert edge.wait_for(lambda rx: edge.velocities()[-1:] == [(0.0, 0.0, 0.0)], timeout=0.3)
+    assert (0.2, 0.0, 0.0) in edge.velocities()
+    settled = len(edge.velocities())
+    time.sleep(0.3)
+    assert edge.velocities()[settled:] == [], "the hold outlived wait=True"
+
+
 def test_wait_for_reads_the_robots_own_report_on_every_lane(edge, any_robot):
     _mode, robot = any_robot
     robot.stand()

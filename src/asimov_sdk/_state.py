@@ -191,6 +191,14 @@ class State:
         return (roll, pitch, yaw)
 
     @property
+    def yaw(self) -> float | None:
+        """Heading in radians, counter-clockwise positive, in (-π, π]; ``None`` without a
+        quat. The zero is wherever the IMU was when the firmware started, so a turn is
+        measured as a difference: ``math.remainder(after.yaw - before.yaw, math.tau)``."""
+        e = self.euler
+        return e[2] if e is not None else None
+
+    @property
     def upright(self) -> bool | None:
         """On its feet, by measured gravity. ``None`` when the robot did not report it."""
         if self.gravity is None:

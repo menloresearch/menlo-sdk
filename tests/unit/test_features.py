@@ -38,6 +38,14 @@ def test_euler_from_quaternion(edge, robot):
     edge.state.base_quat[:] = [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
     time.sleep(0.05)
     assert robot.state.euler[2] == pytest.approx(yaw, abs=1e-6)
+    assert robot.state.yaw == pytest.approx(yaw, abs=1e-6)
+    # a turn is a wrapped difference, so 170° -> -170° reads as +20°, not -340°
+    assert math.remainder(math.radians(-170) - math.radians(170), math.tau) == pytest.approx(
+        math.radians(20)
+    )
+    edge.state.base_quat[:] = []
+    time.sleep(0.05)
+    assert robot.state.yaw is None and robot.state.euler is None
 
 
 def test_alert_carries_first_set_us_and_a_name(edge, robot):

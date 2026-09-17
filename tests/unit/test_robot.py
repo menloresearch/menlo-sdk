@@ -34,6 +34,27 @@ from tests.conftest import connect_udp
 # ── connect ───────────────────────────────────────────────────────────────────
 
 
+def test_a_waited_hold_needs_a_duration_and_ends_early_when_superseded(edge, robot):
+    with pytest.raises(ValueError, match="needs a duration"):
+        robot.set_velocity(vx=0.1, wait=True)
+    threading.Timer(0.15, robot.stop).start()
+    started = time.monotonic()
+    robot.set_velocity(vx=0.2, duration=5.0, wait=True)  # another verb ends it
+    assert time.monotonic() - started < 1.0
+    assert edge.wait_for(lambda rx: edge.velocities()[-1:] == [(0.0, 0.0, 0.0)])
+    # a zero velocity holds nothing; wait=True just stands for the time
+    started = time.monotonic()
+    robot.set_velocity(0.0, 0.0, 0.0, duration=0.2, wait=True)
+    assert 0.2 <= time.monotonic() - started < 0.6
+
+
+def test_closing_during_a_waited_hold_raises_instead_of_pretending_it_finished(edge, robot):
+    threading.Timer(0.1, robot.close).start()
+    with pytest.raises(NotConnectedError, match="closed before the hold ended"):
+        robot.set_velocity(vx=0.2, duration=5.0, wait=True)
+    assert edge.wait_for(lambda rx: edge.velocities()[-1:] == [(0.0, 0.0, 0.0)])
+
+
 def test_connect_waits_for_the_first_state_and_describes_the_robot(edge, robot):
     assert robot.connected
     assert robot.info.dof == 25

@@ -32,6 +32,10 @@ Behaviours worth knowing before the first script:
   at 10 Hz, so you can spend most of a second on vision between calls and the robot keeps
   walking. That thread feeds nothing on the robot; it holds off the edge's own two-second
   velocity watchdog, which is the real safety net. Pass ``duration=`` to bound the hold.
+* **``set_velocity`` returns at once, ``duration`` or not.** The hold runs in the
+  background; a script that calls the next verb, or reaches the end of its ``with`` block,
+  cuts it short. Sleep for the duration, or pass ``wait=True`` to block until the hold
+  has ended and its zero has gone out.
 * **Mode commands are one-shot.** STAND and DAMP are events the firmware latches itself;
   repeating them would let a script out-shout an operator's DAMP.
 * **Zero velocity is not STAND, and it is usually what you want.** After ``stop()`` (or a
@@ -155,6 +159,7 @@ class Robot:
         self._state_seen = threading.Event()
         self._latched: Velocity | None = None
         self._latch_deadline: float | None = None
+        self._hold_done: threading.Event | None = None  # set when a bounded hold has ended
         self._generation = 0
         self._stop = threading.Event()
         self._keepalive: threading.Thread | None = None
@@ -284,7 +289,7 @@ class Robot:
             self._handshake_error = None
             self._allow_version_skew = allow_version_skew
             self._link_lost = None
-            self._latched, self._latch_deadline = None, None  # a drive never survives a session
+            self._end_hold()  # a drive never survives a session
             self._last_alerts, self._last_alerts_at = (), 0.0  # nor do the last session's alerts
             self._generation += 1
             self._last_mode = None
@@ -397,14 +402,18 @@ class Robot:
     def close(self) -> None:
         """Zero velocity if one is held, stop re-sending a held trajectory, then drop the link.
         Idempotent; never raises. A trajectory that is no longer re-sent is DAMPed by the edge
-        two seconds later: there is no neutral setpoint the SDK could send instead."""
+        two seconds later: there is no neutral setpoint the SDK could send instead.
+
+        A ``duration`` hold that has not expired is cut short here, zero and all: leaving a
+        ``with`` block ends the walk. A script that wants the whole hold waits for it —
+        ``set_velocity(..., wait=True)`` or a ``time.sleep(duration)`` — before it leaves."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
             tx = self._transport  # pinned here: a connect() racing us may swap the lane
             had_velocity = self._latched is not None
-            self._latched = None
+            self._end_hold()
             self._generation += 1
         self._stop.set()
         if self._keepalive is not None:
@@ -498,14 +507,30 @@ class Robot:
         vyaw: float = 0.0,
         *,
         duration: float | None = None,
+        wait: bool = False,
     ) -> Sent:
-        """Walk. Held and re-sent at 10 Hz until superseded, ``stop()``, or ``duration``
-        seconds pass (then zero velocity is sent). Clamped to ``limits``; the returned
-        ``Sent.command`` is what actually went out and ``Sent.clamped`` says whether it
-        differs from what you asked."""
-        return self._drive("set_velocity", Velocity(vx, vy, vyaw), duration)
+        """Walk: ``vx`` forward, ``vy`` left (m/s), ``vyaw`` counter-clockwise (rad/s). Held
+        and re-sent at 10 Hz until superseded, ``stop()``, or ``duration`` seconds pass
+        (then zero velocity is sent). Clamped to ``limits``; the returned ``Sent.command``
+        is what actually went out and ``Sent.clamped`` says whether it differs from what
+        you asked.
 
-    def _drive(self, name: str, asked: Velocity, duration: float | None) -> Sent:
+        Returns immediately by default — the hold runs in the background, and the next verb
+        (or ``close()``, so the end of a ``with`` block) cuts it short. ``wait=True`` with a
+        ``duration`` blocks until the hold has ended and its zero has gone out, or until
+        another verb superseded it; ``ValueError`` without a ``duration``. A zero velocity
+        with ``wait=True`` simply blocks for ``duration``."""
+        if wait and duration is None:
+            raise ValueError("set_velocity(wait=True) needs a duration= to wait for")
+        sent, done = self._drive("set_velocity", Velocity(vx, vy, vyaw), duration)
+        if wait:
+            assert duration is not None
+            self._await_hold(done, duration)
+        return sent
+
+    def _drive(
+        self, name: str, asked: Velocity, duration: float | None
+    ) -> tuple[Sent, threading.Event | None]:
         v = asked.clamped(self.limits)
         if duration is not None:
             _positive_finite("duration", duration)
@@ -515,19 +540,43 @@ class Robot:
         with self._lock:
             self._generation += 1
             gen = self._generation
+            self._end_hold()
             self._latched = None if v.is_zero else v
-            self._latch_deadline = (
-                time.monotonic() + duration if (duration is not None and not v.is_zero) else None
-            )
+            if duration is not None and not v.is_zero:
+                self._latch_deadline = time.monotonic() + duration
+                self._hold_done = threading.Event()
             self._last_mode = None  # a new drive supersedes whatever posture change preceded it
-            return self._send(name, v, gen, clamped=(v != asked))
+            return self._send(name, v, gen, clamped=(v != asked)), self._hold_done
+
+    def _end_hold(self) -> None:
+        """Under the lock: whatever bounded hold was in force is over — superseded, stopped,
+        closed or lost — and anyone blocked in ``wait=True`` may go."""
+        self._latched, self._latch_deadline = None, None
+        done, self._hold_done = self._hold_done, None
+        if done is not None:
+            done.set()
+
+    def _await_hold(self, done: threading.Event | None, duration: float) -> None:
+        if done is None:  # a zero velocity: nothing is held, the robot stands for the time
+            time.sleep(duration)
+            return
+        # The keepalive ticks at KEEPALIVE_HZ, so the zero leaves within a tick of the
+        # deadline; the rest of the budget is slack for a loaded machine. The event is set
+        # on every path that ends a hold, so running out of it means the keepalive is gone.
+        done.wait(duration + 2.0 / KEEPALIVE_HZ + 1.0)
+        with self._lock:
+            lost, closed = self._link_lost, self._closed
+        if lost is not None:
+            raise lost
+        if closed:
+            raise NotConnectedError("this Robot was closed before the hold ended")
 
     def stop(self) -> Sent:
         """Zero velocity. The firmware stays in MOVE at zero speed, balancing in place
         under the walking policy — for a free-standing robot that IS how it stands still,
         so this is usually where a walk should end. ``stand()`` returns it to the STAND
         posture, but see that verb's warning first. Not an emergency stop — see ``damp``."""
-        return self._drive("stop", Velocity(), None)
+        return self._drive("stop", Velocity(), None)[0]
 
     def stand(self) -> Sent:
         """Stiffen to the standing pose. One-shot; follow with ``wait_for(Mode.STAND)``.
@@ -633,7 +682,7 @@ class Robot:
             # newer generation and let stale setpoints follow the takeover command.
             self._generation += 1
             gen = self._generation
-            self._latched, self._latch_deadline = None, None
+            self._end_hold()
             first = self._send("trajectory", Trajectory(blend(1), kp_t, kd_t), gen)
             self._last_mode = first
 
@@ -758,8 +807,7 @@ class Robot:
         with self._lock:  # bump + send atomically; see set_velocity
             self._generation += 1
             gen = self._generation
-            self._latched = None  # a posture change ends whatever drive was in force
-            self._latch_deadline = None
+            self._end_hold()  # a posture change ends whatever drive was in force
             sent = self._send(name, command, gen)
             self._last_mode = sent
             return sent
@@ -830,10 +878,13 @@ class Robot:
                         "close() and connect() again to reconnect"
                     )
                 )
+            expired: threading.Event | None = None
             with self._lock:
                 v, gen, deadline = self._latched, self._generation, self._latch_deadline
                 if v is not None and deadline is not None and time.monotonic() >= deadline:
-                    # The bounded hold expired: send zero once and stop holding.
+                    # The bounded hold expired: send zero once and stop holding. Whoever is
+                    # blocked in wait=True is released AFTER that zero has gone out.
+                    expired, self._hold_done = self._hold_done, None
                     self._latched, self._latch_deadline = None, None
                     self._generation += 1
                     v, gen = Velocity(), self._generation
@@ -847,6 +898,9 @@ class Robot:
                 log.exception("keepalive send failed; declaring the link lost")
                 self._mark_link_lost(LinkLostError(f"keepalive send failed: {exc!r}"))
                 return
+            finally:
+                if expired is not None:
+                    expired.set()
 
     def _mark_link_lost(self, exc: LinkLostError) -> None:
         with self._lock:
@@ -854,7 +908,7 @@ class Robot:
                 return
             self._link_lost = exc
             had_velocity = self._latched is not None
-            self._latched, self._latch_deadline = None, None
+            self._end_hold()
             self._generation += 1
         if had_velocity:
             # The STATE stream died; the COMMAND path may well still reach the edge. Do not
