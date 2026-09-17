@@ -1,9 +1,10 @@
 """The bytes every lane shares: ``asimov.io.RobotCommand`` out, ``asimov.io.RobotState`` in.
 
 The UDP lane puts one bare message per datagram; the LiveKit lane puts the same bare
-messages in a data packet, on the ``commands`` and ``state`` topics. There is no envelope
-and no type tag on either wire — the port, or the topic, says what the bytes are. So the
-encoder and the decoder live here and neither transport owns them.
+command in a reliable data packet on the ``commands`` topic and the same bare state in
+each frame of a data track named ``state``. There is no envelope and no type tag on either
+wire — the port, the topic or the track name says what the bytes are. So the encoder and
+the decoder live here and neither transport owns them.
 """
 
 from __future__ import annotations
@@ -18,9 +19,11 @@ from asimov_sdk._state import Alert, Battery, BatteryProtection, Joint, Mode, St
 
 #: LiveKit data topic carrying one serialized ``asimov.io.RobotCommand`` per packet.
 COMMAND_TOPIC = "commands"
-#: LiveKit data topic carrying one serialized ``asimov.io.RobotState`` per packet — the
-#: same bytes the UDP lane echoes on :8851.
-STATE_TOPIC = "state"
+#: Name of the robot's LiveKit data track; each frame is one serialized
+#: ``asimov.io.RobotState`` — the same bytes the UDP lane echoes on :8851 — and the frame's
+#: ``user_timestamp`` is the edge's clock (µs since the epoch) when the sample arrived from
+#: the firmware.
+STATE_TRACK = "state"
 
 
 def _pb() -> tuple[Any, Any, Any]:
@@ -73,7 +76,9 @@ def encode_command(command: Command, sequence: int) -> bytes:
     return bytes(msg.SerializeToString())
 
 
-def state_from_robot_state(msg: Any, joint_names: tuple[str, ...] | None) -> State:
+def state_from_robot_state(
+    msg: Any, joint_names: tuple[str, ...] | None, edge_timestamp_us: int = 0
+) -> State:
     """``asimov.io.RobotState`` -> :class:`State`. Pure; shared with tests."""
     n = len(msg.joint_pos)
     names = joint_names if joint_names and len(joint_names) == n else None
@@ -113,16 +118,22 @@ def state_from_robot_state(msg: Any, joint_names: tuple[str, ...] | None) -> Sta
         sequence=int(msg.sequence),
         fw_timestamp_us=int(msg.timestamp_us),
         protocol_version=int(msg.protocol_version),
+        edge_timestamp_us=edge_timestamp_us,
     )
 
 
-def decode_state(payload: bytes, joint_names: tuple[str, ...] | None = None) -> State:
+def decode_state(
+    payload: bytes,
+    joint_names: tuple[str, ...] | None = None,
+    edge_timestamp_us: int | None = None,
+) -> State:
     """Raw wire bytes -> :class:`State`. Raises whatever protobuf raises on garbage; the
-    callers treat that as a dropped packet, never as a dead link."""
+    callers treat that as a dropped packet, never as a dead link. ``edge_timestamp_us`` is
+    the data-track frame's ``user_timestamp`` when the lane carries one."""
     _, _, st = _pb()
     msg = st.RobotState()
     msg.ParseFromString(payload)
-    return state_from_robot_state(msg, joint_names)
+    return state_from_robot_state(msg, joint_names, edge_timestamp_us or 0)
 
 
 def _battery_from(msg: Any) -> Battery | None:

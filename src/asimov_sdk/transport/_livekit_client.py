@@ -43,7 +43,9 @@ log = logging.getLogger("asimov_sdk.transport.livekit")
 #: holds the LiveKit API secret: the robot's manager mints tokens, the SDK presents them.
 TokenProvider = str | Callable[[], str]
 
-DataCallback = Callable[[bytes], None]
+#: (payload, user_timestamp) for one data-track frame; the timestamp is None when the
+#: publisher did not set one.
+DataTrackCallback = Callable[[bytes, int | None], None]
 FrameCallback = Callable[[Frame], None]
 AudioCallback = Callable[[AudioChunk], None]
 TracksCallback = Callable[[frozenset[str]], None]
@@ -118,8 +120,9 @@ class LiveKitClient(Protocol):
         """One block of PCM onto the SDK's own audio track, publishing the track on first
         use. Blocks until LiveKit has taken the samples, so chunks keep their order."""
 
-    def on_data(self, topic: str, callback: DataCallback) -> None:
-        """Every data packet on ``topic``, on the loop thread. Keep the callback short."""
+    def on_data_track(self, name: str, callback: DataTrackCallback) -> None:
+        """Every frame of the remote data track called ``name``, on the loop thread, in
+        publish order. Keep the callback short."""
 
     def on_video(self, callback: FrameCallback) -> None:
         """Every decoded camera frame, as ``rgb8``."""
@@ -161,7 +164,8 @@ class _LiveKitClient:
         self._tasks: set[Future[Any]] = set()
         self._tracks: set[str] = set()
         self._cv = threading.Condition()
-        self._data_cbs: dict[str, list[DataCallback]] = {}
+        self._data_track_cbs: dict[str, list[DataTrackCallback]] = {}
+        self._data_track_readers: dict[str, Future[Any]] = {}  # by track sid
         self._video_cbs: list[FrameCallback] = []
         self._audio_cbs: list[AudioCallback] = []
         self._track_cbs: list[TracksCallback] = []
@@ -186,8 +190,8 @@ class _LiveKitClient:
         return f"{self._room_name}@{self._url}"
 
     # ── subscriptions (may be registered before connect) ─────────────────────
-    def on_data(self, topic: str, callback: DataCallback) -> None:
-        self._data_cbs.setdefault(topic, []).append(callback)
+    def on_data_track(self, name: str, callback: DataTrackCallback) -> None:
+        self._data_track_cbs.setdefault(name, []).append(callback)
 
     def on_video(self, callback: FrameCallback) -> None:
         self._video_cbs.append(callback)
@@ -335,7 +339,10 @@ class _LiveKitClient:
         room = rtc.Room()
         room.on("track_subscribed", self._on_track_subscribed)
         room.on("track_unsubscribed", self._on_track_unsubscribed)
-        room.on("data_received", self._on_data_received)
+        # The SFU announces a data track that was published BEFORE we joined too, right
+        # after connect, so the robot's state track is found whichever side came first.
+        room.on("data_track_published", self._on_data_track_published)
+        room.on("data_track_unpublished", self._on_data_track_unpublished)
         room.on("disconnected", self._on_disconnected)
         await room.connect(self._url, token, options=rtc.RoomOptions(auto_subscribe=True))
         self._room = room
@@ -345,6 +352,7 @@ class _LiveKitClient:
     async def _leave(self) -> None:
         for task in tuple(self._tasks):
             task.cancel()
+        self._data_track_readers.clear()
         room, self._room = self._room, None
         if room is not None:
             with contextlib.suppress(Exception):
@@ -370,21 +378,37 @@ class _LiveKitClient:
         tracks.discard("camera" if track.kind == rtc.TrackKind.KIND_VIDEO else "microphone")
         self._set_tracks(tracks)
 
-    def _on_data_received(self, *args: Any) -> None:
-        packet = args[0] if args else None
-        payload = getattr(packet, "data", None)
-        topic = getattr(packet, "topic", None)
-        if payload is None and len(args) > 1:
-            # Pre-1.0 positional shape (data, participant, kind, topic). `args[0]` IS the
-            # payload there — it has no `.data`, which is exactly how we got here.
-            payload, topic = args[0], (args[3] if len(args) > 3 else None)
-        if payload is None:
-            return  # nothing recognisable on this event; a malformed packet is not fatal
-        for cb in tuple(self._data_cbs.get(topic or "", ())):
-            try:
-                cb(bytes(payload))
-            except Exception:  # one bad subscriber must not stop the stream
-                log.exception("a %r data subscriber raised", topic)
+    def _on_data_track_published(self, track: Any) -> None:
+        name = getattr(getattr(track, "info", None), "name", None)
+        if not name or name not in self._data_track_cbs:
+            return  # not a track anyone here asked for
+        sid = getattr(track.info, "sid", name)
+        self._on_data_track_unpublished(sid)  # a re-publish replaces its reader
+        loop = self._loop
+        if loop is None:  # pragma: no cover - closed under us
+            return
+        future = asyncio.run_coroutine_threadsafe(self._pump_data_track(track, name), loop)
+        self._data_track_readers[sid] = future
+        self._tasks.add(future)
+        future.add_done_callback(self._tasks.discard)
+
+    def _on_data_track_unpublished(self, sid: str, *_: Any) -> None:
+        reader = self._data_track_readers.pop(sid, None)
+        if reader is not None:
+            reader.cancel()
+
+    async def _pump_data_track(self, track: Any, name: str) -> None:
+        stream = track.subscribe()
+        try:
+            async for frame in stream:
+                for cb in tuple(self._data_track_cbs.get(name, ())):
+                    try:
+                        cb(bytes(frame.payload), frame.user_timestamp)
+                    except Exception:  # one bad subscriber must not stop the stream
+                        log.exception("a %r data-track subscriber raised", name)
+        finally:
+            with contextlib.suppress(Exception):
+                await stream.aclose()
 
     # ── media pumps ──────────────────────────────────────────────────────────
     async def _pump_video(self, rtc: Any, track: Any) -> None:

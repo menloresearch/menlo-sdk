@@ -36,7 +36,7 @@ import pytest
 from asimov_sdk import ConnectError, Robot
 from asimov_sdk._command import Velocity
 from asimov_sdk.transport._livekit_client import _LiveKitClient, identity_from_token
-from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TOPIC, encode_command
+from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
 from asimov_sdk.transport.livekit import LiveKitTransport
 
 pytestmark = pytest.mark.livekit
@@ -79,11 +79,20 @@ def edge_token() -> str:
 def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token, edge_token):
     """Two clients in one room: the SDK's transport, and a stand-in for the robot's edge.
     What the edge receives on ``commands`` must be exactly what the SDK encoded, and a
-    ``state`` packet from the edge must reach ``robot.state``."""
+    frame on the edge's ``state`` data track must reach ``robot.state`` with its clock."""
     edge = _LiveKitClient(livekit_url, ROOM, token=edge_token)
     received: list[bytes] = []
-    edge.on_data(COMMAND_TOPIC, received.append)
     edge.connect()
+    # The stand-in edge reads commands and publishes state the way the real edge does:
+    # data packets in, a data track out. Both on the client's own loop thread.
+    rtc = pytest.importorskip("livekit.rtc")
+    edge._room.on(
+        "data_received",
+        lambda p: received.append(bytes(p.data)) if p.topic == COMMAND_TOPIC else None,
+    )
+    state_track = edge._await(
+        edge._room.local_participant.publish_data_track(name=STATE_TRACK), 5.0
+    )
     try:
         tx = LiveKitTransport(livekit_url, ROOM, token=token, media_timeout=1.0)
         tx.open()
@@ -107,11 +116,16 @@ def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token, e
 
             states: list = []
             tx.subscribe_state(states.append)
-            edge.publish_data(_a_robot_state(), topic=STATE_TOPIC)
+            stamp = int(time.time() * 1e6)
             deadline = time.monotonic() + 10.0
             while time.monotonic() < deadline and not states:
-                time.sleep(0.05)
+                # lossy: a frame pushed before the subscription is up is dropped
+                state_track.try_push(
+                    rtc.DataTrackFrame(payload=_a_robot_state(), user_timestamp=stamp)
+                )
+                time.sleep(0.1)
             assert states and len(states[0].joints) == 25
+            assert states[0].edge_timestamp_us == stamp
         finally:
             tx.close()
     finally:

@@ -173,7 +173,7 @@ class FakeLiveKitClient:
         self.connected = False
         self.played: list = []  # AudioChunks handed to the speaker track
         self.published: list[tuple[str, bytes]] = []  # (topic, payload)
-        self._data_cbs: dict[str, list] = {}
+        self._data_track_cbs: dict[str, list] = {}
         self._video_cbs: list = []
         self._audio_cbs: list = []
         self._track_cbs: list = []
@@ -225,8 +225,8 @@ class FakeLiveKitClient:
             raise LinkLostError("the fake room is not joined")
         self.played.append(chunk)
 
-    def on_data(self, topic: str, callback) -> None:
-        self._data_cbs.setdefault(topic, []).append(callback)
+    def on_data_track(self, name: str, callback) -> None:
+        self._data_track_cbs.setdefault(name, []).append(callback)
 
     def on_video(self, callback) -> None:
         self._video_cbs.append(callback)
@@ -249,8 +249,9 @@ class FakeLiveKitClient:
                 continue
             except OSError:
                 return
-            for cb in tuple(self._data_cbs.get("state", ())):
-                cb(data)
+            # The FakeEdge speaks UDP, which carries no edge clock: user_timestamp=None.
+            for cb in tuple(self._data_track_cbs.get("state", ())):
+                cb(data, None)
 
     def _set_tracks(self, tracks: frozenset[str]) -> None:
         if tracks == self.tracks:

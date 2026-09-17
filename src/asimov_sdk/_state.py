@@ -168,6 +168,9 @@ class State:
     protocol_version: int
     battery: Battery | None = None  # None when the robot has no BMS or did not report one
     received_at: float = field(default_factory=time.monotonic)
+    # The edge's wall clock (µs since the epoch) when this sample arrived from the firmware.
+    # Only the LiveKit lane carries it (as the data-track frame's user_timestamp); 0 on UDP.
+    edge_timestamp_us: int = 0
 
     @property
     def age_s(self) -> float:

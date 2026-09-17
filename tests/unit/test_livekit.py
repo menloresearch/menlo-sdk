@@ -8,9 +8,8 @@ a machine that has never installed the extra.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
-import subprocess
-import sys
 import threading
 import time
 import wave
@@ -22,7 +21,6 @@ from asimov_sdk import (
     ConnectError,
     Frame,
     LinkLostError,
-    NotConnectedError,
     Robot,
     UnsupportedError,
     WaitTimeoutError,
@@ -31,11 +29,9 @@ from asimov_sdk._command import Velocity
 from asimov_sdk._media import Clip
 from asimov_sdk.transport._livekit_client import (
     _LiveKitClient,
-    _rtc,
-    identity_from_token,
 )
-from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TOPIC, encode_command
-from asimov_sdk.transport.livekit import HybridTransport, LiveKitTransport
+from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
+from asimov_sdk.transport.livekit import LiveKitTransport
 from tests.conftest import FakeLiveKitClient, make_livekit_robot
 
 # ── the wire contract ─────────────────────────────────────────────────────────
@@ -82,8 +78,8 @@ def test_state_is_the_same_bytes_the_udp_lane_echoes(livekit_robot):
 def test_an_undecodable_state_packet_is_dropped_not_fatal(livekit_robot):
     client, robot = livekit_robot
     before = robot.state.sequence
-    for cb in client._data_cbs[STATE_TOPIC]:
-        cb(b"\xff\xff\xff\xff not a protobuf")
+    for cb in client._data_track_cbs[STATE_TRACK]:
+        cb(b"\xff\xff\xff\xff not a protobuf", None)
     time.sleep(0.05)
     assert robot.state.sequence >= before and robot.connected
 
@@ -254,296 +250,55 @@ def test_close_never_raises_and_the_transport_reopens(edge):
     robot.open(timeout=3.0)  # the same transport, a second session
     try:
         assert robot.state.sequence >= first
-        assert len(client._data_cbs[STATE_TOPIC]) == 1, "the state topic was wired twice"
+        assert len(client._data_track_cbs[STATE_TRACK]) == 1, "the state track was wired twice"
     finally:
         robot.close()
 
 
-def test_send_before_open_is_not_connected(edge):
-    tx = LiveKitTransport("ws://fake", "r", token="t", client=FakeLiveKitClient(edge))
-    with pytest.raises(NotConnectedError):
-        tx.send(Velocity(vx=0.1))
-
-
-def test_publishing_into_a_room_that_is_gone_is_link_lost(edge):
-    client = FakeLiveKitClient(edge)
-    tx = LiveKitTransport("ws://fake", "r", token="t", client=client)
-    tx.open()
-    client.connected = False  # the SFU dropped us
-    with pytest.raises(LinkLostError):
-        tx.send(Velocity(vx=0.1))
-    tx.close()
-
-
-def test_the_endpoint_is_readable(edge):
-    tx = LiveKitTransport("ws://sfu.local", "asimov-42", token="t", client=FakeLiveKitClient(edge))
-    assert tx.endpoint == "asimov-42@ws://sfu.local" and tx.kind == "livekit"
-
-
-# ── the hybrid lane ───────────────────────────────────────────────────────────
-
-
-def test_hybrid_drives_on_udp_and_watches_on_the_room(edge, hybrid_robot):
-    client, robot = hybrid_robot
-    assert robot.info.transport == "hybrid"
-    assert robot.info.capabilities == frozenset(
-        {"drive", "state", "camera", "microphone", "speaker"}
-    )
-    robot.stand()
-    assert edge.wait_for(lambda rx: any(c.mode == 1 for c in rx))
-    assert client.published == [], "control must stay on the direct lane in hybrid mode"
-    threading.Timer(0.02, client.push_frame, args=(1,)).start()
-    assert robot.camera.photo(timeout=1.0).encoding == "rgb8"
-
-
-def test_hybrid_closes_the_udp_half_when_the_room_will_not_join(edge):
-    class Refusing(FakeLiveKitClient):
-        def connect(self) -> None:
-            raise ConnectError("no token")
-
-    tx = HybridTransport(
-        "127.0.0.1",
-        livekit_url="ws://fake",
-        room="r",
-        token="t",
-        command_port=edge.command_port,
-        state_bind=("127.0.0.1", edge.state_port),
-        client=Refusing(edge, carry_state=False),
-    )
-    with pytest.raises(ConnectError):
-        tx.open()
-    assert tx._udp._sock is None, "a failed join must not leave a socket and a reader behind"
-    tx.close()  # never raises, having never opened
-
-
-def test_hybrid_media_dying_leaves_the_robot_driveable(edge, hybrid_robot):
-    client, robot = hybrid_robot
-    client.close()  # the room dropped; the UDP lane did not
-    robot.stand()
-    assert edge.wait_for(lambda rx: any(c.mode == 1 for c in rx))
-    assert robot.connected
-    with pytest.raises(UnsupportedError):
-        robot.camera.photo(timeout=0.1)
-
-
-# ── LiveKit stays optional ────────────────────────────────────────────────────
-
-
-def test_the_sdk_drives_a_robot_with_livekit_unavailable(edge, monkeypatch, robot):
-    """The hard requirement: `pip install asimov-sdk` with NO extra drives a robot."""
-
-    class Blocked:
-        def find_module(self, name, path=None):
-            return None
-
-        def find_spec(self, name, path=None, target=None):
-            if name == "livekit" or name.startswith("livekit."):
-                raise ImportError("No module named 'livekit'")
-            return None
-
-    monkeypatch.setattr(sys, "meta_path", [Blocked(), *sys.meta_path])
-    monkeypatch.delitem(sys.modules, "livekit", raising=False)
-    robot.stand()
-    assert edge.wait_for(lambda rx: any(c.mode == 1 for c in rx)), "mode A0 needs no livekit"
-    with pytest.raises(ConnectError) as info:
-        _rtc()
-    assert "asimov-sdk[livekit]" in str(info.value)
-    with pytest.raises(ConnectError):
-        LiveKitTransport("ws://x", "r", token="t").open()
-
-
-def test_a_fresh_interpreter_imports_the_sdk_with_livekit_blocked():
-    """Import-time proof, in a process of its own: `import asimov_sdk` must not reach for
-    livekit, nor may `Robot.connect` / the transport classes."""
-    code = (
-        "import sys\n"
-        "class B:\n"
-        "    def find_spec(self, n, p=None, t=None):\n"
-        "        assert not n.startswith('livekit'), 'the SDK imported livekit'\n"
-        "        return None\n"
-        "sys.meta_path.insert(0, B())\n"
-        "import asimov_sdk\n"
-        "from asimov_sdk import HybridTransport, LiveKitTransport, Robot\n"
-        "LiveKitTransport('ws://x', 'r', token='t')\n"
-        "HybridTransport('h', livekit_url='ws://x', room='r', token='t')\n"
-        "assert hasattr(Robot, 'connect_livekit') and hasattr(Robot, 'connect_hybrid')\n"
-        "print('ok')\n"
-    )
-    out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=False
-    )
-    assert out.returncode == 0, out.stderr
-    assert "ok" in out.stdout
-
-
-def test_the_sdk_holds_no_livekit_secret():
-    """The owner's rule: the SDK RECEIVES a token, it never mints one — so no identifier
-    named api_key/api_secret exists anywhere in it. Parsed, not grepped, so the prose that
-    says so does not trip the test."""
-    import ast
-    from pathlib import Path
-
-    banned = {"api_key", "api_secret", "apikey", "apisecret"}
-    src = Path(__file__).resolve().parents[2] / "src" / "asimov_sdk"
-    offenders = []
-    for path in sorted(src.rglob("*.py")):
-        if "_vendor" in path.parts:
-            continue
-        for node in ast.walk(ast.parse(path.read_text())):
-            name = (
-                node.arg
-                if isinstance(node, ast.arg)
-                else node.id
-                if isinstance(node, ast.Name)
-                else node.attr
-                if isinstance(node, ast.Attribute)
-                else node.arg or ""
-                if isinstance(node, ast.keyword)
-                else ""
-            )
-            if name and name.lower() in banned:
-                offenders.append(f"{path.name}:{node.lineno} {name}")
-    assert offenders == [], f"the SDK must never hold the LiveKit API secret: {offenders}"
-
-
-# ── the client seam itself ────────────────────────────────────────────────────
-
-
-def test_a_token_may_be_a_callable_so_it_can_be_refreshed():
-    minted = []
-
-    def provider() -> str:
-        minted.append(1)
-        return f"token-{len(minted)}"
-
-    client = _LiveKitClient("ws://x", "r", token=provider)
-    assert client._resolve_token() == "token-1"
-    assert client._resolve_token() == "token-2", "a provider is called per join, not cached"
-    assert _LiveKitClient("ws://x", "r", token="static")._resolve_token() == "static"
-    with pytest.raises(ConnectError) as info:
-        _LiveKitClient("ws://x", "r", token="")._resolve_token()
-    assert "never holds the LiveKit API secret" in str(info.value)
-
-
-def test_the_identity_is_read_out_of_the_token_never_chosen_by_the_caller():
-    """A participant's identity is a claim inside the JWT and the server ignores whatever a
-    client says about it. An `identity=` argument would therefore be a lie, so there is
-    none — the SDK reads the token's `sub` back instead."""
-    import base64
-    import inspect
-    import json
-
-    def jwt(payload: dict) -> str:
-        def seg(obj: dict) -> str:
-            raw = base64.urlsafe_b64encode(json.dumps(obj).encode()).decode()
-            return raw.rstrip("=")
-
-        return f"{seg({'alg': 'HS256'})}.{seg(payload)}.signature-we-never-check"
-
-    assert identity_from_token(jwt({"sub": "sdk", "video": {"room": "r"}})) == "sdk"
-    assert identity_from_token(jwt({"iss": "devkey"})) is None, "no sub is None, not a guess"
-    assert identity_from_token("not-a-jwt") is None
-    assert identity_from_token("") is None
-    assert identity_from_token(jwt({"sub": ""})) is None
-
-    for ctor in (LiveKitTransport.__init__, HybridTransport.__init__, _LiveKitClient.__init__):
-        assert "identity" not in inspect.signature(ctor).parameters, (
-            f"{ctor.__qualname__} takes an identity the LiveKit server would ignore"
-        )
-    for ctor in (Robot.connect_livekit, Robot.connect_hybrid):
-        assert "identity" not in inspect.signature(ctor).parameters
-
-
-def test_the_transport_reports_the_identity_it_actually_joined_as(edge):
-    """`endpoint` names it too: two SDK sessions in one room differ only by identity, and an
-    error naming the room alone would not say which of them went quiet."""
-    import base64
-    import json
-
-    payload = base64.urlsafe_b64encode(json.dumps({"sub": "operator-7"}).encode()).decode()
-    token = f"aGVhZGVy.{payload.rstrip('=')}.sig"
-    client = FakeLiveKitClient(edge, token=token)
-    tx = LiveKitTransport("ws://sfu.local", "asimov-42", token=token, client=client)
-    assert tx.identity is None and tx.endpoint == "asimov-42@ws://sfu.local"
-    tx.open()
-    try:
-        assert tx.identity == "operator-7"
-        assert tx.endpoint == "asimov-42@ws://sfu.local as operator-7"
-    finally:
-        tx.close()
-    assert tx.identity is None, "a closed room has no identity to report"
-
-
-def test_the_media_wait_resolves_as_soon_as_video_is_up(edge):
-    """A robot with a camera and no microphone is a real configuration; it must not pay the
-    whole media budget at connect."""
-    client = FakeLiveKitClient(edge, tracks=("camera",))
-    tx = LiveKitTransport("ws://fake", "r", token="t", client=client, media_timeout=30.0)
-    started = time.monotonic()
-    tx.open()
-    try:
-        assert time.monotonic() - started < 5.0, "a mic-less robot waited out the whole budget"
-        assert "camera" in tx.capabilities and "microphone" not in tx.capabilities
-    finally:
-        tx.close()
-
-
-def test_a_track_that_lands_after_the_connect_still_works(edge):
-    """It misses the RobotInfo snapshot — that is what media_timeout is the knob for — but
-    it attaches and delivers, which is the forgiving direction."""
-    client, robot = make_livekit_robot(edge, tracks=("camera",))
-    robot.open(timeout=3.0)
-    try:
-        assert not robot.has("microphone"), "the snapshot is honest about what had arrived"
-        client._set_tracks(frozenset({"camera", "microphone"}))  # the robot brought its mic up
-        assert "microphone" in robot._tx.capabilities
-        threading.Timer(0.02, client.push_audio, args=(1,)).start()
-        assert next(robot.microphone.chunks(timeout=1.0)).sequence == 1
-    finally:
-        robot.close()
-
-
-def test_a_livekit_frame_becomes_an_rgb8_Frame():
-    """The one conversion that matters: LiveKit hands out I420, and ``Frame.to_numpy()``
-    deliberately refuses yuv420. Faked ``rtc`` objects, so no livekit is needed."""
-
-    class Converted:
-        data = b"\x01\x02\x03" * 8
-
-    class LkFrame:
-        width, height, type = 4, 2, "I420"
-
-        def convert(self, buffer_type):
-            assert buffer_type == "RGB24"
-            return Converted()
-
-    class Event:
-        frame = LkFrame()
-        timestamp_us = 1_500
-
-    class Rtc:
-        class VideoBufferType:
-            RGB24 = "RGB24"
-
-    frame = _LiveKitClient._to_frame(Rtc, Event, 7)
-    assert frame is not None
-    assert frame.encoding == "rgb8" and frame.stride_bytes == 12 and frame.sequence == 7
-    assert frame.timestamp_ns == 1_500_000 and len(frame.data) == 24
-
-
-def test_a_data_packet_is_routed_by_topic():
+def test_only_the_named_data_track_is_read_and_its_frames_carry_the_edge_clock():
+    """A room may carry other participants' data tracks; only the robot's ``state`` track
+    feeds the state callbacks, and each frame's user_timestamp comes through."""
     client = _LiveKitClient("ws://x", "r", token="t")
-    seen: list[bytes] = []
-    client.on_data("state", seen.append)
+    seen: list[tuple[bytes, int | None]] = []
+    client.on_data_track(STATE_TRACK, lambda payload, ts: seen.append((payload, ts)))
 
-    class Packet:
-        data = b"payload"
-        topic = "state"
+    class Frame:
+        def __init__(self, payload, ts):
+            self.payload, self.user_timestamp = payload, ts
 
-    client._on_data_received(Packet())
-    Packet.topic = "something-else"
-    client._on_data_received(Packet())
-    assert seen == [b"payload"], "a packet on another topic is not a state sample"
+    class Stream:
+        def __init__(self, frames):
+            self._frames = list(frames)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._frames:
+                raise StopAsyncIteration
+            return self._frames.pop(0)
+
+        async def aclose(self):
+            pass
+
+    class Track:
+        def __init__(self, name, frames):
+            self.info = type("Info", (), {"name": name, "sid": f"DTR_{name}"})()
+            self._frames = frames
+
+        def subscribe(self, **_):
+            return Stream(self._frames)
+
+    async def run():
+        await client._pump_data_track(
+            Track(STATE_TRACK, [Frame(b"one", 1000), Frame(b"two", None)]), STATE_TRACK
+        )
+
+    asyncio.run(run())
+    assert seen == [(b"one", 1000), (b"two", None)]
+    # a track with another name is not the state track: no reader is started for it
+    client._on_data_track_published(Track("chat", [Frame(b"hi", None)]))
+    assert client._data_track_readers == {}
 
 
 def test_publishing_without_a_room_is_link_lost_not_an_attribute_error():

@@ -23,7 +23,7 @@ robot's other controllers and pass the same safety layer, whichever lane they ar
 |---|---|---|---|---|
 | **direct** | UDP 8850 / 8851 | — | no | `Robot.connect(host)` |
 | **hybrid** | UDP 8850 / 8851 | LiveKit | yes | `Robot.connect_hybrid(host, livekit_url=…, room=…, token=…)` |
-| **livekit** | LiveKit data topics | LiveKit | yes | `Robot.connect_livekit(url, room, token=…)` |
+| **livekit** | LiveKit data packets / data track | LiveKit | yes | `Robot.connect_livekit(url, room, token=…)` |
 
 Same verbs, same waits, same error model on all three: `robot.py` does not know which wire
 it is on. Pick **direct** on the LAN when you need no camera, **hybrid** on the LAN when
@@ -38,8 +38,9 @@ with `pip install "asimov-sdk[livekit]"`.
 ```
 direct / hybrid   commands -> udp/8850            one bare asimov.io.RobotCommand per datagram
                   state    <- udp/8851            one bare asimov.io.RobotState per datagram
-livekit           commands -> data topic "commands"   the SAME RobotCommand bytes, reliable
-                  state    <- data topic "state"      the SAME RobotState bytes
+livekit           commands -> data topic "commands"   the SAME RobotCommand bytes, reliable packets
+                  state    <- data track "state"      the SAME RobotState bytes, one per frame,
+                                                      ordered; user_timestamp = edge receive clock
                   camera   <- a video track, decoded to rgb8 Frames
                   mic      <- an audio track, as pcm_s16le AudioChunks
                   speaker  -> an audio track the SDK publishes
@@ -84,7 +85,7 @@ hardware: `menlo-studio up --container --sdk`, then `Robot.connect("127.0.0.1")`
 
 For **hybrid** and **livekit**, the robot's edge joins a LiveKit room — one per robot,
 named by its id — publishes its camera and microphone as ordinary tracks, and (in livekit
-mode) answers on the `state` data topic. Your token for that room comes from the robot's
+mode) answers on the `state` data track. Your token for that room comes from the robot's
 manager. `examples/agent_room.py` documents the room/identity/topic convention and shows a
 LiveKit *agent* joining the same room: `livekit-plugins-google`'s
 `RealtimeModel(video_input=True)` already turns the robot's video track into what Gemini

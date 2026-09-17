@@ -22,7 +22,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   through the `Transport` seam; `UnsupportedError` on a transport that does not carry them.
 - Two more lanes, both first-class: `Robot.connect_hybrid(host, livekit_url=, room=, token=)`
   (UDP control + LiveKit media) and `Robot.connect_livekit(url, room, token=)` (commands and
-  state as bare `RobotCommand`/`RobotState` on the `commands` and `state` data topics —
+  state as bare `RobotCommand`/`RobotState`: reliable data packets on the `commands` topic in,
+  frames of a data track named `state` out (ordered; `State.edge_timestamp_us` is the frame's
+  `user_timestamp`, the edge's receive clock) —
   the same protobufs the UDP lane sends, no envelope, no type tag). `HybridTransport` and
   `LiveKitTransport`; `robot.py` is unchanged but for the two constructors.
 - LiveKit is an EXTRA (`pip install "asimov-sdk[livekit]"`): the core still depends on

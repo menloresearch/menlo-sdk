@@ -8,7 +8,7 @@ the same room as one more participant to do the driving.
     ┌──────────────┐        LiveKit room "asimov-<robot id>"        ┌──────────────┐
     │ robot's edge │  video+audio tracks ─────────────────────────> │ agent        │
     │              │  <──────────── data topic "commands" ───────── │ (this file)  │
-    │              │  ─────────────  data topic "state" ──────────> │ + asimov_sdk │
+    │              │  ─────────────  data track "state" ──────────> │ + asimov_sdk │
     └──────────────┘                                                └──────────────┘
 
 The room convention
@@ -22,8 +22,9 @@ The room convention
   no ``identity`` argument; it reads the token's back and reports it.
 * **data topic "commands"**: one bare serialized ``asimov.io.RobotCommand`` per packet,
   reliable, exactly the protobuf the UDP lane sends. ``asimov_sdk`` writes these for you.
-* **data topic "state"**: one bare serialized ``asimov.io.RobotState`` per packet, pushed
-  by the edge at the firmware's telemetry rate. ``robot.state`` is the decoded latest one.
+* **data track "state"**: one bare serialized ``asimov.io.RobotState`` per frame, pushed
+  by the edge at 10 Hz, delivered in order; each frame's ``user_timestamp`` is the edge's
+  receive clock (``State.edge_timestamp_us``). ``robot.state`` is the decoded latest one.
 * **tracks**: the robot's camera is a video track, its microphone an audio track. Anything
   the SDK plays through ``robot.speaker`` is an audio track published back.
 

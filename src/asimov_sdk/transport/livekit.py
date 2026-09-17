@@ -9,8 +9,9 @@ robot. All three are first-class; nothing above the transport knows which is in 
 
 The wire in the room, agreed with the edge team::
 
-    commands  ->  data topic "commands"   one bare asimov.io.RobotCommand, reliable
-    state     <-  data topic "state"      one bare asimov.io.RobotState
+    commands  ->  data topic "commands"   one bare asimov.io.RobotCommand, reliable packets
+    state     <-  data track "state"      one bare asimov.io.RobotState per frame, ordered,
+                                          user_timestamp = the edge's receive clock
 
 The SAME protobufs the UDP lane sends: no envelope, no framing, no type tag — the topic
 identifies the type, exactly as the port does on the direct lane. Commands land in the
@@ -41,7 +42,7 @@ from asimov_sdk._errors import ConnectError, NotConnectedError, UnsupportedError
 from asimov_sdk._media import AudioChunk, Frame
 from asimov_sdk._state import State, TransportKind
 from asimov_sdk.transport._livekit_client import LiveKitClient, TokenProvider, _LiveKitClient
-from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TOPIC, _pb, decode_state, encode_command
+from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TRACK, _pb, decode_state, encode_command
 from asimov_sdk.transport.base import (
     AudioCallback,
     ControllerCallback,
@@ -132,7 +133,7 @@ class _MediaPlane:
 class LiveKitTransport(_MediaPlane):
     """Mode B: commands, state, video and audio all over one LiveKit room.
 
-    The robot's edge joins the same room and answers on the ``state`` topic. Nothing is
+    The robot's edge joins the same room and answers on the ``state`` data track. Nothing is
     on the LAN, so this is the lane that reaches a robot you cannot route to.
 
     Like the UDP lane, the room carries no per-command verdict today:
@@ -145,7 +146,7 @@ class LiveKitTransport(_MediaPlane):
     default_outcome_timeout: float = 1.0
     silence_hint: str = (
         "The room was joined, so the token and the URL are good. Is the robot's edge in "
-        f"this room, and is it publishing on the {STATE_TOPIC!r} data topic?"
+        f"this room, and is it publishing the {STATE_TRACK!r} data track?"
     )
 
     def __init__(
@@ -173,8 +174,8 @@ class LiveKitTransport(_MediaPlane):
         self._wire_media(client, media_timeout)
         self.endpoint = self._describe()
         # Registered once, here rather than in open(): a reopened transport must not end up
-        # with the state topic wired twice and every sample delivered twice.
-        client.on_data(STATE_TOPIC, self._on_state_packet)
+        # with the state track wired twice and every sample delivered twice.
+        client.on_data_track(STATE_TRACK, self._on_state_frame)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def open(self) -> None:
@@ -212,11 +213,11 @@ class LiveKitTransport(_MediaPlane):
         self._on_controller.append(callback)
 
     # ── in ───────────────────────────────────────────────────────────────────
-    def _on_state_packet(self, payload: bytes) -> None:
+    def _on_state_frame(self, payload: bytes, edge_timestamp_us: int | None) -> None:
         try:
-            state: State = decode_state(payload)  # Robot names the joints
-        except Exception:  # a bad packet must not kill the room
-            log.debug("dropped an undecodable state packet (%d bytes)", len(payload), exc_info=True)
+            state: State = decode_state(payload, None, edge_timestamp_us)  # Robot names the joints
+        except Exception:  # a bad frame must not kill the room
+            log.debug("dropped an undecodable state frame (%d bytes)", len(payload), exc_info=True)
             return
         for cb in tuple(self._on_state):
             try:
