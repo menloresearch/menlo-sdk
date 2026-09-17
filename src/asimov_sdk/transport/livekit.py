@@ -162,7 +162,8 @@ class LiveKitTransport(_MediaPlane):
         """``client`` is the seam the unit suite fakes; leave it ``None`` to talk to a real
         room. There is deliberately no ``api_key``/``api_secret`` (bring a token) and no
         ``identity`` (the token claims it; :attr:`identity` reads it back)."""
-        self._room, self._url = room, url
+        #: The room this transport joins — the robot's, named by its serial.
+        self.room, self._url = room, url
         self._lk_open = False
         self._seq = 0
         self._lock = threading.Lock()
@@ -192,7 +193,7 @@ class LiveKitTransport(_MediaPlane):
         room differ only by identity, and an error naming the room alone would not say
         which of them went quiet."""
         who = self.identity
-        return f"{self._room}@{self._url}" + (f" as {who}" if who else "")
+        return f"{self.room}@{self._url}" + (f" as {who}" if who else "")
 
     def close(self) -> None:
         self._lk_open = False
@@ -269,7 +270,7 @@ class HybridTransport(_MediaPlane):
         self._udp = UdpTransport(
             host, command_port=command_port, state_bind=state_bind, state_source=state_source
         )
-        self._room, self._url = room, livekit_url
+        self.room, self._url = room, livekit_url
         self._base_capabilities = self._udp.capabilities
         if client is None:
             client = _LiveKitClient(livekit_url, room, token=token, connect_timeout=connect_timeout)
@@ -289,7 +290,7 @@ class HybridTransport(_MediaPlane):
 
     def _describe(self) -> str:
         who = self.identity
-        return f"{self._udp.endpoint} + {self._room}@{self._url}" + (f" as {who}" if who else "")
+        return f"{self._udp.endpoint} + {self.room}@{self._url}" + (f" as {who}" if who else "")
 
     def close(self) -> None:
         with contextlib.suppress(Exception):  # close() never raises

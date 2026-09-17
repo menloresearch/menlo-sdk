@@ -26,6 +26,7 @@ import secrets
 import socket
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 from urllib.parse import urlsplit, urlunsplit
@@ -264,10 +265,32 @@ class ConnectionConfig:
     udp: UdpConfig | None = None
     livekit: LiveKitSource | None = None
 
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str] | None = None) -> ConnectionConfig:
+        """The config ``Robot()`` uses when handed none: ``ASIMOV_MANAGER_URL`` +
+        ``ASIMOV_CREDENTIAL`` from the environment, else the default robot in
+        ``~/.asimov/robots.toml``. :class:`ConnectError` naming both when neither is set.
+        See :mod:`asimov_sdk.store`."""
+        from asimov_sdk.store import resolve_connection
+
+        return resolve_connection(environ)
+
     def available_modes(self) -> tuple[ConnectMode, ...]:
         """The modes this config can connect on, given which slots are set."""
         return tuple(
             mode for mode in MODES if all(getattr(self, s) is not None for s in _SLOTS[mode])
+        )
+
+    def only_mode(self) -> ConnectMode:
+        """The one mode this config can connect on — what ``connect()`` uses when given
+        none. ``ValueError`` when the choice is not the config's to make."""
+        modes = self.available_modes()
+        if len(modes) == 1:
+            return modes[0]
+        if not modes:
+            raise ConnectError("this ConnectionConfig has no lane set; nothing to connect on")
+        raise ValueError(
+            f"this ConnectionConfig can connect on {', '.join(modes)}; pass connect(mode)"
         )
 
     def transport_for(

@@ -72,7 +72,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Literal, Self
 
-from asimov_sdk import robots
+from asimov_sdk import robots, store
 from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity
 from asimov_sdk._errors import (
     AsimovError,
@@ -89,7 +89,7 @@ from asimov_sdk._errors import (
 from asimov_sdk._media import Camera, Microphone, Speaker
 from asimov_sdk._outcome import Applied, Refused, Sent
 from asimov_sdk._state import Alert, Capability, Mode, RobotInfo, State
-from asimov_sdk.connection import ConnectionConfig, ConnectMode
+from asimov_sdk.connection import ConnectionConfig, ConnectMode, ManagerConfig
 from asimov_sdk.recording import Recording
 from asimov_sdk.transport.base import Transport
 
@@ -133,16 +133,20 @@ class Robot:
 
     def __init__(
         self,
-        source: ConnectionConfig | Transport,
+        source: ConnectionConfig | Transport | None = None,
         *,
         limits: Limits | None = None,
         link_timeout: float = DEFAULT_LINK_TIMEOUT_S,
     ) -> None:
         """Bind a robot to a :class:`ConnectionConfig` (then :meth:`connect` picks the lane),
         or to an already-constructed transport (then :meth:`open` attaches it — the seam a
-        new transport plugs into). Nothing touches the network here."""
+        new transport plugs into). With no ``source`` the config comes from the environment
+        or the credential store (:meth:`ConnectionConfig.from_environment`), so
+        ``Robot().connect()`` is a whole script's setup. Nothing touches the network here."""
         self._config: ConnectionConfig | None
         self._transport: Transport | None
+        if source is None:
+            source = ConnectionConfig.from_environment()
         if isinstance(source, ConnectionConfig):
             self._config, self._transport = source, None
         else:
@@ -211,16 +215,19 @@ class Robot:
 
     def connect(
         self,
-        mode: ConnectMode,
+        mode: ConnectMode | None = None,
         *,
         timeout: float = 5.0,
         media_timeout: float = MEDIA_TIMEOUT_S,
         connect_timeout: float = 10.0,
         allow_version_skew: bool = False,
         require_state: bool = True,
+        persist: bool | None = None,
     ) -> Self:
         """Attach on ``mode`` — ``"udp"``, ``"hybrid"`` (UDP control + LiveKit media) or
         ``"livekit"`` — using the lanes described by this Robot's :class:`ConnectionConfig`.
+        ``mode`` may be left out when the config has exactly one lane (a manager URL and
+        a credential is one: ``"livekit"``); with several it is a ``ValueError``.
 
         Returns the robot once the first state sample has arrived and its protocol version
         matches, so ``with robot.connect("hybrid"):`` works. Raises :class:`ConnectError`
@@ -237,10 +244,25 @@ class Robot:
         session becomes an ordinary one — including :class:`LinkLostError` should that
         stream then go quiet. Nothing is sent to the robot before then.
 
+        ``persist=True`` (or ``ASIMOV_PERSIST=1`` in the environment) records the manager URL
+        and credential in ``~/.asimov/robots.toml`` once the connect has SUCCEEDED, keyed by
+        the robot's serial (from its room) and made the default when the store had none, so
+        the next script can be ``Robot().connect()``. ``ValueError`` before any I/O when the
+        config has no :class:`ManagerConfig` to record. See :mod:`asimov_sdk.store`.
+
         ``media_timeout`` is how long a LiveKit lane waits for the robot's tracks before
         deciding what it carries; ``connect_timeout`` bounds the room join itself.
         """
         config = self.config  # a transport-bound Robot has none: that error comes first
+        if mode is None:
+            mode = config.only_mode()
+        if persist is None:
+            persist = store.env_flag(store.ENV_PERSIST)
+        if persist and not isinstance(config.livekit, ManagerConfig):
+            raise ValueError(
+                "connect(persist=True) needs a ManagerConfig in the livekit slot: the store "
+                "keeps a manager URL and a credential, and this config has no manager"
+            )
         with self._lock:
             if not self._closed:
                 raise RuntimeError("this Robot is already connected; close() it first")
@@ -258,6 +280,9 @@ class Robot:
         self.open(
             timeout=timeout, allow_version_skew=allow_version_skew, require_state=require_state
         )
+        if persist:
+            saved = store.persist(config, getattr(tx, "room", None))
+            log.info("saved %s (%s) to %s", saved.name, saved.manager_url, store.store_path())
         return self
 
     def open(

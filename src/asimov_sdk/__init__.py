@@ -1,15 +1,20 @@
 """asimov-sdk — drive an Asimov robot from Python.
 
-    from asimov_sdk import ConnectionConfig, UdpConfig, ManagerConfig, Robot, Mode
+    from asimov_sdk import Mode, Robot
 
-    cfg = ConnectionConfig(
+    with Robot().connect() as robot:                 # the robot from the environment or
+        robot.stand()                                # ~/.asimov/robots.toml (`asimov login`)
+        robot.wait_for(Mode.STAND)
+        robot.set_velocity(vx=0.25, duration=4.0, wait=True)
+
+    from asimov_sdk import ConnectionConfig, UdpConfig, ManagerConfig
+
+    cfg = ConnectionConfig(                          # or say where the robot is
         udp=UdpConfig(host="asimov.local"),
-        livekit=ManagerConfig(url="http://asimov.local:8080", credential=CREDENTIAL),
+        livekit=ManagerConfig(url="http://asimov.local", credential=CREDENTIAL),
     )
     with Robot(cfg).connect("hybrid") as robot:      # or "udp" / "livekit"
-        robot.stand()
-        robot.wait_for(Mode.STAND)
-        robot.set_velocity(vx=0.25, duration=4.0)
+        ...
 
 One ``Robot``, one API, three lanes chosen at connect time: ``"udp"`` (the robot's LAN
 lane, no server), ``"hybrid"`` (UDP control + LiveKit media) and ``"livekit"`` (everything
@@ -52,6 +57,7 @@ from asimov_sdk.connection import (
 )
 from asimov_sdk.recording import Recording
 from asimov_sdk.robot import Robot
+from asimov_sdk.store import RobotStore, StoredRobot
 from asimov_sdk.transport import HybridTransport, LiveKitTransport, Transport, UdpTransport
 
 __version__ = "0.1.0"
@@ -92,10 +98,12 @@ __all__ = [
     "Robot",
     "RobotFaultedError",
     "RobotInfo",
+    "RobotStore",
     "Sent",
     "Speaker",
     "State",
     "StateStaleError",
+    "StoredRobot",
     "Trajectory",
     "Transport",
     "UdpConfig",

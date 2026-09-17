@@ -30,6 +30,9 @@ dependencies = [
 [project.optional-dependencies]
 livekit = ["livekit>=1.1.4,<2"]  # 1.1.4: first release with data tracks (the state carrier)
 
+[project.scripts]
+asimov = "asimov_sdk.cli:main"  # login / robots / use / logout: the credential store
+
 [project.urls]
 Repository = "https://github.com/menloresearch/asimov-sdk"
 Issues = "https://github.com/menloresearch/asimov-sdk/issues"
@@ -42,6 +45,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "types-protobuf>=5.29",
+    "pillow>=10",  # Frame.to_jpeg / Clip.save_frames are tested; the SDK itself never imports it
 ]
 
 [build-system]
