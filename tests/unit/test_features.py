@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 
 import pytest
@@ -268,3 +269,22 @@ def test_recording_logs_the_safety_zero_sent_on_link_loss(edge, robot, tmp_path)
     assert edge.velocities()[-1] == (0.0, 0.0, 0.0)
     sent = [line for line in load(path) if line["kind"] == "sent"]
     assert sent[-1]["name"] == "set_velocity" and sent[-1]["command"]["vx"] == 0.0
+
+
+def test_damp_from_another_thread_ends_a_running_goto_before_its_next_setpoint(edge, robot):
+    """The docs promise goto() is fenced: a mode verb from any thread ends it, and no
+    setpoint follows the verb. A hand-rolled trajectory loop is the unfenced case."""
+    robot.goto([0.4] * 25, duration=5.0, hz=50, wait=False)
+    assert edge.wait_for(lambda r: sum(c.HasField("all_trajectory") for c in r) >= 5, timeout=2.0)
+    done = threading.Event()
+
+    def other_thread():
+        robot.damp()
+        done.set()
+
+    threading.Thread(target=other_thread).start()
+    assert done.wait(1.0)
+    time.sleep(0.3)  # long enough for several 50 Hz setpoints, had the stream continued
+    kinds = [("traj" if c.HasField("all_trajectory") else c.mode) for c in edge.received]
+    damp_at = max(i for i, k in enumerate(kinds) if k == 0)  # mode 0 = DAMP
+    assert "traj" not in kinds[damp_at + 1 :], "a setpoint left after the damp"

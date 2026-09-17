@@ -39,8 +39,8 @@ def test_stand_walk_stop_damp(live_host):
         assert robot.state.mode is Mode.MOVE, "zero velocity keeps the firmware in MOVE, at rest"
         assert robot.state.upright is True
 
-        robot.stand()  # MOVE at rest -> STAND posture is an explicit request
-        robot.wait_for(Mode.STAND, timeout=8.0)
+        # No stand() here: STAND is a stiffen with no balance loop, and a free-standing
+        # robot asked for it after a walk tips over. A second walk starts from MOVE at rest.
         robot.set_velocity(vx=0.2)
         robot.wait_for(Mode.MOVE, timeout=5.0)
         robot.stop()

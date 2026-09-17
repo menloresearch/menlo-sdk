@@ -2,16 +2,20 @@
 
 ::
 
-    from asimov_sdk import Robot, Mode
+    from asimov_sdk import ConnectionConfig, Mode, Robot, UdpConfig
 
     cfg = ConnectionConfig(udp=UdpConfig("asimov.local"))
     with Robot(cfg).connect("udp") as robot:
-        robot.stand()
-        robot.wait_for(Mode.STAND, timeout=8.0)
+        if robot.state.mode is Mode.DAMP:          # STAND is the wake-up verb only
+            robot.stand()
+            robot.wait_for(Mode.STAND, timeout=8.0)
         robot.set_velocity(vx=0.25, duration=4.0)   # held for 4 s, then zero
         robot.wait_for(Mode.MOVE)
-        robot.stand()                               # MOVE at zero velocity is not STAND
-        robot.wait_for(Mode.STAND)
+        # Leaving the block zeroes the velocity, as the hold ending would. Either way the
+        # robot stays in MOVE at zero velocity, where the walking policy keeps balancing
+        # it — that IS how a free-standing biped stands still. Do not ask for STAND here:
+        # STAND stiffens to a fixed pose with no balance loop, and a robot nothing is
+        # holding tips over.
 
 The verbs are the wire's verbs — ``set_velocity``, ``stand``, ``damp``, ``stop``,
 ``trajectory`` — and every one returns immediately with a :class:`~asimov_sdk.Sent`.
@@ -30,9 +34,22 @@ Behaviours worth knowing before the first script:
   velocity watchdog, which is the real safety net. Pass ``duration=`` to bound the hold.
 * **Mode commands are one-shot.** STAND and DAMP are events the firmware latches itself;
   repeating them would let a script out-shout an operator's DAMP.
-* **Zero velocity is not STAND.** After ``stop()`` (or a ``duration`` ending) the firmware
-  stays in MOVE mode with zero velocity — the walking policy, standing in place. ``stand()``
-  is what returns it to the STAND posture. Observed on the robot; do not assume otherwise.
+* **Zero velocity is not STAND, and it is usually what you want.** After ``stop()`` (or a
+  ``duration`` ending) the firmware stays in MOVE with zero velocity — the walking policy,
+  balancing in place. STAND is a different thing: it stiffens every joint to a fixed
+  pose and runs **no balance loop**, so a free-standing biped asked to stiffen after
+  walking tips over. ``stand()`` is for waking a robot up (DAMP -> STAND -> MOVE), or for
+  one that is held, craned or on its stand — never for finishing a walk.
+* **Your own setpoint loop owns the robot; ``goto()`` does not.** The firmware obeys
+  whichever command arrived last. A ``goto()`` is fenced: any verb from any thread —
+  ``damp()``, ``stand()``, a velocity — bumps the generation and the goto thread stops
+  before its next setpoint leaves. A loop you clock yourself with ``trajectory()`` is
+  not fenced: a mode verb sent from another thread is overwritten by your next setpoint.
+  Measured: a ``damp()`` fired into a hand-rolled 50 Hz trajectory loop left the robot in
+  MOVE and upright, exactly as if it had never been sent. Stop your loop first, then
+  send the verb. For an emergency, kill the process: the edge DAMPs by itself about two
+  seconds after the last setpoint, and that path does not depend on your loop still
+  working.
 * **``close()`` zeroes velocity first**, then drops the link, so leaving the ``with``
   block — including by exception — leaves the robot standing still, not walking.
 * **``damp()`` is the emergency verb.** A standing biped folds. It raises on a dead link
@@ -412,13 +429,22 @@ class Robot:
             return self._send(name, v, gen, clamped=(v != asked))
 
     def stop(self) -> Sent:
-        """Zero velocity. The firmware stays in MOVE at zero speed (standing in place under
-        the walking policy); call ``stand()`` to return to the STAND posture. Not an
-        emergency stop — see ``damp``."""
+        """Zero velocity. The firmware stays in MOVE at zero speed, balancing in place
+        under the walking policy — for a free-standing robot that IS how it stands still,
+        so this is usually where a walk should end. ``stand()`` returns it to the STAND
+        posture, but see that verb's warning first. Not an emergency stop — see ``damp``."""
         return self._drive("stop", Velocity(), None)
 
     def stand(self) -> Sent:
-        """Ask the firmware to stand. One-shot. Follow with ``wait_for(Mode.STAND)``."""
+        """Stiffen to the standing pose. One-shot; follow with ``wait_for(Mode.STAND)``.
+
+        STAND blends every joint to a fixed pose and holds it there with position gains.
+        There is **no balance loop** — the robot does not catch itself. It is the wake-up
+        verb (DAMP -> STAND -> MOVE) and is safe on a robot that is held, craned or on its
+        stand. Asking a free-standing biped to stiffen after walking tips it over, and a
+        fall latches a fault-DAMP that lasts until the firmware restarts. To stand still
+        after walking, stay in MOVE at zero velocity (``stop()``), where the policy keeps
+        balancing."""
         return self._once("stand", ModeCommand("stand"))
 
     def damp(self) -> Sent:
@@ -437,8 +463,9 @@ class Robot:
         under position control and the walking policy is off, so a standing biped will not
         balance itself — see :meth:`goto`. The edge drives a trajectory for two seconds after
         the last setpoint and then DAMPs, so clock these yourself or use :meth:`goto`.
-        ``ValueError`` unless ``len(positions) == info.dof``, or when only one of ``kp``/``kd``
-        is given (the edge ignores a lone gain)."""
+        A ``kp``/``kd`` entry of zero or less means the firmware substitutes its own DAMP
+        gains for that joint (limp). ``ValueError`` unless ``len(positions) == info.dof``, or
+        when only one of ``kp``/``kd`` is given (the edge ignores a lone gain)."""
         pos = tuple(float(p) for p in positions)
         if self._info is not None and len(pos) != self._info.dof:
             raise ValueError(
