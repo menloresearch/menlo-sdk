@@ -21,10 +21,15 @@ secret never leaves the manager.
 from __future__ import annotations
 
 import json
+import re
+import secrets
+import socket
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
+from urllib.parse import urlsplit, urlunsplit
 
 from asimov_sdk._errors import ConnectError
 from asimov_sdk.transport._livekit_client import TokenProvider
@@ -39,6 +44,15 @@ MODES: tuple[ConnectMode, ...] = get_args(ConnectMode)
 
 #: A manager answer larger than this is not a token reply.
 _MAX_REPLY_BYTES = 64 * 1024
+
+#: Hosts a manager may name in the LiveKit URL it mints that mean "this machine" to the
+#: ROBOT (the manager configures the edge, which runs beside the SFU) and nowhere else.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"})
+
+#: The characters the manager keeps in a label (its ``sanitize()``: anything else becomes
+#: a dash, the ends are stripped, the result lowercased). Applied here too, so the SDK's
+#: default label arrives as it was made.
+_LABEL_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 #: Which ``ConnectionConfig`` slots each mode needs.
 _SLOTS: dict[str, tuple[str, ...]] = {
@@ -80,12 +94,18 @@ class LiveKitConfig:
 class ManagerConfig:
     """Let the robot's manager supply the LiveKit details. ``credential`` comes from the
     manager's SDK page (or ``asimovctl sdk-token create``); its role decides whether the
-    session may drive and talk (``control``) or only watch (``observe``)."""
+    session may drive and talk (``control``) or only watch (``observe``).
+
+    ``url`` is the manager's address as a browser would type it: ``http://asimov.local``
+    (port 80), ``http://10.0.0.5:8080``, or just ``10.0.0.5`` (``http://`` is assumed).
+    """
 
     url: str
     credential: str = field(repr=False)  # a bearer secret; keep it out of logs and tracebacks
-    #: Optional suffix for this session's room identity (``sdk-<credential id>-<label>``),
-    #: so two sessions on one credential can be told apart in the room.
+    #: Suffix for this session's room identity (``sdk-<credential id>-<label>``). LiveKit
+    #: keys participants by identity and a second join with the same identity EVICTS the
+    #: first, so two sessions on one credential must not share one. Left ``None``, every
+    #: ``resolve()`` makes its own: ``<this host>-<6 random hex>``.
     label: str | None = None
     #: HTTP timeout for each request to the manager.
     timeout: float = 5.0
@@ -93,26 +113,56 @@ class ManagerConfig:
     def __post_init__(self) -> None:
         if not self.timeout > 0:
             raise ValueError(f"ManagerConfig.timeout must be positive, not {self.timeout!r}")
+        url = self.url.strip()
+        if not url:
+            raise ValueError("ManagerConfig.url is empty")
+        if "://" not in url:
+            url = "http://" + url
+        object.__setattr__(self, "url", url.rstrip("/"))
+
+    @property
+    def host(self) -> str:
+        """The manager's hostname or address, without scheme or port."""
+        return urlsplit(self.url).hostname or self.url
 
     def resolve(self) -> LiveKitConfig:
         """Ask the manager once for url + room + a token, and hand the transport a token
         callable: the first join uses that token, every later join mints a fresh one. Nothing
-        minted is thrown away — each token is a live grant on the room."""
-        first = self._mint()
+        minted is thrown away — each token is a live grant on the room.
+
+        The identity is fixed for the session here: one label, whether the caller's or a
+        fresh default, is sent with every mint, so a rejoin comes back as the same
+        participant instead of evicting a second one."""
+        label = self.label if self.label is not None else default_label()
+        first = self._mint(label)
         unused = [str(first["token"])]
 
         def mint() -> str:
             if unused:
                 return unused.pop()
-            return str(self._mint()["token"])
+            return str(self._mint(label)["token"])
 
-        return LiveKitConfig(url=str(first["url"]), room=str(first["room"]), token=mint)
+        return LiveKitConfig(
+            url=self._reachable(str(first["url"])), room=str(first["room"]), token=mint
+        )
 
-    def _mint(self) -> dict[str, Any]:
-        endpoint = self.url.rstrip("/") + "/api/livekit/token"
-        body: dict[str, Any] = {}
-        if self.label:
-            body["label"] = self.label
+    def _reachable(self, livekit_url: str) -> str:
+        """The LiveKit URL as THIS machine can reach it. The manager reports the URL it
+        gave the edge, and on a robot whose SFU runs beside the edge that is
+        ``ws://localhost:7880`` — correct on the robot, "connection refused" anywhere else.
+        A loopback host is replaced by the manager's own host; scheme and port stay."""
+        parts = urlsplit(livekit_url)
+        if parts.hostname not in _LOOPBACK_HOSTS:
+            return livekit_url
+        host = self.host
+        if ":" in host:  # a bare IPv6 address needs its brackets back in a URL
+            host = f"[{host}]"
+        netloc = f"{host}:{parts.port}" if parts.port is not None else host
+        return urlunsplit(parts._replace(netloc=netloc))
+
+    def _mint(self, label: str) -> dict[str, Any]:
+        endpoint = self.url + "/api/livekit/token"
+        body: dict[str, Any] = {"label": label} if label else {}
         request = urllib.request.Request(
             endpoint,
             data=json.dumps(body).encode(),
@@ -172,6 +222,17 @@ class ManagerConfig:
         return dict(payload)
 
 
+def default_label() -> str:
+    """The label a session gets when its caller set none: ``<host>-<6 hex>``, sanitized
+    the manager's way. Random per call, so two connects on one credential — two scripts,
+    or one script restarted while the previous participant is still timing out — never
+    present the same identity and never evict each other. Short enough to fit the
+    manager's 64-character identity limit behind ``sdk-<credential id>-``."""
+    host = _LABEL_UNSAFE.sub("-", socket.gethostname()).strip("-").lower()[:16].strip("-")
+    suffix = secrets.token_hex(3)
+    return f"{host}-{suffix}" if host else suffix
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Refuse every redirect: urllib re-sends the ``Authorization`` header to the new URL."""
 
@@ -204,10 +265,32 @@ class ConnectionConfig:
     udp: UdpConfig | None = None
     livekit: LiveKitSource | None = None
 
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str] | None = None) -> ConnectionConfig:
+        """The config ``Robot()`` uses when handed none: ``ASIMOV_MANAGER_URL`` +
+        ``ASIMOV_CREDENTIAL`` from the environment, else the default robot in
+        ``~/.asimov/robots.toml``. :class:`ConnectError` naming both when neither is set.
+        See :mod:`asimov_sdk.store`."""
+        from asimov_sdk.store import resolve_connection
+
+        return resolve_connection(environ)
+
     def available_modes(self) -> tuple[ConnectMode, ...]:
         """The modes this config can connect on, given which slots are set."""
         return tuple(
             mode for mode in MODES if all(getattr(self, s) is not None for s in _SLOTS[mode])
+        )
+
+    def only_mode(self) -> ConnectMode:
+        """The one mode this config can connect on — what ``connect()`` uses when given
+        none. ``ValueError`` when the choice is not the config's to make."""
+        modes = self.available_modes()
+        if len(modes) == 1:
+            return modes[0]
+        if not modes:
+            raise ConnectError("this ConnectionConfig has no lane set; nothing to connect on")
+        raise ValueError(
+            f"this ConnectionConfig can connect on {', '.join(modes)}; pass connect(mode)"
         )
 
     def transport_for(
@@ -269,4 +352,5 @@ __all__ = [
     "LiveKitSource",
     "ManagerConfig",
     "UdpConfig",
+    "default_label",
 ]

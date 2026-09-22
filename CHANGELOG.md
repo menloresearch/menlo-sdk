@@ -6,6 +6,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## 0.1.0 — unreleased
 
 ### Added
+- Zero-config connect: `Robot()` with no config resolves one from `ASIMOV_MANAGER_URL` +
+  `ASIMOV_CREDENTIAL`, else from `~/.asimov/robots.toml` (`$ASIMOV_HOME`; `ASIMOV_ROBOT`
+  picks a named entry), else raises `ConnectError` naming both; `connect()` with no mode
+  takes the config's one lane. `asimov_sdk.store`: `RobotStore`, `StoredRobot`; the file is
+  0600 in a 0700 directory. `connect(persist=True)` / `ASIMOV_PERSIST=1` save a working URL
+  and credential after a successful connect, keyed by the serial in the robot's room.
+- The `asimov` console script: `asimov login <manager-url> [--credential]` validates a
+  credential by minting a token exactly as `connect()` does, then saves it; `asimov robots`,
+  `asimov use <name>`, `asimov logout <name>`.
+- `connect(require_state=False)`: the media lane without waiting for the firmware.
+  `robot.state`, `robot.info` and the motion verbs raise `NotConnectedError` until the robot
+  reports, then the handshake completes on its own; a late protocol mismatch is raised
+  where it is read.
+- `set_velocity(..., duration=, wait=True)` blocks until the hold has ended and its zero
+  has gone out (or another verb superseded it); `close()` during a waited hold raises
+  `NotConnectedError`. `close()` documents that it cuts an unexpired hold short.
+- `State.yaw`; `Frame.to_jpeg(quality=85) -> bytes` (Pillow, named in the `ImportError`
+  when absent; JPEG frames pass through).
+- `ManagerConfig`: the URL needs neither scheme nor port (`192.168.22.32`, `http://host`,
+  `http://host:8080`); a loopback LiveKit URL minted by the manager (`ws://localhost:7880`,
+  the robot's own view) is rewritten to the manager's host; a session with no `label` gets
+  `<host>-<6 random hex>` so two sessions on one credential never share an identity.
+  `ManagerConfig.host`, `asimov_sdk.connection.default_label()`,
+  `ConnectionConfig.from_environment()`, `ConnectionConfig.only_mode()`;
+  `LiveKitTransport.room` / `HybridTransport.room`.
+- `docs/SKILL.md`: the agent-facing reference for writing a script against the SDK.
 - `ConnectionConfig(udp=UdpConfig(...), livekit=LiveKitConfig(...) | ManagerConfig(...))`
   describes a robot's lanes, one typed class each; `Robot(cfg)` binds without touching the
   network; `robot.connect("udp" | "hybrid" | "livekit", timeout=, media_timeout=,

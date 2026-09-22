@@ -3,11 +3,10 @@ fields live on their own class, and nothing touches the network before connect()
 
 from __future__ import annotations
 
-import json
+import re
 import threading
 import time
 from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
@@ -23,7 +22,7 @@ from asimov_sdk import (
 )
 from asimov_sdk.connection import MODES
 from asimov_sdk.transport import HybridTransport, LiveKitTransport, UdpTransport
-from tests.conftest import FakeLiveKitClient
+from tests.conftest import FakeLiveKitClient, FakeManager, route_manager_rooms_to
 
 # ── the config itself ─────────────────────────────────────────────────────────
 
@@ -76,72 +75,6 @@ def test_each_lane_config_has_only_its_own_fields():
 # ── ManagerConfig: the SDK mints through the manager, the user never sees a token ────
 
 
-class _Manager(HTTPServer):
-    """A stand-in for asimov-manager's POST /api/livekit/token."""
-
-    def __init__(self) -> None:
-        self.requests: list[tuple[dict, dict]] = []  # (headers, body)
-        self.status = 200
-        self.reply: dict = {
-            "url": "ws://robot:7880",
-            "room": "robot-menlo-0042",
-            "token": "jwt-1",
-            "identity": "sdk-abc",
-            "expires_at": "2099-01-01T00:00:00Z",
-        }
-        self.minted = 0
-        self.raw_body: bytes | None = None  # when set, answered verbatim with raw_type
-        self.raw_type = "text/html"
-        self.redirect_to: str | None = None  # when set, every request is a 302 there
-        server = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length)
-                body = json.loads(raw) if raw.startswith(b"{") else {}
-                server.requests.append((dict(self.headers), body))
-                if server.redirect_to:
-                    self.send_response(302)
-                    self.send_header("Location", server.redirect_to)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-                if server.raw_body is not None:
-                    self.send_response(200)
-                    self.send_header("Content-Type", server.raw_type)
-                    self.send_header("Content-Length", str(len(server.raw_body)))
-                    self.end_headers()
-                    self.wfile.write(server.raw_body)
-                    return
-                server.minted += 1
-                reply = dict(server.reply)
-                if server.status == 200:
-                    reply["token"] = f"jwt-{server.minted}"
-                payload = json.dumps(
-                    reply if server.status == 200 else {"error": "no LiveKit here"}
-                )
-                self.send_response(server.status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload.encode())
-
-            def log_message(self, *_: object) -> None:
-                pass
-
-        super().__init__(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server_address[1]}"
-        threading.Thread(target=self.serve_forever, daemon=True).start()
-
-
-@pytest.fixture
-def manager():
-    server = _Manager()
-    yield server
-    server.shutdown()
-
-
 def test_manager_config_asks_the_manager_with_the_credential_and_mints_per_join(manager):
     cfg = ManagerConfig(url=manager.url, credential="cred-123", label="laptop")
     lk = cfg.resolve()
@@ -156,6 +89,60 @@ def test_manager_config_asks_the_manager_with_the_credential_and_mints_per_join(
     assert lk.token() == "jwt-1"
     assert lk.token() == "jwt-2"
     assert manager.minted == 2
+
+
+@pytest.mark.parametrize(
+    "minted", ["ws://localhost:7880", "ws://127.0.0.1:7880", "ws://0.0.0.0:7880"]
+)
+def test_a_loopback_livekit_url_from_the_manager_is_rewritten_to_the_managers_host(manager, minted):
+    """The manager reports the URL it gave the EDGE. On a robot whose SFU runs beside the
+    edge that is ws://localhost:7880 — right on the robot, "connection refused" here."""
+    manager.reply["url"] = minted
+    lk = ManagerConfig(url=manager.url, credential="c").resolve()
+    assert lk.url == "ws://127.0.0.1:7880"  # the manager fixture lives on 127.0.0.1
+    assert lk.room == "robot-menlo-0042"
+
+
+def test_a_livekit_url_naming_a_real_host_is_left_alone(manager):
+    manager.reply["url"] = "wss://sfu.example.net:443"
+    assert (
+        ManagerConfig(url=manager.url, credential="c").resolve().url == "wss://sfu.example.net:443"
+    )
+
+
+def test_the_manager_url_needs_neither_scheme_nor_port():
+    plain = ManagerConfig(url="192.168.22.32", credential="c")
+    assert plain.url == "http://192.168.22.32" and plain.host == "192.168.22.32"
+    assert plain._reachable("ws://localhost:7880") == "ws://192.168.22.32:7880"
+    assert ManagerConfig(url="http://asimov.local:8080/", credential="c").url == (
+        "http://asimov.local:8080"
+    )
+    assert (
+        ManagerConfig(url="http://[::1]:8080", credential="c")._reachable("ws://localhost:7880")
+        == "ws://[::1]:7880"
+    )
+    with pytest.raises(ValueError, match="url is empty"):
+        ManagerConfig(url="  ", credential="c")
+
+
+def test_two_sessions_on_one_credential_never_share_a_default_identity(manager):
+    """A duplicate identity EVICTS the earlier participant. Without a label every session
+    on one credential is `sdk-<id>`, and the second connect kicks the first out."""
+    cfg = ManagerConfig(url=manager.url, credential="c")
+    first = cfg.resolve()
+    second = cfg.resolve()
+    labels = [body["label"] for _headers, body in manager.requests]
+    assert len(labels) == 2 and labels[0] != labels[1]
+    for label in labels:
+        assert re.fullmatch(r"[a-z0-9_.-]{1,50}", label), label
+        assert len(label) <= 50  # sdk-<8 hex id>- leaves this much of the 64-char identity
+    # one session keeps ONE identity: a rejoin mints with the same label, not a new one
+    first.token()
+    first.token()
+    assert manager.requests[-1][1]["label"] == labels[0]
+    second.token()
+    second.token()
+    assert manager.requests[-1][1]["label"] == labels[1]
 
 
 def test_manager_config_builds_the_livekit_transport_from_the_managers_answer(manager):
@@ -185,7 +172,7 @@ def test_an_old_manager_without_the_token_fields_is_reported(manager):
 
 def test_a_redirecting_manager_is_refused_and_the_credential_stays_home(manager):
     """urllib follows redirects WITH the Authorization header; the SDK must not."""
-    elsewhere = _Manager()
+    elsewhere = FakeManager()
     try:
         manager.redirect_to = elsewhere.url + "/api/livekit/token"
         with pytest.raises(ConnectError, match=r"redirected to .*use that address"):
@@ -395,6 +382,21 @@ def test_a_frames_generator_held_across_a_reconnect_follows_the_new_lane(edge):
         robot.close()
 
 
+def test_connect_without_requiring_state_returns_before_the_robot_reports(edge):
+    edge.pushing = False
+    cfg = _FakeLanes(edge)
+    robot = Robot(cfg).connect("livekit", timeout=0.2, require_state=False)
+    try:
+        assert robot.connected and robot.has("camera")
+        assert robot.camera.latest() is None  # attaches to the lane
+        frame = cfg.clients[-1].push_frame(1)
+        assert robot.camera.latest() is frame
+        with pytest.raises(NotConnectedError, match="has not reported state"):
+            robot.set_velocity(vx=0.1)
+    finally:
+        robot.close()
+
+
 def test_connect_while_connected_raises_and_leaves_the_session_alone(edge):
     robot = Robot(_FakeLanes(edge)).connect("udp", timeout=3.0)
     try:
@@ -428,18 +430,7 @@ def test_a_transport_bound_robot_has_no_config_and_uses_open(robot):
 def test_manager_config_end_to_end_reaches_the_fake_room(edge, manager, monkeypatch):
     """ManagerConfig → manager answers url/room/token → LiveKitTransport with a callable token
     → the room is joined with a token the user never saw."""
-    from asimov_sdk import connection
-
-    seen_tokens: list[str] = []
-    real = connection.LiveKitTransport
-
-    class Capturing(real):  # type: ignore[misc,valid-type]
-        def __init__(self, url, room, *, token, **kw):
-            client = FakeLiveKitClient(edge, token=token() if callable(token) else token)
-            seen_tokens.append(client._token)
-            super().__init__(url, room, token=token, client=client, **kw)
-
-    monkeypatch.setattr(connection, "LiveKitTransport", Capturing)
+    seen_tokens = route_manager_rooms_to(edge, monkeypatch)
     cfg = ConnectionConfig(livekit=ManagerConfig(url=manager.url, credential="cred"))
     robot = Robot(cfg).connect("livekit", timeout=3.0)
     try:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 import threading
 import time
 
@@ -197,3 +198,53 @@ def test_has_tracks_a_media_capability_disappearing_mid_session(media):
     assert not robot.has("camera"), "has() must follow the transport, not the snapshot"
     with pytest.raises(UnsupportedError):
         robot.require("camera")
+
+
+# ── Frame.to_jpeg ─────────────────────────────────────────────────────────────
+
+
+def _pil():
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("Pillow is not installed here; to_jpeg() raises ImportError naming it")
+    return Image
+
+
+def test_to_jpeg_encodes_rgb_bgr_and_gray_frames_and_passes_jpeg_through():
+    Image = _pil()
+    # Solid 8x8 blocks: JPEG averages chroma over 2x2 pixels, so a single pixel says nothing.
+    red_rgb = bytes([255, 0, 0]) * 64
+    red_bgr = bytes([0, 0, 255]) * 64
+    for encoding, data in (("rgb8", red_rgb), ("bgr8", red_bgr)):
+        out = Frame(width=8, height=8, encoding=encoding, data=data).to_jpeg(quality=95)
+        assert out[:3] == b"\xff\xd8\xff", f"{encoding}: not a JPEG"
+        img = Image.open(io.BytesIO(out))
+        assert img.size == (8, 8) and img.mode == "RGB"
+        r, g, b = img.getpixel((4, 4))
+        assert r > 200 and g < 60 and b < 60, f"{encoding}: expected red, got {(r, g, b)}"
+    # a padded stride is honoured, and gray stays gray
+    row = bytes([255] * 8 + [9, 9, 9, 9])
+    padded = Frame(width=8, height=8, encoding="gray8", data=row * 8, stride_bytes=12)
+    img = Image.open(io.BytesIO(padded.to_jpeg()))
+    assert img.mode == "L" and img.size == (8, 8) and img.getpixel((7, 7)) > 240
+    already = Frame(width=1, height=1, encoding="jpeg", data=b"\xff\xd8\xff\xd9")
+    assert already.to_jpeg() is already.data, "a JPEG frame is not re-encoded"
+
+
+def test_to_jpeg_refuses_what_is_not_pixels_and_a_bad_quality():
+    frame = Frame(width=2, height=2, encoding="h264", data=bytes(8))
+    with pytest.raises(ValueError, match="not raw RGB"):
+        frame.to_jpeg()
+    with pytest.raises(ValueError, match="quality"):
+        Frame(width=1, height=1, encoding="rgb8", data=bytes(3)).to_jpeg(quality=0)
+
+
+def test_to_jpeg_quality_is_a_real_knob():
+    _pil()
+    import random
+
+    rnd = random.Random(1)
+    noisy = bytes(rnd.randrange(256) for _ in range(64 * 64 * 3))
+    frame = Frame(width=64, height=64, encoding="rgb8", data=noisy)
+    assert len(frame.to_jpeg(quality=20)) < len(frame.to_jpeg(quality=95))

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import threading
 import time
 from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
@@ -357,6 +359,99 @@ def any_robot(request, edge):
     r.open(timeout=3.0)
     yield request.param, r
     r.close()
+
+
+class FakeManager(HTTPServer):
+    """A stand-in for asimov-manager's POST /api/livekit/token."""
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[dict, dict]] = []  # (headers, body)
+        self.status = 200
+        self.reply: dict = {
+            "url": "ws://robot:7880",
+            "room": "robot-menlo-0042",
+            "token": "jwt-1",
+            "identity": "sdk-abc",
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+        self.minted = 0
+        self.raw_body: bytes | None = None  # when set, answered verbatim with raw_type
+        self.raw_type = "text/html"
+        self.redirect_to: str | None = None  # when set, every request is a 302 there
+        server = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length)
+                body = json.loads(raw) if raw.startswith(b"{") else {}
+                server.requests.append((dict(self.headers), body))
+                if server.redirect_to:
+                    self.send_response(302)
+                    self.send_header("Location", server.redirect_to)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if server.raw_body is not None:
+                    self.send_response(200)
+                    self.send_header("Content-Type", server.raw_type)
+                    self.send_header("Content-Length", str(len(server.raw_body)))
+                    self.end_headers()
+                    self.wfile.write(server.raw_body)
+                    return
+                server.minted += 1
+                reply = dict(server.reply)
+                if server.status == 200:
+                    reply["token"] = f"jwt-{server.minted}"
+                payload = json.dumps(
+                    reply if server.status == 200 else {"error": "no LiveKit here"}
+                )
+                self.send_response(server.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload.encode())
+
+            def log_message(self, *_: object) -> None:
+                pass
+
+        super().__init__(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server_address[1]}"
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+
+@pytest.fixture
+def manager():
+    server = FakeManager()
+    yield server
+    server.shutdown()
+
+
+def route_manager_rooms_to(edge: FakeEdge, monkeypatch) -> list[str]:
+    """Make every ``LiveKitTransport`` a ``ManagerConfig`` builds join the FakeEdge through
+    the fake client instead of a real room. Returns the list the tokens each join presented
+    are appended to, so a test can see which mint a join used."""
+    from asimov_sdk import connection
+
+    seen_tokens: list[str] = []
+    real = connection.LiveKitTransport
+
+    class Capturing(real):  # type: ignore[misc,valid-type]
+        def __init__(self, url, room, *, token, **kw):
+            client = FakeLiveKitClient(edge, token=token() if callable(token) else token)
+            seen_tokens.append(client._token)
+            super().__init__(url, room, token=token, client=client, **kw)
+
+    monkeypatch.setattr(connection, "LiveKitTransport", Capturing)
+    return seen_tokens
+
+
+@pytest.fixture(autouse=True)
+def _own_environment(monkeypatch, tmp_path):
+    """No test reads the developer's ~/.asimov or environment, and none writes there."""
+    monkeypatch.setenv("ASIMOV_HOME", str(tmp_path / "asimov-home"))
+    for name in ("ASIMOV_PERSIST", "ASIMOV_MANAGER_URL", "ASIMOV_CREDENTIAL", "ASIMOV_ROBOT"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

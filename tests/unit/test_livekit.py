@@ -21,6 +21,9 @@ from asimov_sdk import (
     ConnectError,
     Frame,
     LinkLostError,
+    Mode,
+    NotConnectedError,
+    ProtocolMismatchError,
     Robot,
     UnsupportedError,
     WaitTimeoutError,
@@ -224,6 +227,93 @@ def test_the_speaker_publishes_onto_the_room(livekit_robot):
     robot.speaker.play_pcm(bytes(3200), sample_rate_hz=16_000)
     assert len(client.played) == 1 and client.played[0].samples_per_channel == 1600
     assert client.played[0].encoding == "pcm_s16le"
+
+
+# ── media without state ───────────────────────────────────────────────────────
+
+
+def test_a_media_only_session_opens_without_state_and_refuses_to_drive(edge):
+    """The camera, microphone and speaker are the room's; the firmware need not be up for
+    them. A session that does not wait for state gets the media at once, and every verb
+    that would move the robot refuses until the robot has reported."""
+    client = FakeLiveKitClient(edge, carry_state=False)  # no state track in this room
+    tx = LiveKitTransport("ws://fake", "asimov-room", token="t", client=client)
+    robot = Robot(tx, link_timeout=0.3)
+    started = time.monotonic()
+    robot.open(timeout=3.0, require_state=False)
+    try:
+        assert time.monotonic() - started < 1.0, "a media-only open must not wait for state"
+        assert robot.connected and robot.has("camera") and robot.has("speaker")
+        threading.Timer(0.02, client.push_frame, args=(1,)).start()
+        assert robot.camera.photo(timeout=1.0).sequence == 1
+        robot.speaker.play_pcm(bytes(320))
+        assert len(client.played) == 1
+        with pytest.raises(NotConnectedError, match="has not reported state"):
+            _ = robot.state
+        with pytest.raises(NotConnectedError, match="has not reported state"):
+            _ = robot.info
+        for verb in (
+            robot.stand,
+            robot.damp,
+            robot.stop,
+            lambda: robot.set_velocity(vx=0.1),
+            lambda: robot.trajectory([0.0] * 25),
+        ):
+            with pytest.raises(NotConnectedError, match="has not reported state"):
+                verb()
+        with pytest.raises(WaitTimeoutError):
+            robot.wait_for(Mode.STAND, timeout=0.2)
+        time.sleep(0.8)  # well past link_timeout
+        assert robot.connected, "a stream that never started is not one that went quiet"
+        assert [t for t in client.published if t[0] == COMMAND_TOPIC] == [], "nothing went out"
+    finally:
+        robot.close()
+
+
+def test_state_arriving_later_completes_the_handshake_and_unlocks_the_verbs(edge):
+    edge.pushing = False  # the firmware is down when the script starts
+    _client, robot = make_livekit_robot(edge)
+    robot.open(timeout=0.2, require_state=False)
+    try:
+        with pytest.raises(NotConnectedError):
+            robot.stand()
+        edge.pushing = True  # and comes up mid-session
+        assert robot.wait_until(lambda s: s.mode is Mode.DAMP, timeout=3.0).mode is Mode.DAMP
+        assert robot.info.dof == 25 and robot.info.joint_names is not None
+        assert robot.state.upright is True
+        robot.stand()
+        assert edge.wait_for(lambda rx: edge.modes().count("stand") == 1)
+    finally:
+        robot.close()
+
+
+def test_a_late_protocol_mismatch_is_raised_where_it_is_read_not_lost_in_a_log(edge):
+    edge.pushing = False
+    edge.state.protocol_version = 99
+    _client, robot = make_livekit_robot(edge)
+    robot.open(timeout=0.2, require_state=False)
+    try:
+        edge.pushing = True
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and robot._handshake_error is None:
+            time.sleep(0.02)
+        with pytest.raises(ProtocolMismatchError) as info:
+            _ = robot.state
+        assert info.value.observed == 99
+        with pytest.raises(ProtocolMismatchError):
+            robot.stand()
+        with pytest.raises(ProtocolMismatchError):
+            robot.wait_for(Mode.STAND, timeout=1.0)
+        assert robot.connected, "the room is fine; it is the robot this SDK cannot talk to"
+    finally:
+        robot.close()
+
+
+def test_a_session_that_waited_for_state_still_fails_loudly_without_it(edge):
+    edge.pushing = False
+    _client, robot = make_livekit_robot(edge)
+    with pytest.raises(ConnectError, match="no state from the robot"):
+        robot.open(timeout=0.3)
 
 
 # ── lifecycle ─────────────────────────────────────────────────────────────────
