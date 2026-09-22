@@ -234,6 +234,7 @@ def test_close_from_the_loop_thread_still_sends_the_zero_and_leaves_the_room(lk_
     assert room.local_participant.published == [("asimov.command", b"zero")], "zero went out"
     assert took[0] < 1.0, f"close() did not stall on its own loop ({took[0]:.2f}s)"
     assert not lk_client.connected
+    assert lk_client.identity is None and lk_client.tracks == frozenset(), "reports gone"
 
 
 def test_close_from_another_thread_is_unchanged(lk_client):

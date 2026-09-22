@@ -1115,10 +1115,6 @@ class Robot:
             return "restart"
         return "stale"
 
-    @classmethod
-    def _is_stale_sample(cls, prev: State, state: State) -> bool:
-        return cls._classify_sample(prev, state) == "stale"
-
     def _carry_alerts(self, state: State) -> State:
         """The firmware puts its alert block in every 20th frame (10 Hz at 200 Hz) and an
         absent block decodes the same as "no alerts". Carry the last block forward for
