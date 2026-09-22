@@ -2,7 +2,7 @@
 
 ::
 
-    from asimov_sdk import ConnectionConfig, Mode, Robot, UdpConfig
+    from menlo.asimov import ConnectionConfig, Mode, Robot, UdpConfig
 
     cfg = ConnectionConfig(udp=UdpConfig("asimov.local"))
     with Robot(cfg).connect("udp") as robot:
@@ -18,11 +18,11 @@
         # holding tips over.
 
 The verbs are the wire's verbs — ``set_velocity``, ``stand``, ``damp``, ``stop``,
-``trajectory`` — and every one returns immediately with a :class:`~asimov_sdk.Sent`.
+``trajectory`` — and every one returns immediately with a :class:`~menlo.asimov.Sent`.
 Two questions are kept apart on purpose:
 
 * **Was it admitted?** ``sent.wait_outcome()`` — the arbiter's verdict, when the edge
-  reports one (today: ``Unknown``; see :mod:`asimov_sdk._outcome`).
+  reports one (today: ``Unknown``; see :mod:`menlo.asimov._outcome`).
 * **Did it take effect?** ``robot.wait_for(Mode.STAND)`` / ``robot.wait_until(pred)`` —
   read from the robot's own state stream, never inferred from what we sent.
 
@@ -72,13 +72,13 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Literal, Self
 
-from asimov_sdk import robots, store
-from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity
-from asimov_sdk._errors import (
-    AsimovError,
+from menlo.asimov import robots, store
+from menlo.asimov._command import Command, Limits, ModeCommand, Trajectory, Velocity
+from menlo.asimov._errors import (
     CommandRefusedError,
     ConnectError,
     LinkLostError,
+    MenloError,
     NotConnectedError,
     ProtocolMismatchError,
     RobotFaultedError,
@@ -86,16 +86,16 @@ from asimov_sdk._errors import (
     UnsupportedError,
     WaitTimeoutError,
 )
-from asimov_sdk._media import Camera, Microphone, Speaker
-from asimov_sdk._outcome import Applied, Refused, Sent
-from asimov_sdk._state import Alert, Capability, Mode, RobotInfo, State
-from asimov_sdk.connection import ConnectionConfig, ConnectMode, ManagerConfig
-from asimov_sdk.recording import Recording
-from asimov_sdk.transport.base import Transport
+from menlo.asimov._media import Camera, Microphone, Speaker
+from menlo.asimov._outcome import Applied, Refused, Sent
+from menlo.asimov._state import Alert, Capability, Mode, RobotInfo, State
+from menlo.asimov.connection import ConnectionConfig, ConnectMode, ManagerConfig
+from menlo.asimov.recording import Recording
+from menlo.asimov.transport.base import Transport
 
 # Importing the LiveKit transports does NOT import livekit: every `livekit` import in the
 # SDK is lazy, inside `transport/_livekit_client.py`. `connect("udp")` never touches it.
-from asimov_sdk.transport.livekit import MEDIA_TIMEOUT_S
+from menlo.asimov.transport.livekit import MEDIA_TIMEOUT_S
 
 if TYPE_CHECKING:
     pass
@@ -255,11 +255,11 @@ class Robot:
         session becomes an ordinary one — including :class:`LinkLostError` should that
         stream then go quiet. Nothing is sent to the robot before then.
 
-        ``persist=True`` (or ``ASIMOV_PERSIST=1`` in the environment) records the manager URL
-        and credential in ``~/.asimov/robots.toml`` once the connect has SUCCEEDED, keyed by
+        ``persist=True`` (or ``MENLO_PERSIST=1`` in the environment) records the manager URL
+        and credential in ``~/.menlo/robots.toml`` once the connect has SUCCEEDED, keyed by
         the robot's serial (from its room) and made the default when the store had none, so
         the next script can be ``Robot().connect()``. ``ValueError`` before any I/O when the
-        config has no :class:`ManagerConfig` to record. See :mod:`asimov_sdk.store`.
+        config has no :class:`ManagerConfig` to record. See :mod:`menlo.asimov.store`.
 
         ``media_timeout`` is how long a LiveKit lane waits for the robot's tracks before
         deciding what it carries; ``connect_timeout`` bounds the room join itself.
@@ -293,7 +293,7 @@ class Robot:
         )
         if persist:
             # The session is open by now. A store that cannot be written (read-only or full
-            # $ASIMOV_HOME, a name that belongs to another manager) must not leave it open
+            # $MENLO_HOME, a name that belongs to another manager) must not leave it open
             # behind an exception the caller's `with` never gets to close.
             try:
                 saved = store.persist(config, getattr(tx, "room", None))
@@ -371,7 +371,7 @@ class Robot:
         stop = threading.Event()
         self._stop = stop
         self._keepalive = threading.Thread(
-            target=self._keepalive_loop, args=(stop,), name="asimov-sdk-keepalive", daemon=True
+            target=self._keepalive_loop, args=(stop,), name="menlo-sdk-keepalive", daemon=True
         )
         self._keepalive.start()
 
@@ -423,7 +423,7 @@ class Robot:
                 return False
             return True
 
-    def _no_state(self) -> AsimovError:
+    def _no_state(self) -> MenloError:
         """Why there is no state to read: the session never heard the robot, or heard one
         this SDK cannot talk to."""
         if self._handshake_error is not None:
@@ -521,7 +521,7 @@ class Robot:
 
     def record(self, path: str | os.PathLike[str], **kw: bool) -> Recording:
         """``with robot.record("run.jsonl"): ...`` writes every state sample and every
-        command sent to a JSON-lines file. See :mod:`asimov_sdk.recording`."""
+        command sent to a JSON-lines file. See :mod:`menlo.asimov.recording`."""
         return Recording(self, path, **kw)
 
     @property
@@ -750,11 +750,11 @@ class Robot:
                         return  # superseded by another verb, or closed
                 try:
                     self._send("trajectory", Trajectory(blend(min(i, steps)), kp_t, kd_t), gen)
-                except AsimovError:
+                except MenloError:
                     return
                 i += 1
 
-        threading.Thread(target=run, name="asimov-sdk-goto", daemon=True).start()
+        threading.Thread(target=run, name="menlo-sdk-goto", daemon=True).start()
         if wait:
             limit = duration + 2.0 if timeout is None else timeout
             self.wait_until(

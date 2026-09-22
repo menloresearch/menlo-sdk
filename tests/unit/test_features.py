@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from asimov_sdk import (
+from menlo.asimov import (
     Battery,
     BatteryProtection,
     Frame,
@@ -17,8 +17,8 @@ from asimov_sdk import (
     UnsupportedError,
     WaitTimeoutError,
 )
-from asimov_sdk._media import AudioChunk
-from asimov_sdk.recording import load
+from menlo.asimov._media import AudioChunk
+from menlo.asimov.recording import load
 from tests.conftest import connect_udp
 
 
@@ -178,7 +178,7 @@ def test_alerts_sent_every_20th_frame_are_carried_forward_for_stable_reads():
 
 
 def test_goto_refuses_to_plan_from_a_stale_pose(edge, robot):
-    from asimov_sdk import StateStaleError
+    from menlo.asimov import StateStaleError
 
     robot.link_timeout = 5.0  # long enough that LinkLostError does not fire first
     edge.pushing = False

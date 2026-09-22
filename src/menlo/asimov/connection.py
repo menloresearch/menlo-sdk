@@ -31,14 +31,14 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 from urllib.parse import urlsplit, urlunsplit
 
-from asimov_sdk._errors import ConnectError
-from asimov_sdk.transport._livekit_client import TokenProvider
-from asimov_sdk.transport.base import Transport
-from asimov_sdk.transport.livekit import MEDIA_TIMEOUT_S, HybridTransport, LiveKitTransport
-from asimov_sdk.transport.udp import COMMAND_PORT, STATE_PORT, UdpTransport
+from menlo.asimov._errors import ConnectError
+from menlo.asimov.transport._livekit_client import TokenProvider
+from menlo.asimov.transport.base import Transport
+from menlo.asimov.transport.livekit import MEDIA_TIMEOUT_S, HybridTransport, LiveKitTransport
+from menlo.asimov.transport.udp import COMMAND_PORT, STATE_PORT, UdpTransport
 
 #: The lanes a ``Robot`` can be connected on. ``hybrid`` = UDP control + LiveKit media.
-#: (``asimov_sdk.Mode`` is the robot's control mode — DAMP/STAND/MOVE — a different thing.)
+#: (``menlo.asimov.Mode`` is the robot's control mode — DAMP/STAND/MOVE — a different thing.)
 ConnectMode = Literal["udp", "hybrid", "livekit"]
 MODES: tuple[ConnectMode, ...] = get_args(ConnectMode)
 
@@ -267,11 +267,11 @@ class ConnectionConfig:
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> ConnectionConfig:
-        """The config ``Robot()`` uses when handed none: ``ASIMOV_MANAGER_URL`` +
-        ``ASIMOV_CREDENTIAL`` from the environment, else the default robot in
-        ``~/.asimov/robots.toml``. :class:`ConnectError` naming both when neither is set.
-        See :mod:`asimov_sdk.store`."""
-        from asimov_sdk.store import resolve_connection
+        """The config ``Robot()`` uses when handed none: ``MENLO_MANAGER_URL`` +
+        ``MENLO_CREDENTIAL`` from the environment, else the default robot in
+        ``~/.menlo/robots.toml``. :class:`ConnectError` naming both when neither is set.
+        See :mod:`menlo.asimov.store`."""
+        from menlo.asimov.store import resolve_connection
 
         return resolve_connection(environ)
 

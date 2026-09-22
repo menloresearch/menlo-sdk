@@ -2,7 +2,7 @@
 
 Two sources, one rule: an installed ``asimov-protocol`` package wins (the edge and its tools
 import that one, and protobuf's descriptor pool tolerates exactly one copy of each ``.proto``
-per process); the tree vendored under ``asimov_sdk/_vendor`` is the fallback that makes
+per process); the tree vendored under ``menlo/asimov/_vendor`` is the fallback that makes
 installing the wheel work with no access to the protocol repository. Both are the same
 generated code at the same tag — see ``_vendor/VENDORED.md``.
 """
@@ -89,6 +89,6 @@ def load() -> Bindings:
     elif _same_as_vendored("asimov_protocol"):
         package, source = "asimov_protocol", "asimov-protocol"
     else:
-        package, source = "asimov_sdk._vendor.asimov_protocol", "vendored"
+        package, source = "menlo.asimov._vendor.asimov_protocol", "vendored"
     cmd, common, st = (importlib.import_module(f"{package}.v1.{m}") for m in _MODULES)
     return Bindings(cmd, common, st, source)  # type: ignore[arg-type]

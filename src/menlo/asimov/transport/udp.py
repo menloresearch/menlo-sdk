@@ -29,12 +29,12 @@ import logging
 import socket
 import threading
 
-from asimov_sdk._command import Command
-from asimov_sdk._errors import ConnectError, LinkLostError, NotConnectedError, UnsupportedError
-from asimov_sdk._media import AudioChunk
-from asimov_sdk._state import TransportKind
-from asimov_sdk.transport._wire import _pb, encode_command, state_from_robot_state
-from asimov_sdk.transport.base import (
+from menlo.asimov._command import Command
+from menlo.asimov._errors import ConnectError, LinkLostError, NotConnectedError, UnsupportedError
+from menlo.asimov._media import AudioChunk
+from menlo.asimov._state import TransportKind
+from menlo.asimov.transport._wire import _pb, encode_command, state_from_robot_state
+from menlo.asimov.transport.base import (
     AudioCallback,
     ControllerCallback,
     FrameCallback,
@@ -42,7 +42,7 @@ from asimov_sdk.transport.base import (
     StateCallback,
 )
 
-log = logging.getLogger("asimov_sdk.transport.udp")
+log = logging.getLogger("menlo.asimov.transport.udp")
 
 #: ``--udp-control-port`` default on the edge.
 COMMAND_PORT = 8850
@@ -119,7 +119,7 @@ class UdpTransport:
         self._sock = sock
         self._stop.clear()
         self._reader = threading.Thread(
-            target=self._read_states, name="asimov-sdk-udp-state", daemon=True
+            target=self._read_states, name="menlo-sdk-udp-state", daemon=True
         )
         self._reader.start()
 

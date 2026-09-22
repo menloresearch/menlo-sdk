@@ -16,7 +16,7 @@ suppresses the next STAND until the rig restarts).
 import sys
 import time
 
-from asimov_sdk import (
+from menlo.asimov import (
     Applied,
     ConnectionConfig,
     Mode,

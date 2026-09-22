@@ -12,10 +12,10 @@ import time
 
 import pytest
 
-from asimov_sdk import (
-    AsimovError,
+from menlo.asimov import (
     ConnectError,
     LinkLostError,
+    MenloError,
     Mode,
     NotConnectedError,
     ProtocolMismatchError,
@@ -28,7 +28,7 @@ from asimov_sdk import (
     Velocity,
     WaitTimeoutError,
 )
-from asimov_sdk.robot import KEEPALIVE_HZ
+from menlo.asimov.robot import KEEPALIVE_HZ
 from tests.conftest import connect_udp
 
 # ── connect ───────────────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ def test_outcomes_are_unknown_until_the_edge_reports_them(edge, robot):
     o = sent.wait_outcome(timeout=0.05)
     assert isinstance(o, Unknown) and o.sequence == sent.sequence
     assert sent.require(timeout=0.05) == o  # unknown is not a failure by default
-    from asimov_sdk import OutcomeUnknownError
+    from menlo.asimov import OutcomeUnknownError
 
     with pytest.raises(OutcomeUnknownError):
         sent.require(timeout=0.05, unknown_ok=False)
@@ -207,7 +207,7 @@ def test_a_delivered_refusal_resolves_the_handle_and_the_callback(edge, robot):
     assert sent.outcome.reason.retryable is False
     assert seen and seen[0].sequence == sent.sequence
     assert [r.sequence for r in robot.outcomes()] == [sent.sequence]
-    from asimov_sdk import CommandRefusedError
+    from menlo.asimov import CommandRefusedError
 
     with pytest.raises(CommandRefusedError):
         sent.require()
@@ -238,7 +238,7 @@ def test_wait_for_follows_the_robots_own_report(edge, robot):
 def test_wait_times_out_with_a_typed_error_that_is_also_a_TimeoutError(edge, robot):
     with pytest.raises(WaitTimeoutError) as exc:
         robot.wait_for(Mode.STAND, timeout=0.2)
-    assert isinstance(exc.value, TimeoutError) and isinstance(exc.value, AsimovError)
+    assert isinstance(exc.value, TimeoutError) and isinstance(exc.value, MenloError)
     assert "STAND" in str(exc.value) and exc.value.last is not None
 
 
@@ -262,7 +262,7 @@ def test_wait_gives_up_early_on_a_fault_damp(edge, robot):
 
 
 def test_wait_stops_when_the_pending_mode_command_is_refused(edge, robot):
-    from asimov_sdk import CommandRefusedError
+    from menlo.asimov import CommandRefusedError
 
     sent = robot.stand()
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
@@ -422,7 +422,7 @@ def _spam_state_port(port: int, payload: bytes, stop) -> None:
     [
         pytest.param(b"", id="empty datagram decodes as a default RobotState"),
         pytest.param(
-            __import__("asimov_sdk._proto", fromlist=["load"])
+            __import__("menlo.asimov._proto", fromlist=["load"])
             .load()
             .state.RobotState(protocol_version=1, joint_pos=[0.0, 0.0, 0.0])
             .SerializeToString(),
@@ -448,7 +448,7 @@ def test_a_foreign_state_datagram_does_not_keep_the_link_alive(edge, robot, payl
 
 
 def test_a_refused_stand_does_not_poison_a_later_drive(edge, robot):
-    from asimov_sdk import CommandRefusedError
+    from menlo.asimov import CommandRefusedError
 
     sent = robot.stand()
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
@@ -467,7 +467,7 @@ def test_a_fault_in_an_unknown_mode_still_fails_fast(edge, robot):
 
 
 def test_the_host_is_resolved_once_at_open(edge):
-    from asimov_sdk.transport.udp import UdpTransport
+    from menlo.asimov.transport.udp import UdpTransport
     from tests.conftest import _free_port
 
     tx = UdpTransport(
@@ -482,7 +482,7 @@ def test_the_host_is_resolved_once_at_open(edge):
 
 
 def test_an_unresolvable_host_fails_at_connect():
-    from asimov_sdk.transport.udp import UdpTransport
+    from menlo.asimov.transport.udp import UdpTransport
 
     tx = UdpTransport("no-such-robot.invalid", command_port=8850, state_bind=("127.0.0.1", 0))
     with pytest.raises(ConnectError):
@@ -504,7 +504,7 @@ def test_reopen_waits_for_fresh_state_instead_of_the_last_session(edge, robot):
 
 
 def test_a_refusal_names_the_verb_that_was_refused(edge, robot):
-    from asimov_sdk import CommandRefusedError
+    from menlo.asimov import CommandRefusedError
 
     sent = robot.stand()
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
@@ -531,7 +531,7 @@ def test_state_source_allowlist_drops_everyone_else(edge):
 
 
 def test_an_older_reordered_state_sample_never_overwrites_a_newer_one(edge, robot):
-    from asimov_sdk.transport.udp import state_from_robot_state
+    from menlo.asimov.transport.udp import state_from_robot_state
 
     edge.pushing = False
     time.sleep(0.05)
@@ -556,7 +556,7 @@ def test_an_older_reordered_state_sample_never_overwrites_a_newer_one(edge, robo
 def test_a_restarted_firmware_counter_is_followed_not_dropped(edge, robot):
     """The firmware rebooted under a live link: its sequence counter restarts at 0. Dropping
     every sample until it climbed past the old value froze robot.state for minutes."""
-    from asimov_sdk.transport.udp import state_from_robot_state
+    from menlo.asimov.transport.udp import state_from_robot_state
 
     edge.pushing = False
     time.sleep(0.05)
@@ -589,7 +589,7 @@ def test_a_restarted_firmware_counter_is_followed_not_dropped(edge, robot):
 def test_a_wait_sees_a_restarted_stream_as_fresh_not_stale(edge, robot):
     """Staleness is the age of the last ACCEPTED sample, so following the restarted
     counter is what keeps a wait alive across a firmware reboot."""
-    from asimov_sdk.transport.udp import state_from_robot_state
+    from menlo.asimov.transport.udp import state_from_robot_state
 
     edge.pushing = False
     time.sleep(0.05)
@@ -626,7 +626,7 @@ def test_reopen_after_link_lost_is_a_working_reconnect(edge, robot):
 
 
 def test_a_refusal_from_the_previous_session_does_not_haunt_a_reopen(edge, robot):
-    from asimov_sdk import CommandRefusedError
+    from menlo.asimov import CommandRefusedError
 
     sent = robot.stand()
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
@@ -656,14 +656,14 @@ def test_reopen_learns_the_robot_again_instead_of_filtering_it_as_foreign(edge, 
 
 @pytest.mark.parametrize("bad", [-0.6, float("nan"), float("inf"), -0.0001])
 def test_limits_must_be_finite_magnitudes(bad):
-    from asimov_sdk import Limits
+    from menlo.asimov import Limits
 
     with pytest.raises(ValueError):
         Limits(vx=bad)
 
 
 def test_a_stop_can_never_become_motion_through_the_clamp():
-    from asimov_sdk import Limits
+    from menlo.asimov import Limits
 
     for limits in (Limits(), Limits(vx=0.0), Limits(vx=0.1, vy=0.0, vyaw=0.0)):
         assert Velocity().clamped(limits).is_zero
@@ -709,7 +709,7 @@ def test_outcomes_drains_at_call_time_not_first_iteration(edge, robot):
 
 
 def test_transport_open_twice_fails_loudly_instead_of_leaking(edge):
-    from asimov_sdk.transport.udp import UdpTransport
+    from menlo.asimov.transport.udp import UdpTransport
 
     tx = UdpTransport("127.0.0.1", command_port=edge.command_port, state_bind=("127.0.0.1", 0))
     tx.open()
@@ -723,7 +723,7 @@ def test_transport_open_twice_fails_loudly_instead_of_leaking(edge):
 
 
 def test_an_unresolvable_state_source_is_named_in_the_error(edge):
-    from asimov_sdk.transport.udp import UdpTransport
+    from menlo.asimov.transport.udp import UdpTransport
 
     tx = UdpTransport(
         "127.0.0.1",
@@ -754,7 +754,7 @@ def test_wait_timing_arguments_must_be_finite(edge, robot, kw):
 
 
 def test_link_timeout_must_be_a_positive_finite_number(edge):
-    from asimov_sdk.transport.udp import UdpTransport
+    from menlo.asimov.transport.udp import UdpTransport
 
     with pytest.raises(ValueError):
         Robot(UdpTransport("127.0.0.1"), link_timeout=float("nan"))
@@ -776,7 +776,7 @@ def test_a_fault_damp_is_reported_even_when_the_wait_asked_for_damp(edge, robot)
 
 
 def test_send_before_open_is_not_connected_not_link_lost():
-    from asimov_sdk.transport.udp import UdpTransport
+    from menlo.asimov.transport.udp import UdpTransport
 
     with pytest.raises(NotConnectedError):
         UdpTransport("127.0.0.1").send(Velocity())
@@ -787,7 +787,7 @@ def test_a_velocity_attempted_during_a_failed_open_never_reaches_the_next_sessio
     attempt is cleared, so a reconnect cannot walk the robot off by itself."""
     import threading
 
-    from asimov_sdk.transport.udp import UdpTransport
+    from menlo.asimov.transport.udp import UdpTransport
 
     edge.pushing = False
     robot = Robot(

@@ -15,9 +15,9 @@ import time
 
 import pytest
 
-from asimov_sdk import LinkLostError, Mode, NotConnectedError, StateStaleError, Unknown
-from asimov_sdk.recording import load
-from asimov_sdk.robot import KEEPALIVE_HZ
+from menlo.asimov import LinkLostError, Mode, NotConnectedError, StateStaleError, Unknown
+from menlo.asimov.recording import load
+from menlo.asimov.robot import KEEPALIVE_HZ
 
 MODES = {"udp", "hybrid", "livekit"}
 

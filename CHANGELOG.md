@@ -7,8 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - The distribution is `menlo-sdk` (repository `menloresearch/menlo-sdk`), published to PyPI on
-  `v*` tags. The import name stays `asimov_sdk`. Between releases `__version__` carries the
-  next version with a `.dev0` suffix; see `RELEASING.md`.
+  `v*` tags. The import is `menlo`, one subpackage per robot: the Asimov biped is
+  `menlo.asimov` (`from menlo.asimov import Robot, Mode`). The console script is `menlo`
+  (`menlo login`), the store is `~/.menlo/robots.toml` (`$MENLO_HOME`), the environment
+  variables are `MENLO_MANAGER_URL`, `MENLO_CREDENTIAL`, `MENLO_ROBOT`, `MENLO_PERSIST`, and
+  the error base class is `MenloError`. Between releases `__version__` carries the next
+  version with a `.dev0` suffix; see `RELEASING.md`.
 
 ### Fixed
 - A velocity held by `set_velocity` is released when the robot itself ends the drive: a
@@ -22,25 +26,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `connect(require_state=False)`: state that arrives while the transport is still opening
   (a LiveKit media wait) now goes through the late handshake instead of being stored raw,
   so a protocol mismatch is raised on read rather than returning a frozen sample.
-- `connect(persist=True)`: a store that cannot be written (read-only or full `$ASIMOV_HOME`,
+- `connect(persist=True)`: a store that cannot be written (read-only or full `$MENLO_HOME`,
   a name that belongs to another manager) closes the session it just opened before the
   error propagates, instead of leaving the keepalive and the transport running.
 - `RobotStore.put` refuses to replace an entry with one for a different manager unless the
-  caller chose the name (`asimov login --name`, `persist(name=)`): a manager answering
+  caller chose the name (`menlo login --name`, `persist(name=)`): a manager answering
   another robot's room can no longer take over that robot's saved URL and credential.
 - A DEL byte (U+007F) in a room or robot name no longer produces a `robots.toml` that
   `tomllib` rejects.
 
 ### Added
-- Zero-config connect: `Robot()` with no config resolves one from `ASIMOV_MANAGER_URL` +
-  `ASIMOV_CREDENTIAL`, else from `~/.asimov/robots.toml` (`$ASIMOV_HOME`; `ASIMOV_ROBOT`
+- Zero-config connect: `Robot()` with no config resolves one from `MENLO_MANAGER_URL` +
+  `MENLO_CREDENTIAL`, else from `~/.menlo/robots.toml` (`$MENLO_HOME`; `MENLO_ROBOT`
   picks a named entry), else raises `ConnectError` naming both; `connect()` with no mode
-  takes the config's one lane. `asimov_sdk.store`: `RobotStore`, `StoredRobot`; the file is
-  0600 in a 0700 directory. `connect(persist=True)` / `ASIMOV_PERSIST=1` save a working URL
+  takes the config's one lane. `menlo.asimov.store`: `RobotStore`, `StoredRobot`; the file is
+  0600 in a 0700 directory. `connect(persist=True)` / `MENLO_PERSIST=1` save a working URL
   and credential after a successful connect, keyed by the serial in the robot's room.
-- The `asimov` console script: `asimov login <manager-url> [--credential]` validates a
-  credential by minting a token exactly as `connect()` does, then saves it; `asimov robots`,
-  `asimov use <name>`, `asimov logout <name>`.
+- The `menlo` console script: `menlo login <manager-url> [--credential]` validates a
+  credential by minting a token exactly as `connect()` does, then saves it; `menlo robots`,
+  `menlo use <name>`, `menlo logout <name>`.
 - `connect(require_state=False)`: the media lane without waiting for the firmware.
   `robot.state`, `robot.info` and the motion verbs raise `NotConnectedError` until the robot
   reports, then the handshake completes on its own; a late protocol mismatch is raised
@@ -54,7 +58,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `http://host:8080`); a loopback LiveKit URL minted by the manager (`ws://localhost:7880`,
   the robot's own view) is rewritten to the manager's host; a session with no `label` gets
   `<host>-<6 random hex>` so two sessions on one credential never share an identity.
-  `ManagerConfig.host`, `asimov_sdk.connection.default_label()`,
+  `ManagerConfig.host`, `menlo.asimov.connection.default_label()`,
   `ConnectionConfig.from_environment()`, `ConnectionConfig.only_mode()`;
   `LiveKitTransport.room` / `HybridTransport.room`.
 - `docs/SKILL.md`: the agent-facing reference for writing a script against the SDK.
@@ -105,7 +109,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   accepting an argument it could not honour.
 - Callbacks `on_state`, `on_alert`, `on_mode_change`, `on_refused`, `on_link_lost`,
   `on_controller_change`.
-- `robot.record(path)` JSON-lines recording and `asimov_sdk.recording.load()`.
+- `robot.record(path)` JSON-lines recording and `menlo.asimov.recording.load()`.
 - Capability honesty on the room lanes: `camera`/`microphone` are claimed only once the
   matching track is actually subscribed, and dropped when the room goes; a room with no
   video raises `UnsupportedError` instead of yielding nothing.

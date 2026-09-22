@@ -17,11 +17,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
-from asimov_sdk._outcome import Sent
-from asimov_sdk._state import State
+from menlo.asimov._outcome import Sent
+from menlo.asimov._state import State
 
 if TYPE_CHECKING:
-    from asimov_sdk.robot import Robot
+    from menlo.asimov.robot import Robot
 
 
 def _plain(obj: Any) -> Any:

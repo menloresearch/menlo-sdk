@@ -31,7 +31,7 @@ import time
 
 import numpy as np
 
-from asimov_sdk import ConnectionConfig, LiveKitConfig, ManagerConfig, Mode, Robot, UdpConfig
+from menlo.asimov import ConnectionConfig, LiveKitConfig, ManagerConfig, Mode, Robot, UdpConfig
 
 # ── the target, straight from assets/scenes/chase_ball/README.md ──────────────────────
 # Magenta is RGBA "1 0 1 1" with emission 0.8. In RGB that is a high red, a near-zero
@@ -87,12 +87,12 @@ def main() -> int:
     p.add_argument("--mode", choices=("hybrid", "livekit", "udp"), default="hybrid")
     p.add_argument(
         "--manager",
-        default=os.environ.get("ASIMOV_MANAGER_URL", ""),
+        default=os.environ.get("MENLO_MANAGER_URL", ""),
         help="the robot's manager, e.g. http://10.0.0.5:8080 — mints the LiveKit token for you",
     )
     p.add_argument(
         "--credential",
-        default=os.environ.get("ASIMOV_CREDENTIAL", ""),
+        default=os.environ.get("MENLO_CREDENTIAL", ""),
         help="SDK credential from the manager's /sdk page (with --manager)",
     )
     p.add_argument("--host", default="127.0.0.1", help="the edge's UDP lane")

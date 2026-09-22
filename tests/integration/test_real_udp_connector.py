@@ -15,8 +15,8 @@ import time
 
 import pytest
 
-from asimov_sdk import Velocity
-from asimov_sdk.transport.udp import UdpTransport
+from menlo.asimov import Velocity
+from menlo.asimov.transport.udp import UdpTransport
 
 pytestmark = pytest.mark.integration
 
@@ -76,7 +76,7 @@ def test_the_edge_admits_our_velocity_as_a_udp_source():
 
 
 def test_the_edge_forwards_robot_state_to_our_bound_port():
-    from asimov_sdk._proto import load
+    from menlo.asimov._proto import load
 
     st_pb = load().state
     from edge.connectors.udp_connector import UdpConnector

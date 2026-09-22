@@ -12,7 +12,7 @@ restarts, so run this one last.
 import sys
 import time
 
-from asimov_sdk import ConnectionConfig, Mode, Robot, UdpConfig
+from menlo.asimov import ConnectionConfig, Mode, Robot, UdpConfig
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 

@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from asimov_sdk import (
+from menlo.asimov import (
     ConnectionConfig,
     ManagerConfig,
     Mode,
@@ -19,10 +19,10 @@ from asimov_sdk import (
     RobotStore,
     StoredRobot,
 )
-from asimov_sdk.cli import main
-from asimov_sdk.transport import _livekit_client
-from asimov_sdk.transport._livekit_client import _LiveKitClient
-from asimov_sdk.transport.udp import UdpTransport, state_from_robot_state
+from menlo.asimov.transport import _livekit_client
+from menlo.asimov.transport._livekit_client import _LiveKitClient
+from menlo.asimov.transport.udp import UdpTransport, state_from_robot_state
+from menlo.cli import main
 from tests.conftest import route_manager_rooms_to
 
 CRED = "eyJpZCI6ImEwY2QxNmRiIn0.secret"
@@ -71,7 +71,7 @@ def test_login_refuses_to_overwrite_another_managers_entry_without_name(manager,
 
 def test_a_persist_that_cannot_write_closes_the_session_it_just_opened(edge, manager, monkeypatch):
     route_manager_rooms_to(edge, monkeypatch)
-    from asimov_sdk import robot as robot_module
+    from menlo.asimov import robot as robot_module
 
     def refuse(*_a, **_k):
         raise OSError(30, "Read-only file system")

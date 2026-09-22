@@ -4,15 +4,15 @@
 
 The lookup, in order — the first that yields a config wins, nothing is merged:
 
-1. ``ASIMOV_MANAGER_URL`` + ``ASIMOV_CREDENTIAL`` in the environment.
-2. ``~/.asimov/robots.toml`` (``$ASIMOV_HOME/robots.toml``): the robot named by
-   ``ASIMOV_ROBOT``, else the store's ``default``, else the only robot in it.
-3. Nothing: :class:`ConnectError` naming those two, and ``asimov login``. The SDK does not
+1. ``MENLO_MANAGER_URL`` + ``MENLO_CREDENTIAL`` in the environment.
+2. ``~/.menlo/robots.toml`` (``$MENLO_HOME/robots.toml``): the robot named by
+   ``MENLO_ROBOT``, else the store's ``default``, else the only robot in it.
+3. Nothing: :class:`ConnectError` naming those two, and ``menlo login``. The SDK does not
    probe the LAN — a name like ``asimov.local`` says where a robot is, not who may drive it.
 
 The store holds an SDK credential per robot, so it is the user's alone: the directory is
-0700, the file 0600, and it is written whole through a temporary file. ``asimov login``,
-``Robot.connect(persist=True)`` and ``ASIMOV_PERSIST=1`` write it — the last two only after
+0700, the file 0600, and it is written whole through a temporary file. ``menlo login``,
+``Robot.connect(persist=True)`` and ``MENLO_PERSIST=1`` write it — the last two only after
 a connect that succeeded, so a credential that did not work never replaces one that did.
 
 ::
@@ -39,18 +39,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from asimov_sdk._errors import ConnectError
-from asimov_sdk.connection import ConnectionConfig, ManagerConfig
+from menlo.asimov._errors import ConnectError
+from menlo.asimov.connection import ConnectionConfig, ManagerConfig
 
 log = logging.getLogger(__name__)
 
-ENV_HOME = "ASIMOV_HOME"
-ENV_MANAGER_URL = "ASIMOV_MANAGER_URL"
-ENV_CREDENTIAL = "ASIMOV_CREDENTIAL"
-ENV_ROBOT = "ASIMOV_ROBOT"
-ENV_PERSIST = "ASIMOV_PERSIST"
-#: The name the examples used before ``ASIMOV_CREDENTIAL``; still read, never documented.
-_ENV_CREDENTIAL_LEGACY = "ASIMOV_SDK_CREDENTIAL"
+ENV_HOME = "MENLO_HOME"
+ENV_MANAGER_URL = "MENLO_MANAGER_URL"
+ENV_CREDENTIAL = "MENLO_CREDENTIAL"
+ENV_ROBOT = "MENLO_ROBOT"
+ENV_PERSIST = "MENLO_PERSIST"
 
 STORE_FILE = "robots.toml"
 _TRUE = frozenset({"1", "true", "yes", "on"})
@@ -58,10 +56,10 @@ _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def home(environ: Mapping[str, str] | None = None) -> Path:
-    """``$ASIMOV_HOME``, else ``~/.asimov``."""
+    """``$MENLO_HOME``, else ``~/.menlo``."""
     env = os.environ if environ is None else environ
     override = env.get(ENV_HOME, "").strip()
-    return Path(override).expanduser() if override else Path.home() / ".asimov"
+    return Path(override).expanduser() if override else Path.home() / ".menlo"
 
 
 def store_path(environ: Mapping[str, str] | None = None) -> Path:
@@ -207,8 +205,8 @@ class RobotStore:
             raise ValueError(
                 f"{robot.name!r} is already saved for manager {previous.manager_url}, but this "
                 f"one answered from {robot.manager_url}. Save it under another name "
-                f"(`asimov login {robot.manager_url} --name <name>`), or forget the old entry "
-                f"first (`asimov logout {robot.name}`)."
+                f"(`menlo login {robot.manager_url} --name <name>`), or forget the old entry "
+                f"first (`menlo logout {robot.name}`)."
             )
         self.robots[robot.name] = robot
         if default or (default is None and self.default is None):
@@ -254,7 +252,7 @@ class RobotStore:
 
     def _dump(self) -> str:
         lines = [
-            "# menlo-sdk: robots this machine may drive. Written by `asimov login` and",
+            "# menlo-sdk: robots this machine may drive. Written by `menlo login` and",
             "# Robot.connect(persist=True); holds SDK credentials, keep it 0600.",
         ]
         if self.default is not None:
@@ -294,7 +292,7 @@ def resolve_connection(
     does."""
     env = os.environ if environ is None else environ
     url = env.get(ENV_MANAGER_URL, "").strip()
-    credential = (env.get(ENV_CREDENTIAL) or env.get(_ENV_CREDENTIAL_LEGACY) or "").strip()
+    credential = env.get(ENV_CREDENTIAL, "").strip()
     if url and credential:
         return ConnectionConfig(livekit=ManagerConfig(url=url, credential=credential))
     if url or credential:
@@ -313,17 +311,17 @@ def resolve_connection(
     if wanted is not None:
         raise ConnectError(
             f"{ENV_ROBOT}={wanted!r} names no robot in {store.path}; it has: {store.names()}. "
-            "`asimov robots` lists them, `asimov login <manager-url>` adds one"
+            "`menlo robots` lists them, `menlo login <manager-url>` adds one"
         )
     if len(store) > 1:
         raise ConnectError(
-            f"{store.path} has {len(store)} robots and no default: `asimov use <name>` picks "
+            f"{store.path} has {len(store)} robots and no default: `menlo use <name>` picks "
             f"one, or set {ENV_ROBOT}=<name>. Have: {store.names()}"
         )
     raise ConnectError(
         "no robot is configured. Three ways: pass a ConnectionConfig to Robot(cfg); set "
         f"{ENV_MANAGER_URL}=http://<robot> and {ENV_CREDENTIAL}=<credential> in the "
-        f"environment; or save one with `asimov login http://<robot> --credential <credential>` "
+        f"environment; or save one with `menlo login http://<robot> --credential <credential>` "
         f"(kept in {store.path}). A credential comes from `asimovctl sdk-token create "
         "--role control` on the robot. The SDK does not probe the LAN for asimov.local."
     )

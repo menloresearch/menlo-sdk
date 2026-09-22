@@ -1,15 +1,15 @@
 # menlo-sdk
 
-`pip install menlo-sdk` · `import asimov_sdk` · repo [menloresearch/menlo-sdk](https://github.com/menloresearch/menlo-sdk)
+`pip install menlo-sdk` · `from menlo.asimov import Robot` · repo [menloresearch/menlo-sdk](https://github.com/menloresearch/menlo-sdk)
 
 Drive an Asimov robot from Python.
 
 ```bash
-asimov login http://asimov.local --credential <from `asimovctl sdk-token create` on the robot>
+menlo login http://asimov.local --credential <from `asimovctl sdk-token create` on the robot>
 ```
 
 ```python
-from asimov_sdk import Mode, Robot
+from menlo.asimov import Mode, Robot
 
 with Robot().connect() as robot:  # the robot you logged in to; returns once it has reported state
     if robot.state.mode is Mode.DAMP:  # STAND is the wake-up verb; never stiffen a balancing robot
@@ -23,17 +23,17 @@ with Robot().connect() as robot:  # the robot you logged in to; returns once it 
     print(robot.camera.photo().to_jpeg()[:4])  # camera, microphone and speaker ride the same room
 ```
 
-`Robot()` with no config finds the robot: `ASIMOV_MANAGER_URL` + `ASIMOV_CREDENTIAL` in the
-environment, else the default in `~/.asimov/robots.toml` (written by `asimov login`, or by
-`connect(persist=True)` / `ASIMOV_PERSIST=1` after a connect that worked), else a
-`ConnectError` naming both. `asimov robots`, `asimov use <name>` and `asimov logout <name>`
-manage the store; `$ASIMOV_HOME` moves it; the file is 0600. Writing agents: start from
+`Robot()` with no config finds the robot: `MENLO_MANAGER_URL` + `MENLO_CREDENTIAL` in the
+environment, else the default in `~/.menlo/robots.toml` (written by `menlo login`, or by
+`connect(persist=True)` / `MENLO_PERSIST=1` after a connect that worked), else a
+`ConnectError` naming both. `menlo robots`, `menlo use <name>` and `menlo logout <name>`
+manage the store; `$MENLO_HOME` moves it; the file is 0600. Writing agents: start from
 [`docs/SKILL.md`](docs/SKILL.md).
 
 Or say where the robot is, lane by lane:
 
 ```python
-from asimov_sdk import ConnectionConfig, ManagerConfig, Robot, UdpConfig
+from menlo.asimov import ConnectionConfig, ManagerConfig, Robot, UdpConfig
 
 cfg = ConnectionConfig(
     udp=UdpConfig(host="asimov.local"),  # the LAN lane
@@ -109,7 +109,7 @@ sessions with the same label then evict each other.
 Python 3.12 or newer.
 
 ```bash
-uv add menlo-sdk                    # from PyPI; the import is `asimov_sdk`
+uv add menlo-sdk                    # from PyPI; the robot is `menlo.asimov`
 uv add "menlo-sdk[livekit]"         # + the media lane (hybrid and livekit modes)
 
 # an unreleased commit, straight from git:
@@ -121,7 +121,7 @@ how versions are chosen and cut is in [RELEASING.md](RELEASING.md).
 
 The core's only runtime dependency is `protobuf`, and `[livekit]` is the one extra — a
 robot drives without it. The generated `asimov.io` bindings ship inside
-the package, pinned to an `asimov-protocol` tag (`src/asimov_sdk/_vendor/VENDORED.md`). If
+the package, pinned to an `asimov-protocol` tag (`src/menlo/asimov/_vendor/VENDORED.md`). If
 the `asimov-protocol` package is installed as well and is the same release, the SDK uses
 that copy so one process holds one set of descriptors.
 
@@ -143,7 +143,7 @@ Live wants (about 1 fps of JPEG plus 16 kHz PCM), so this SDK adds no model glue
 ## API in one screen
 
 ```python
-robot = Robot()  # ASIMOV_MANAGER_URL + ASIMOV_CREDENTIAL, else ~/.asimov/robots.toml
+robot = Robot()  # MENLO_MANAGER_URL + MENLO_CREDENTIAL, else ~/.menlo/robots.toml
 cfg = ConnectionConfig(
     udp=UdpConfig(host, command_port=8850, state_bind=("0.0.0.0", 8851), state_source=None),
     livekit=ManagerConfig(url="http://host", credential=CRED, label=None),
@@ -301,8 +301,8 @@ duration, or a trajectory of the wrong length; `KeyError` for an unknown joint n
 make sync          # uv sync
 make check         # ruff, mypy --strict, unit tests (fake edge on the real wire)
 make integration   # the real asimov-edge UdpConnector in-process; ASIMOV_EDGE_SRC=<edge>/src
-make live          # a robot or simulator; ASIMOV_SDK_LIVE_HOST=<host>
-make livekit       # real livekit.rtc vs `livekit-server --dev`; needs ASIMOV_SDK_LIVEKIT_URL
+make live          # a robot or simulator; MENLO_SDK_LIVE_HOST=<host>
+make livekit       # real livekit.rtc vs `livekit-server --dev`; needs MENLO_SDK_LIVEKIT_URL
                    # plus TWO tokens for one room (_TOKEN and _EDGE_TOKEN)
 make check-vendor  # vendored bindings match the pinned asimov-protocol tag
 make vendor-protocol REF=v1.1.0
@@ -313,11 +313,13 @@ to other menloresearch repositories and skip with a warning when the repository 
 absent: the real-edge integration job and the vendored-bindings check.
 
 ```
-src/asimov_sdk/
+src/menlo/
+  __init__.py       __version__; one subpackage per robot
+  cli.py            the `menlo` console script: login / robots / use / logout
+src/menlo/asimov/   the Asimov biped
   robot.py          Robot: verbs, waits, keepalive, callbacks, goto
   connection.py     ConnectionConfig, UdpConfig, LiveKitConfig, ManagerConfig
-  store.py          ~/.asimov/robots.toml, the zero-config lookup, persist
-  cli.py            the `asimov` console script: login / robots / use / logout
+  store.py          ~/.menlo/robots.toml, the zero-config lookup, persist
   _state.py         State, Joint, Alert, Battery, RobotInfo, Mode
   _command.py       Velocity, ModeCommand, Trajectory, Limits
   _outcome.py       Sent, Applied, Refused, Unknown, Refusal

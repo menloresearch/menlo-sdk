@@ -5,7 +5,9 @@ Read this before changing anything. It is short on purpose.
 ## What this is
 
 A Python SDK that drives an Asimov robot **through its edge**. It is a client of the
-edge's arbiter and safety layer, never a bypass. One `Robot`; transports implement
+edge's arbiter and safety layer, never a bypass. The import is `menlo`, one subpackage per
+robot: everything that speaks the Asimov wire lives in `menlo.asimov`; the top level holds
+`__version__` and the `menlo` console script. One `Robot`; transports implement
 `transport/base.py`. Nothing in `robot.py` may know which wire it is on.
 
 ## Rules
@@ -19,7 +21,7 @@ edge's arbiter and safety layer, never a bypass. One `Robot`; transports impleme
   sent. Every wait refuses to succeed on a stale stream, and a fault is reported before a
   predicate is evaluated.
 - **Caller bugs are builtins** (`ValueError`, `KeyError`, `RuntimeError`); robot and link
-  errors subclass `AsimovError` and end in `Error`.
+  errors subclass `MenloError` and end in `Error`.
 - **Nothing is guessed.** A field the robot does not report is `None`. A capability the
   transport does not carry raises `UnsupportedError`. A joint table carries its provenance
   (`robots.py`). A protocol version mismatch is `ProtocolMismatchError`, not a warning.

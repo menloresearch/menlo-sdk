@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from asimov_sdk import _proto
+from menlo.asimov import _proto
 
 VENDOR = Path(_proto.__file__).parent / "_vendor"
 
@@ -36,12 +36,12 @@ def test_the_sdk_speaks_the_wire_with_only_the_vendored_bindings():
     code = """
 import sys
 sys.modules['asimov_protocol'] = None  # ImportError on 'from asimov_protocol...'
-from asimov_sdk import _proto
+from menlo.asimov import _proto
 b = _proto.load(); assert b.source == 'vendored', b.source
-from asimov_sdk.transport.udp import state_from_robot_state
+from menlo.asimov.transport.udp import state_from_robot_state
 m = b.state.RobotState(current_mode=1, protocol_version=1); m.joint_pos.extend([0.0]*25)
 s = state_from_robot_state(m, None); assert s.mode.name == 'STAND' and len(s.joints) == 25
-from asimov_sdk._command import Velocity
+from menlo.asimov._command import Velocity
 print('vendored round-trip ok')
 """
     r = subprocess.run(
@@ -67,7 +67,7 @@ def test_a_partially_installed_asimov_protocol_falls_back_wholesale_without_impo
     code = """
 import os, sys
 sys.path.insert(0, os.environ['PARTIAL_SITE'])
-from asimov_sdk import _proto
+from menlo.asimov import _proto
 b = _proto.load()
 assert b.source == 'vendored', b.source
 assert not any(k == 'asimov_protocol' or k.startswith('asimov_protocol.') for k in sys.modules), \
@@ -101,7 +101,7 @@ def test_an_installed_package_that_differs_from_the_pin_is_not_used(tmp_path):
 import logging, os, sys
 logging.basicConfig(level=logging.WARNING)
 sys.path.insert(0, os.environ['OTHER_SITE'])
-from asimov_sdk import _proto
+from menlo.asimov import _proto
 b = _proto.load()
 assert b.source == 'vendored', b.source
 assert not any(k == 'asimov_protocol' or k.startswith('asimov_protocol.') for k in sys.modules)
@@ -133,7 +133,7 @@ import logging, os, sys
 logging.basicConfig(level=logging.WARNING)
 sys.path.insert(0, os.environ['OTHER_SITE'])
 import asimov_protocol.v1.asimov_command_pb2  # someone else got there first
-from asimov_sdk import _proto
+from menlo.asimov import _proto
 b = _proto.load()
 assert b.source == 'asimov-protocol', b.source
 print('reused the imported tree')

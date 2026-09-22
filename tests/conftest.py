@@ -12,10 +12,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from asimov_sdk import Applied, LinkLostError, Refused, Robot
-from asimov_sdk.transport._livekit_client import identity_from_token
-from asimov_sdk.transport.livekit import HybridTransport, LiveKitTransport
-from asimov_sdk.transport.udp import UdpTransport
+from menlo.asimov import Applied, LinkLostError, Refused, Robot
+from menlo.asimov.transport._livekit_client import identity_from_token
+from menlo.asimov.transport.livekit import HybridTransport, LiveKitTransport
+from menlo.asimov.transport.udp import UdpTransport
 
 
 def _free_port() -> int:
@@ -36,7 +36,7 @@ class FakeEdge:
     """
 
     def __init__(self, *, state_hz: float = 100.0, alerts_every: int = 1) -> None:
-        from asimov_sdk._proto import load
+        from menlo.asimov._proto import load
 
         pb = load()  # same bindings the SDK uses, whichever source it resolved to
         self._cmd_pb, self._common_pb, self._st_pb = pb.command, pb.common, pb.state
@@ -133,7 +133,7 @@ def connect_udp(
 ) -> Robot:
     """``Robot(ConnectionConfig(udp=...)).connect("udp", ...)`` in one call, for tests that
     only care about the UDP lane."""
-    from asimov_sdk.connection import ConnectionConfig, UdpConfig
+    from menlo.asimov.connection import ConnectionConfig, UdpConfig
 
     cfg = ConnectionConfig(
         udp=UdpConfig(
@@ -290,7 +290,7 @@ class FakeLiveKitClient:
             cb(tracks)
 
     def push_frame(self, n: int):
-        from asimov_sdk import Frame
+        from menlo.asimov import Frame
 
         f = Frame(width=4, height=2, encoding="rgb8", data=bytes(24), stride_bytes=12, sequence=n)
         for cb in tuple(self._video_cbs):
@@ -298,7 +298,7 @@ class FakeLiveKitClient:
         return f
 
     def push_audio(self, n: int, *, samples: int = 160):
-        from asimov_sdk import AudioChunk
+        from menlo.asimov import AudioChunk
 
         a = AudioChunk(16_000, 1, samples, "pcm_s16le", bytes(2 * samples), sequence=n)
         for cb in tuple(self._audio_cbs):
@@ -431,7 +431,7 @@ def route_manager_rooms_to(edge: FakeEdge, monkeypatch) -> list[str]:
     """Make every ``LiveKitTransport`` a ``ManagerConfig`` builds join the FakeEdge through
     the fake client instead of a real room. Returns the list the tokens each join presented
     are appended to, so a test can see which mint a join used."""
-    from asimov_sdk import connection
+    from menlo.asimov import connection
 
     seen_tokens: list[str] = []
     real = connection.LiveKitTransport
@@ -448,16 +448,16 @@ def route_manager_rooms_to(edge: FakeEdge, monkeypatch) -> list[str]:
 
 @pytest.fixture(autouse=True)
 def _own_environment(monkeypatch, tmp_path):
-    """No test reads the developer's ~/.asimov or environment, and none writes there."""
-    monkeypatch.setenv("ASIMOV_HOME", str(tmp_path / "asimov-home"))
-    for name in ("ASIMOV_PERSIST", "ASIMOV_MANAGER_URL", "ASIMOV_CREDENTIAL", "ASIMOV_ROBOT"):
+    """No test reads the developer's ~/.menlo or environment, and none writes there."""
+    monkeypatch.setenv("MENLO_HOME", str(tmp_path / "asimov-home"))
+    for name in ("MENLO_PERSIST", "MENLO_MANAGER_URL", "MENLO_CREDENTIAL", "MENLO_ROBOT"):
         monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
 def live_host() -> str:
-    """A real robot or studio rig, named by ASIMOV_SDK_LIVE_HOST. Skips LOUDLY otherwise."""
-    host = os.environ.get("ASIMOV_SDK_LIVE_HOST")
+    """A real robot or studio rig, named by MENLO_SDK_LIVE_HOST. Skips LOUDLY otherwise."""
+    host = os.environ.get("MENLO_SDK_LIVE_HOST")
     if not host:
-        pytest.skip("ASIMOV_SDK_LIVE_HOST not set — no live robot to drive")
+        pytest.skip("MENLO_SDK_LIVE_HOST not set — no live robot to drive")
     return host

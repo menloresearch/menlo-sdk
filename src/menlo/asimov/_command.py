@@ -1,6 +1,6 @@
 """What the SDK sends, in the robot's own vocabulary.
 
-The verbs on :class:`~asimov_sdk.robot.Robot` are the wire's verbs — ``set_velocity``,
+The verbs on :class:`~menlo.asimov.robot.Robot` are the wire's verbs — ``set_velocity``,
 ``stand``, ``damp``, ``stop``, ``trajectory`` — because that is what the edge, the
 protocol and the robot's other controllers already call them. These dataclasses are
 their payloads, transport-neutral: the UDP transport encodes them as

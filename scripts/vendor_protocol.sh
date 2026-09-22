@@ -11,7 +11,7 @@
 # protocol repository. The tag in VENDORED.md is the single source of the pin.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VENDOR="$ROOT/src/asimov_sdk/_vendor"
+VENDOR="$ROOT/src/menlo/asimov/_vendor"
 DEST="$VENDOR/asimov_protocol"
 NOTE="$VENDOR/VENDORED.md"
 REPO="https://github.com/menloresearch/asimov-protocol.git"

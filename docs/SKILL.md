@@ -1,13 +1,13 @@
-# Driving an Asimov robot with `asimov_sdk`
+# Driving an Asimov robot with `menlo.asimov`
 
-You are writing a Python script that drives an Asimov biped through `asimov_sdk`. This page
+You are writing a Python script that drives an Asimov biped through `menlo.asimov`. This page
 is everything the script needs to be right the first time. Python 3.12+.
 
 ## Install and connect
 
 ```bash
-pip install "menlo-sdk[livekit]"          # the import is `asimov_sdk`
-asimov login http://<robot-ip> --credential <credential>   # once per machine; validates, saves
+pip install "menlo-sdk[livekit]"          # the robot is `menlo.asimov`
+menlo login http://<robot-ip> --credential <credential>   # once per machine; validates, saves
 ```
 
 The credential is minted **on the robot** (`asimovctl sdk-token create --name laptop --role
@@ -16,18 +16,18 @@ manager URL is the robot's web UI address — `http://192.168.22.32` (port 80) o
 `http://asimov.local:8080`, whatever the robot serves; no port is assumed.
 
 ```python
-from asimov_sdk import Robot, Mode
+from menlo.asimov import Robot, Mode
 
 with Robot().connect() as robot:  # finds the robot; returns once the robot has reported state
     ...
 ```
 
-`Robot()` with no argument resolves, in order: `ASIMOV_MANAGER_URL` + `ASIMOV_CREDENTIAL` in
-the environment → `~/.asimov/robots.toml` (`$ASIMOV_HOME`; the robot named by `ASIMOV_ROBOT`,
+`Robot()` with no argument resolves, in order: `MENLO_MANAGER_URL` + `MENLO_CREDENTIAL` in
+the environment → `~/.menlo/robots.toml` (`$MENLO_HOME`; the robot named by `MENLO_ROBOT`,
 else the default, else the only one) → `ConnectError` naming both. Explicit form:
 `Robot(ConnectionConfig(livekit=ManagerConfig(url, credential)))`. `connect()` with no mode
 uses the config's one lane (`"livekit"` for a manager); pass `"udp"`/`"hybrid"` only for a
-LAN config with a `UdpConfig`. `connect(persist=True)` (or `ASIMOV_PERSIST=1`) saves a working
+LAN config with a `UdpConfig`. `connect(persist=True)` (or `MENLO_PERSIST=1`) saves a working
 URL + credential to the store after success. Leaving the `with` block calls `close()`.
 
 `connect(require_state=False)` opens the media lane without waiting for the firmware: camera,
@@ -99,7 +99,7 @@ A capability the room does not carry raises `UnsupportedError`; gate with `robot
 
 ```python
 import time
-from asimov_sdk import Mode, Robot
+from menlo.asimov import Mode, Robot
 
 with Robot().connect() as robot:
     if robot.state.mode is Mode.DAMP:  # wake up: the only place stand() belongs
@@ -118,7 +118,7 @@ Without `wait=True`: `robot.set_velocity(vx=0.25, duration=1.0); time.sleep(1.2)
 
 ```python
 import math
-from asimov_sdk import Mode, Robot
+from menlo.asimov import Mode, Robot
 
 RATE = 0.9  # rad/s, under the 1.5 clamp
 SECONDS = math.pi / RATE  # 3.49 s for a half turn, open loop
@@ -159,7 +159,7 @@ reads as `turned = -170°`, and the wrapped residual is then -10° (turn back), 
 - **`stand()` after a walk tips the robot over.** `stop()` is how a walking robot stands
   still. STAND is for waking up from DAMP.
 - **Trajectories need support.** `trajectory()`/`goto()` switch off the walking policy.
-- **Errors:** robot/link errors subclass `AsimovError` (`ConnectError`, `NotConnectedError`,
+- **Errors:** robot/link errors subclass `MenloError` (`ConnectError`, `NotConnectedError`,
   `LinkLostError`, `WaitTimeoutError`, `StateStaleError`, `RobotFaultedError`,
   `UnsupportedError`); your own mistakes are builtins (`ValueError` for a bad speed or
   duration, `KeyError` for a joint name).

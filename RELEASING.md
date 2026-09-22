@@ -32,8 +32,8 @@ Notes on the spelling, because the publish workflow compares it byte for byte wi
 
 ## Where the number lives
 
-`src/asimov_sdk/__init__.py` → `__version__`. hatch reads it (`pyproject.toml`,
-`[tool.hatch.version]`); nothing else declares it. `asimov --version` prints it.
+`src/menlo/__init__.py` → `__version__` (`menlo.asimov` re-exports it). hatch reads it (`pyproject.toml`,
+`[tool.hatch.version]`); nothing else declares it. `menlo --version` prints it.
 
 ## The ritual
 
@@ -67,7 +67,7 @@ publish, then cherry-pick the fix to `main`.
 - CI green on the merge commit (lint, mypy strict, unit tests on 3.12 and 3.13, the
   vendored-bindings check and the real-edge integration job).
 - The vendored protocol bindings match a *released* `asimov-protocol` tag (`make check-vendor`),
-  and `asimov_sdk.robots.PROTOCOL_VERSION` matches what the edge speaks.
+  and `menlo.asimov.robots.PROTOCOL_VERSION` matches what the edge speaks.
 - A `## <version> — <date>` heading in `CHANGELOG.md`.
 
 ## Dry run

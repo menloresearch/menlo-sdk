@@ -2,12 +2,12 @@
 
 Two rules, both load-bearing for callers:
 
-* ``except AsimovError`` catches everything that is about the ROBOT or the LINK. Caller
+* ``except MenloError`` catches everything that is about the ROBOT or the LINK. Caller
   bugs stay builtins — a non-finite velocity is a ``ValueError``, an unknown joint name a
   ``KeyError`` — because those are programming errors, not robot conditions, and the
   standard library already has the right names for them.
 * A command is never refused synchronously. Refusals arrive as outcomes (see
-  :mod:`asimov_sdk._outcome`) and only become exceptions when the caller asks
+  :mod:`menlo.asimov._outcome`) and only become exceptions when the caller asks
   (``Sent.require()``) or when a wait can no longer succeed.
 """
 
@@ -16,18 +16,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from asimov_sdk._outcome import Refused, Unknown
-    from asimov_sdk._state import State
+    from menlo.asimov._outcome import Refused, Unknown
+    from menlo.asimov._state import State
 
 
-class AsimovError(Exception):
+class MenloError(Exception):
     """Base for every robot- or link-related error this SDK raises."""
 
 
 # ── the link ─────────────────────────────────────────────────────────────────
 
 
-class ConnectError(AsimovError):
+class ConnectError(MenloError):
     """No robot answered within the connect timeout, or the transport could not open."""
 
 
@@ -41,7 +41,7 @@ class ProtocolMismatchError(ConnectError):
         self.observed = observed
 
 
-class UnsupportedError(AsimovError):
+class UnsupportedError(MenloError):
     """This robot, over this transport, does not provide the capability. Check
     ``robot.has(...)`` first when a script should degrade instead of fail."""
 
@@ -53,11 +53,11 @@ class UnsupportedError(AsimovError):
         self.transport = transport
 
 
-class NotConnectedError(AsimovError):
+class NotConnectedError(MenloError):
     """A verb was called before ``robot.connect(mode)`` / ``open()`` or after ``close``."""
 
 
-class LinkLostError(AsimovError):
+class LinkLostError(MenloError):
     """The robot stopped talking (no state for ``link_timeout`` seconds).
 
     The session is over: every verb and wait on this ``Robot`` raises this error until the
@@ -71,7 +71,7 @@ class LinkLostError(AsimovError):
 # ── waits ────────────────────────────────────────────────────────────────────
 
 
-class WaitTimeoutError(AsimovError, TimeoutError):
+class WaitTimeoutError(MenloError, TimeoutError):
     """``wait_until``/``wait_for`` gave up. Also a builtin ``TimeoutError``, so callers who
     reach for that name still catch it."""
 
@@ -85,7 +85,7 @@ class StateStaleError(WaitTimeoutError):
     the wait refused to succeed on it."""
 
 
-class RobotFaultedError(AsimovError):
+class RobotFaultedError(MenloError):
     """The firmware fault-DAMPed (a fall, a critical alert) while a wait was in progress.
     Fault authority outranks every client; retrying the same command will not help."""
 
@@ -97,7 +97,7 @@ class RobotFaultedError(AsimovError):
 # ── outcomes, when the caller asks for exceptions ────────────────────────────
 
 
-class CommandRefusedError(AsimovError):
+class CommandRefusedError(MenloError):
     """Raised by ``Sent.require()`` (or by a wait that saw its command refused)."""
 
     def __init__(self, refused: Refused) -> None:
@@ -105,7 +105,7 @@ class CommandRefusedError(AsimovError):
         self.refused = refused
 
 
-class OutcomeUnknownError(AsimovError, TimeoutError):
+class OutcomeUnknownError(MenloError, TimeoutError):
     """Raised by ``Sent.require(unknown_ok=False)`` when no outcome arrived in time."""
 
     def __init__(self, unknown: Unknown) -> None:

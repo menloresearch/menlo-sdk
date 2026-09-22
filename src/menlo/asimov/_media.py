@@ -21,12 +21,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from asimov_sdk._errors import UnsupportedError, WaitTimeoutError
+from menlo.asimov._errors import UnsupportedError, WaitTimeoutError
 
 if TYPE_CHECKING:
     import os
 
-    from asimov_sdk.transport.base import Transport
+    from menlo.asimov.transport.base import Transport
 
 
 def _numpy() -> Any:

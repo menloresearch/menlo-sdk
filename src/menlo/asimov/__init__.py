@@ -1,13 +1,13 @@
-"""menlo-sdk — drive an Asimov robot from Python.
+"""``menlo.asimov`` — drive an Asimov robot from Python.
 
-    from asimov_sdk import Mode, Robot
+    from menlo.asimov import Mode, Robot
 
     with Robot().connect() as robot:                 # the robot from the environment or
-        robot.stand()                                # ~/.asimov/robots.toml (`asimov login`)
+        robot.stand()                                # ~/.menlo/robots.toml (`menlo login`)
         robot.wait_for(Mode.STAND)
         robot.set_velocity(vx=0.25, duration=4.0, wait=True)
 
-    from asimov_sdk import ConnectionConfig, UdpConfig, ManagerConfig
+    from menlo.asimov import ConnectionConfig, UdpConfig, ManagerConfig
 
     cfg = ConnectionConfig(                          # or say where the robot is
         udp=UdpConfig(host="asimov.local"),
@@ -22,12 +22,13 @@ over the room). LiveKit is an optional extra — the core SDK's only runtime dep
 protobuf.
 """
 
-from asimov_sdk._command import Command, Limits, ModeCommand, Trajectory, Velocity
-from asimov_sdk._errors import (
-    AsimovError,
+from menlo import __version__
+from menlo.asimov._command import Command, Limits, ModeCommand, Trajectory, Velocity
+from menlo.asimov._errors import (
     CommandRefusedError,
     ConnectError,
     LinkLostError,
+    MenloError,
     NotConnectedError,
     OutcomeUnknownError,
     ProtocolMismatchError,
@@ -36,9 +37,9 @@ from asimov_sdk._errors import (
     UnsupportedError,
     WaitTimeoutError,
 )
-from asimov_sdk._media import AudioChunk, Camera, Clip, Frame, Microphone, Speaker
-from asimov_sdk._outcome import Applied, Outcome, Refusal, Refused, Sent, Unknown
-from asimov_sdk._state import (
+from menlo.asimov._media import AudioChunk, Camera, Clip, Frame, Microphone, Speaker
+from menlo.asimov._outcome import Applied, Outcome, Refusal, Refused, Sent, Unknown
+from menlo.asimov._state import (
     Alert,
     Battery,
     BatteryProtection,
@@ -48,24 +49,21 @@ from asimov_sdk._state import (
     RobotInfo,
     State,
 )
-from asimov_sdk.connection import (
+from menlo.asimov.connection import (
     ConnectionConfig,
     ConnectMode,
     LiveKitConfig,
     ManagerConfig,
     UdpConfig,
 )
-from asimov_sdk.recording import Recording
-from asimov_sdk.robot import Robot
-from asimov_sdk.store import RobotStore, StoredRobot
-from asimov_sdk.transport import HybridTransport, LiveKitTransport, Transport, UdpTransport
-
-__version__ = "0.1.0.dev0"
+from menlo.asimov.recording import Recording
+from menlo.asimov.robot import Robot
+from menlo.asimov.store import RobotStore, StoredRobot
+from menlo.asimov.transport import HybridTransport, LiveKitTransport, Transport, UdpTransport
 
 __all__ = [
     "Alert",
     "Applied",
-    "AsimovError",
     "AudioChunk",
     "Battery",
     "BatteryProtection",
@@ -85,6 +83,7 @@ __all__ = [
     "LiveKitConfig",
     "LiveKitTransport",
     "ManagerConfig",
+    "MenloError",
     "Microphone",
     "Mode",
     "ModeCommand",

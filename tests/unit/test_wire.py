@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from asimov_sdk import Alert, Mode, Refusal, State, Velocity
-from asimov_sdk._command import Limits, ModeCommand, Trajectory
-from asimov_sdk.robots import ASIMOV_1_BIPED_JOINTS, PROTOCOL_VERSION, joint_names_for
-from asimov_sdk.transport.udp import state_from_robot_state
+from menlo.asimov import Alert, Mode, Refusal, State, Velocity
+from menlo.asimov._command import Limits, ModeCommand, Trajectory
+from menlo.asimov.robots import ASIMOV_1_BIPED_JOINTS, PROTOCOL_VERSION, joint_names_for
+from menlo.asimov.transport.udp import state_from_robot_state
 
 
 def _robot_state(**kw):
-    from asimov_sdk._proto import load
+    from menlo.asimov._proto import load
 
     msg = load().state.RobotState(**kw)
     return msg

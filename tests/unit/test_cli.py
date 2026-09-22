@@ -1,11 +1,11 @@
-"""``asimov login / robots / use / logout`` against the fake manager and a temporary store."""
+"""``menlo login / robots / use / logout`` against the fake manager and a temporary store."""
 
 from __future__ import annotations
 
 import pytest
 
-from asimov_sdk import RobotStore, StoredRobot
-from asimov_sdk.cli import main
+from menlo.asimov import RobotStore, StoredRobot
+from menlo.cli import main
 
 CRED = "eyJpZCI6ImEwY2QxNmRiIn0.secret"
 
@@ -25,7 +25,7 @@ def test_login_with_a_refused_credential_leaves_the_store_alone(manager, capsys)
     manager.status = 401
     assert main(["login", manager.url, "--credential", "bad"]) == 1
     err = capsys.readouterr().err
-    assert "asimov login:" in err and "HTTP 401" in err and "bad" not in err.split("HTTP")[0]
+    assert "menlo login:" in err and "HTTP 401" in err and "bad" not in err.split("HTTP")[0]
     kept = RobotStore().get("menlo-0042")
     assert kept is not None and kept.credential == "good"
 

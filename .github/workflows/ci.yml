@@ -49,7 +49,7 @@ jobs:
       - name: Package builds and ships its bindings and type information
         run: |
           uv build && ls -l dist/
-          python -m zipfile -l dist/*.whl | grep -E 'asimov_sdk/py.typed|_vendor/asimov_protocol/v1/asimov_state_pb2.pyi|_vendor/VENDORED.md'
+          python -m zipfile -l dist/*.whl | grep -E 'menlo/py.typed|_vendor/asimov_protocol/v1/asimov_state_pb2.pyi|_vendor/VENDORED.md'
 
   # The vendored bindings must be exactly what the pinned asimov-protocol tag generates.
   # Needs read access to that repository; without the token this warns and skips. The tag
@@ -75,7 +75,7 @@ jobs:
       - name: Fetch the pinned tag, then drop the credential
         if: steps.tok.outputs.present == 'true'
         run: |
-          REF="$(sed -nE 's/^- Ref: `([^`]+)`.*/\1/p' src/asimov_sdk/_vendor/VENDORED.md)"
+          REF="$(sed -nE 's/^- Ref: `([^`]+)`.*/\1/p' src/menlo/asimov/_vendor/VENDORED.md)"
           git clone -q --depth 1 --branch "$REF" https://github.com/menloresearch/asimov-protocol.git /tmp/asimov-protocol
           git config --global --unset-all url."https://x-access-token:${{ secrets.ASIMOV_REPOS_TOKEN }}@github.com/menloresearch/".insteadOf
       - name: Verify (no credential present while PR code runs)

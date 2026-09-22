@@ -19,13 +19,13 @@ test:            ## unit tests only (no robot, no edge checkout, no livekit)
 integration:     ## the real asimov-edge UdpConnector in-process; needs ASIMOV_EDGE_SRC=<edge>/src
 	uv run pytest -m integration
 
-live:            ## a robot or `menlo-studio up --container --sdk`; needs ASIMOV_SDK_LIVE_HOST
+live:            ## a robot or `menlo-studio up --container --sdk`; needs MENLO_SDK_LIVE_HOST
 	uv run pytest -m live -s
 
-livekit:         ## real livekit.rtc vs `livekit-server --dev`. Needs ASIMOV_SDK_LIVEKIT_URL and
+livekit:         ## real livekit.rtc vs `livekit-server --dev`. Needs MENLO_SDK_LIVEKIT_URL and
                  ## TWO tokens for one room (an identity is a claim inside the JWT, so one
-                 ## token is one participant): ASIMOV_SDK_LIVEKIT_TOKEN (identity `sdk`) and
-                 ## ASIMOV_SDK_LIVEKIT_EDGE_TOKEN (identity `fake-edge`). See the test module.
+                 ## token is one participant): MENLO_SDK_LIVEKIT_TOKEN (identity `sdk`) and
+                 ## MENLO_SDK_LIVEKIT_EDGE_TOKEN (identity `fake-edge`). See the test module.
 	uv run --extra livekit pytest -m livekit -s
 
 vendor-protocol: ## re-vendor the generated bindings: make vendor-protocol REF=v1.1.0
