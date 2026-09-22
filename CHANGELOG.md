@@ -1,9 +1,14 @@
 # Changelog
 
-All notable changes to asimov-sdk. Pre-1.0: minor versions may change the API.
+All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## 0.1.0 — unreleased
+
+### Changed
+- The distribution is `menlo-sdk` (repository `menloresearch/menlo-sdk`), published to PyPI on
+  `v*` tags. The import name stays `asimov_sdk`. Between releases `__version__` carries the
+  next version with a `.dev0` suffix; see `RELEASING.md`.
 
 ### Fixed
 - A velocity held by `set_velocity` is released when the robot itself ends the drive: a
@@ -84,7 +89,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `user_timestamp`, the edge's receive clock) —
   the same protobufs the UDP lane sends, no envelope, no type tag). `HybridTransport` and
   `LiveKitTransport` underneath; `robot.py` does not know which wire it is on.
-- LiveKit is an EXTRA (`pip install "asimov-sdk[livekit]"`): the core still depends on
+- LiveKit is an EXTRA (`pip install "menlo-sdk[livekit]"`): the core still depends on
   protobuf alone, every `livekit` import is lazy inside `transport/_livekit_client.py`, and
   `connect("udp")` never reaches it.
 - `Camera.photo(timeout=)` returns ONE fresh `Frame`; `Camera.capture_clip(seconds,

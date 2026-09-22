@@ -45,7 +45,7 @@ def _parser() -> argparse.ArgumentParser:
         prog="asimov",
         description="Save the robots this machine may drive, so scripts can be Robot().connect().",
     )
-    p.add_argument("--version", action="version", version=f"asimov-sdk {__version__}")
+    p.add_argument("--version", action="version", version=f"menlo-sdk {__version__}")
     sub = p.add_subparsers(dest="command")
 
     login = sub.add_parser(

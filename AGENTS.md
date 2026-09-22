@@ -1,4 +1,4 @@
-# AGENTS.md — how to work in asimov-sdk
+# AGENTS.md — how to work in menlo-sdk
 
 Read this before changing anything. It is short on purpose.
 
@@ -33,7 +33,7 @@ edge's arbiter and safety layer, never a bypass. One `Robot`; transports impleme
 
 ## Dependencies
 
-Runtime core: `protobuf` only — `pip install asimov-sdk` with no extra must drive a robot
+Runtime core: `protobuf` only — `pip install menlo-sdk` with no extra must drive a robot
 (the UDP lane). The media lane adds one extra, `[livekit]`, and every `livekit` import in
 the SDK is lazy and lives in `transport/_livekit_client.py`; nothing else may import it,
 and `robot.connect("udp")` must never reach it. Optional at call time, never at import time:

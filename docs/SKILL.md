@@ -6,7 +6,7 @@ is everything the script needs to be right the first time. Python 3.12+.
 ## Install and connect
 
 ```bash
-pip install "asimov-sdk[livekit] @ git+https://github.com/menloresearch/asimov-sdk.git"
+pip install "menlo-sdk[livekit]"          # the import is `asimov_sdk`
 asimov login http://<robot-ip> --credential <credential>   # once per machine; validates, saves
 ```
 

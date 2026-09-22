@@ -19,7 +19,7 @@ edge's arbiter beside the robot's other controllers, and pass the same safety la
 
 LiveKit is an EXTRA. Every ``livekit`` import lives in ``_livekit_client``, behind a lazy
 function; importing this module, and driving a robot on the UDP lane, works with livekit
-absent. Install it with ``pip install "asimov-sdk[livekit]"``.
+absent. Install it with ``pip install "menlo-sdk[livekit]"``.
 
 **The SDK never holds a LiveKit API secret.** There is no ``api_key``/``api_secret``
 parameter anywhere: a caller presents a token the robot's manager minted, or a callable

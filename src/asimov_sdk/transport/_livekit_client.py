@@ -7,7 +7,7 @@ callbacks out. Everything above it — :class:`~asimov_sdk.transport.livekit.Liv
 :class:`LiveKitClient` protocol and never an ``rtc`` object, which is why the unit suite
 fakes this seam in forty lines and never needs livekit installed.
 
-LiveKit is an EXTRA (``pip install "asimov-sdk[livekit]"``). The import happens inside
+LiveKit is an EXTRA (``pip install "menlo-sdk[livekit]"``). The import happens inside
 :func:`_rtc`, when a room is actually joined — importing the SDK, and
 ``robot.connect("udp")``, must work with livekit absent.
 
@@ -59,7 +59,7 @@ def _rtc() -> Any:
     except ImportError as exc:  # pragma: no cover - environment, not logic
         raise ConnectError(
             "the LiveKit lane needs the livekit extra, which is not part of the core SDK "
-            '(`pip install "asimov-sdk[livekit]"`, or `pip install "livekit>=1.1,<2"`). '
+            '(`pip install "menlo-sdk[livekit]"`, or `pip install "livekit>=1.1,<2"`). '
             "The UDP lane (connect('udp')) needs none of it."
         ) from exc
     return rtc

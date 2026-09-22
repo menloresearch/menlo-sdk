@@ -1,4 +1,4 @@
-# asimov-sdk — developer entry points. `uv` is the only tool assumed.
+# menlo-sdk — developer entry points. `uv` is the only tool assumed.
 .PHONY: sync lint fmt typecheck test integration live livekit check vendor-protocol check-vendor
 
 sync:            ## create/refresh .venv from uv.lock

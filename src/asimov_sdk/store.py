@@ -254,7 +254,7 @@ class RobotStore:
 
     def _dump(self) -> str:
         lines = [
-            "# asimov-sdk: robots this machine may drive. Written by `asimov login` and",
+            "# menlo-sdk: robots this machine may drive. Written by `asimov login` and",
             "# Robot.connect(persist=True); holds SDK credentials, keep it 0600.",
         ]
         if self.default is not None:

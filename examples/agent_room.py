@@ -39,7 +39,7 @@ The SDK's job is the robot: verbs, state, waits, safety.
 
 Running it
 ----------
-    pip install "asimov-sdk[livekit]" "livekit-agents[google]~=1.0"
+    pip install "menlo-sdk[livekit]" "livekit-agents[google]~=1.0"
     # the agent FRAMEWORK's LiveKit credentials — never the SDK's:
     export LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=...
     # the SDK's: the robot's manager and a credential from its /sdk page

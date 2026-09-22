@@ -2,7 +2,7 @@
 
 ``UdpTransport`` is the LAN lane and needs nothing but protobuf. ``LiveKitTransport`` and
 ``HybridTransport`` reach a robot through its LiveKit room; importing them is free, but
-opening one needs the livekit extra (``pip install "asimov-sdk[livekit]"``).
+opening one needs the livekit extra (``pip install "menlo-sdk[livekit]"``).
 """
 
 from asimov_sdk.transport.base import Transport

@@ -1,5 +1,5 @@
 [project]
-name = "asimov-sdk"
+name = "menlo-sdk"  # the distribution; the import stays `asimov_sdk` (the robot is an Asimov)
 dynamic = ["version"]
 description = "Drive an Asimov robot from Python: one Robot, pluggable transports."
 readme = "README.md"
@@ -24,7 +24,7 @@ dependencies = [
     "protobuf>=5.29.3",
 ]
 
-# The media lane is an EXTRA on purpose: `pip install asimov-sdk` with no extra drives a
+# The media lane is an EXTRA on purpose: `pip install menlo-sdk` with no extra drives a
 # robot over UDP, and every `livekit` import in the SDK is lazy and lives in one module
 # (src/asimov_sdk/transport/_livekit_client.py).
 [project.optional-dependencies]
@@ -34,9 +34,9 @@ livekit = ["livekit>=1.1.4,<2"]  # 1.1.4: first release with data tracks (the st
 asimov = "asimov_sdk.cli:main"  # login / robots / use / logout: the credential store
 
 [project.urls]
-Repository = "https://github.com/menloresearch/asimov-sdk"
-Issues = "https://github.com/menloresearch/asimov-sdk/issues"
-Changelog = "https://github.com/menloresearch/asimov-sdk/blob/main/CHANGELOG.md"
+Repository = "https://github.com/menloresearch/menlo-sdk"
+Issues = "https://github.com/menloresearch/menlo-sdk/issues"
+Changelog = "https://github.com/menloresearch/menlo-sdk/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

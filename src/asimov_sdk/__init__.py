@@ -1,4 +1,4 @@
-"""asimov-sdk — drive an Asimov robot from Python.
+"""menlo-sdk — drive an Asimov robot from Python.
 
     from asimov_sdk import Mode, Robot
 
@@ -60,7 +60,7 @@ from asimov_sdk.robot import Robot
 from asimov_sdk.store import RobotStore, StoredRobot
 from asimov_sdk.transport import HybridTransport, LiveKitTransport, Transport, UdpTransport
 
-__version__ = "0.1.0"
+__version__ = "0.1.0.dev0"
 
 __all__ = [
     "Alert",

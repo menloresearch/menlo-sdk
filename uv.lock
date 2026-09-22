@@ -16,45 +16,6 @@ wheels = [
 ]
 
 [[package]]
-name = "asimov-sdk"
-source = { editable = "." }
-dependencies = [
-    { name = "protobuf" },
-]
-
-[package.optional-dependencies]
-livekit = [
-    { name = "livekit" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pillow" },
-    { name = "pytest" },
-    { name = "pytest-timeout" },
-    { name = "ruff" },
-    { name = "types-protobuf" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "livekit", marker = "extra == 'livekit'", specifier = ">=1.1.4,<2" },
-    { name = "protobuf", specifier = ">=5.29.3" },
-]
-provides-extras = ["livekit"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.11" },
-    { name = "pillow", specifier = ">=10" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-timeout", specifier = ">=2.3" },
-    { name = "ruff", specifier = ">=0.6" },
-    { name = "types-protobuf", specifier = ">=5.29" },
-]
-
-[[package]]
 name = "ast-serialize"
 version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -254,6 +215,45 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/68/4b5e996660185f2db937a356c9e72981eab42c846f24ba992b997fa9f973/livekit-1.1.18-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:e9305aa097fe75f533db3205ab15868730e467130ffdda7d4adc3840f30b282a", size = 10584633, upload-time = "2026-09-08T01:50:47.735Z" },
     { url = "https://files.pythonhosted.org/packages/e0/5e/a0220ddf5e53bb3ee4f4969e9ca5e3a3e9567c584b66cd71355a45c069a8/livekit-1.1.18-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:dc2461b668ffa66ca504d05c88af7ea640372f53672ae367145412e374d6aff0", size = 11809468, upload-time = "2026-09-08T01:50:50.332Z" },
     { url = "https://files.pythonhosted.org/packages/f6/47/22455e01c76b271f7d9399546c2becabe4bf0f58a43e79859bb0ca4fc426/livekit-1.1.18-py3-none-win_amd64.whl", hash = "sha256:a61d4fd39392e7d28a7dbbe3b68be7b600115ed32501f5b016579846de945913", size = 10972019, upload-time = "2026-09-08T01:50:52.912Z" },
+]
+
+[[package]]
+name = "menlo-sdk"
+source = { editable = "." }
+dependencies = [
+    { name = "protobuf" },
+]
+
+[package.optional-dependencies]
+livekit = [
+    { name = "livekit" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pillow" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+    { name = "types-protobuf" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit", marker = "extra == 'livekit'", specifier = ">=1.1.4,<2" },
+    { name = "protobuf", specifier = ">=5.29.3" },
+]
+provides-extras = ["livekit"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.11" },
+    { name = "pillow", specifier = ">=10" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
+    { name = "ruff", specifier = ">=0.6" },
+    { name = "types-protobuf", specifier = ">=5.29" },
 ]
 
 [[package]]

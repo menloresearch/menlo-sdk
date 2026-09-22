@@ -1,4 +1,6 @@
-# asimov-sdk
+# menlo-sdk
+
+`pip install menlo-sdk` · `import asimov_sdk` · repo [menloresearch/menlo-sdk](https://github.com/menloresearch/menlo-sdk)
 
 Drive an Asimov robot from Python.
 
@@ -69,9 +71,9 @@ Same verbs, same waits, same error model on all three: `robot.py` does not know 
 it is on. Pick **udp** on the LAN when you need no camera, **hybrid** on the LAN when you
 do, and **livekit** when the robot is not routable from your machine.
 
-**LiveKit is optional.** `pip install asimov-sdk` with no extra drives a robot over UDP;
+**LiveKit is optional.** `pip install menlo-sdk` with no extra drives a robot over UDP;
 every `livekit` import in the SDK is lazy and confined to one module. Add the media lane
-with `pip install "asimov-sdk[livekit]"`.
+with `pip install "menlo-sdk[livekit]"`.
 
 ### The wire
 
@@ -107,12 +109,15 @@ sessions with the same label then evict each other.
 Python 3.12 or newer.
 
 ```bash
-uv add "asimov-sdk @ git+https://github.com/menloresearch/asimov-sdk.git"
-# or: pip install "asimov-sdk @ git+https://github.com/menloresearch/asimov-sdk.git"
+uv add menlo-sdk                    # from PyPI; the import is `asimov_sdk`
+uv add "menlo-sdk[livekit]"         # + the media lane (hybrid and livekit modes)
 
-# the media lane (hybrid and livekit modes):
-uv add "asimov-sdk[livekit] @ git+https://github.com/menloresearch/asimov-sdk.git"
+# an unreleased commit, straight from git:
+uv add "menlo-sdk @ git+https://github.com/menloresearch/menlo-sdk.git"
 ```
+
+Releases are the `v*` tags of this repo, published to PyPI by `.github/workflows/publish.yml`;
+how versions are chosen and cut is in [RELEASING.md](RELEASING.md).
 
 The core's only runtime dependency is `protobuf`, and `[livekit]` is the one extra — a
 robot drives without it. The generated `asimov.io` bindings ship inside
