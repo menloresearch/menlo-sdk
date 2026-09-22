@@ -100,7 +100,13 @@ def _login(args: argparse.Namespace) -> int:
         room=answer.room,
     )
     replaced = entry.name in store
-    store.put(entry, default=False if args.no_default else None)
+    # --name is the user choosing the key; without it the key is whatever the manager
+    # answered, and RobotStore refuses to let that overwrite another manager's entry.
+    store.put(
+        entry,
+        default=False if args.no_default else None,
+        allow_manager_change=args.name is not None,
+    )
     what = "updated" if replaced else "saved"
     mark = " (default)" if store.default == entry.name else ""
     print(f"{what} {entry.name}{mark}: manager {entry.manager_url}, room {answer.room}")

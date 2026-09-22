@@ -178,6 +178,11 @@ class Robot:
         self._subscribed = False
         self._refusals: collections.deque[Refused] = collections.deque(maxlen=256)
         self._closed = True
+        # open() sets these before the transport starts delivering: whether samples that
+        # arrive before open() returns may complete the handshake themselves (a session
+        # that did not wait for the robot), and whether this Robot is taking samples at all.
+        self._late = False
+        self._accepting = False
         self._link_lost: LinkLostError | None = None
         self._info: RobotInfo | None = None
         self._derived_caps: frozenset[str] = frozenset()
@@ -287,7 +292,14 @@ class Robot:
             timeout=timeout, allow_version_skew=allow_version_skew, require_state=require_state
         )
         if persist:
-            saved = store.persist(config, getattr(tx, "room", None))
+            # The session is open by now. A store that cannot be written (read-only or full
+            # $ASIMOV_HOME, a name that belongs to another manager) must not leave it open
+            # behind an exception the caller's `with` never gets to close.
+            try:
+                saved = store.persist(config, getattr(tx, "room", None))
+            except Exception:
+                self.close()
+                raise
             log.info("saved %s (%s) to %s", saved.name, saved.manager_url, store.store_path())
         return self
 
@@ -326,11 +338,16 @@ class Robot:
             self._last_mode = None
             self._pending.clear()
             self._refusals.clear()
+        # Armed BEFORE the transport opens: a LiveKit open() waits for media for seconds,
+        # and state that arrives meanwhile must be handshaken (or dropped), not stored raw.
+        self._late = not require_state
+        self._accepting = True
         self._tx.open()
         # Verbs stay refused (NotConnectedError) until the handshake has passed — here, or
         # in _on_state when the session did not wait for the robot.
         if require_state:
             if not self._state_seen.wait(timeout):
+                self._accepting = False
                 self._tx.close()
                 # A transport MAY carry a ``silence_hint``: what to check when a connect
                 # hears no state on its wire. It knows the setup that feeds it; this class
@@ -344,6 +361,7 @@ class Robot:
             try:
                 self._handshake(first)
             except ProtocolMismatchError:
+                self._accepting = False
                 self._tx.close()
                 raise
         self._closed = False
@@ -394,7 +412,7 @@ class Robot:
         with self._lock:
             if self._info is not None:
                 return True
-            if self._closed:
+            if not self._accepting:
                 return False
             try:
                 self._handshake(first)
@@ -442,6 +460,7 @@ class Robot:
             if self._closed:
                 return
             self._closed = True
+            self._accepting = False
             tx = self._transport  # pinned here: a connect() racing us may swap the lane
             had_velocity = self._latched is not None
             self._end_hold()
@@ -526,7 +545,9 @@ class Robot:
     def state(self) -> State:
         """The latest sample the robot pushed. Check ``state.age_s`` before trusting it."""
         s = self._state
-        if s is None:
+        if s is None or self._handshake_error is not None:
+            # A robot this SDK cannot talk to is an error, not a sample — even if something
+            # was cached before the mismatch was known.
             raise self._no_state()
         return s
 
@@ -1006,8 +1027,12 @@ class Robot:
         # the old value froze robot.state for minutes. Behind by more than the reorder
         # window, or with the firmware clock a second in the past, is a new stream.
         prev = self._state
-        if prev is not None and self._is_stale_sample(prev, state):
-            return
+        restarted = False
+        if prev is not None:
+            verdict = self._classify_sample(prev, state)
+            if verdict == "stale":
+                return
+            restarted = verdict == "restart"
         if state.joints and not state.joints[0].name:
             names = robots.joint_names_for(len(state.joints))
             if names is not None:
@@ -1019,27 +1044,65 @@ class Robot:
                     ),
                 )
         state = self._carry_alerts(state)
-        if self._info is None and not self._closed and not self._late_handshake(state):
+        if (
+            self._info is None
+            and self._late
+            and self._accepting
+            and not self._late_handshake(state)
+        ):
             return  # a robot this SDK cannot talk to: the mismatch is raised on the next read
         prev = self._state
         self._state = state
         self._state_seen.set()
+        # What the robot reports can end a drive too. A rebooted firmware comes up DAMPed
+        # and a faulted one DAMPs itself; the last velocity this session latched belongs to
+        # a robot that no longer exists, and re-sending MOVE at 10 Hz to the new one is the
+        # one thing a script that is busy elsewhere would never want.
+        if restarted:
+            self._release_hold("the firmware restarted", fence=True)
+        elif state.faulted and state.mode in (Mode.DAMP, Mode.UNKNOWN):
+            self._release_hold("the robot fault-DAMPed", fence=False)
         self._fire_state_callbacks(prev, state)
 
+    def _release_hold(self, why: str, *, fence: bool) -> None:
+        """The ROBOT ended the drive: drop a latched velocity so the keepalive stops
+        re-sending it. Nothing is sent in its place — a MOVE-at-zero would ask a DAMPed or
+        booting robot to change mode, which is a decision for the script, not the SDK.
+        ``fence`` also bumps the generation so a running ``goto`` / re-sent trajectory
+        stops; a one-shot event (a restart) may do that, a fault that stays reported for
+        seconds must not keep cancelling whatever the script does next."""
+        with self._lock:
+            held = self._latched
+            if held is None and not fence:
+                return
+            self._end_hold()
+            if fence or held is not None:
+                self._generation += 1
+        if held is not None:
+            log.warning(
+                "%s while set_velocity(vx=%.2f, vy=%.2f, vyaw=%.2f) was held: the hold is "
+                "released and nothing more is sent",
+                why,
+                held.vx,
+                held.vy,
+                held.vyaw,
+            )
+
     @staticmethod
-    def _is_stale_sample(prev: State, state: State) -> bool:
-        """Is ``state`` a reordered datagram from BEHIND ``prev`` (drop it), as opposed to
-        newer, or the first of a restarted stream (accept it)?"""
+    def _classify_sample(prev: State, state: State) -> Literal["newer", "stale", "restart"]:
+        """Where ``state`` stands relative to ``prev``: ``"newer"`` (or a duplicate, or an
+        unstamped stream: accept), ``"stale"`` (a reordered datagram from BEHIND: drop) or
+        ``"restart"`` (the first sample of a restarted stream: accept, and know it)."""
         back = (prev.sequence - state.sequence) % 2**32
         if not 0 < back < 2**31:
-            return False  # newer, a duplicate, or an unstamped stream
+            return "newer"
         if back > STATE_REORDER_WINDOW:
             log.info(
                 "state sequence restarted (%d -> %d): the firmware restarted; following it",
                 prev.sequence,
                 state.sequence,
             )
-            return False
+            return "restart"
         if (
             prev.fw_timestamp_us
             and state.fw_timestamp_us
@@ -1049,8 +1112,8 @@ class Robot:
                 "the firmware clock went back %.1fs: the firmware restarted; following it",
                 (prev.fw_timestamp_us - state.fw_timestamp_us) / 1e6,
             )
-            return False
-        return True
+            return "restart"
+        return "stale"
 
     def _carry_alerts(self, state: State) -> State:
         """The firmware puts its alert block in every 20th frame (10 Hz at 200 Hz) and an

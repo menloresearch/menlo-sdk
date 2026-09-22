@@ -5,6 +5,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## 0.1.0 — unreleased
 
+### Fixed
+- A velocity held by `set_velocity` is released when the robot itself ends the drive: a
+  fault-DAMP (critical alert while DAMPed) drops the latch so the keepalive stops re-sending
+  it, and a firmware restart (sequence counter reset) drops it and fences off a running
+  `goto` / trajectory re-send. Nothing is sent in its place; a `MOVE` at zero would ask a
+  DAMPed or booting robot to change mode.
+- `close()` from inside a state callback on the `livekit` lane no longer stalls 5 s on the
+  client's own event loop and then drops the queued zero-velocity packet and the room
+  leave; the client now leaves asynchronously and stops its loop once that is done.
+- `connect(require_state=False)`: state that arrives while the transport is still opening
+  (a LiveKit media wait) now goes through the late handshake instead of being stored raw,
+  so a protocol mismatch is raised on read rather than returning a frozen sample.
+- `connect(persist=True)`: a store that cannot be written (read-only or full `$ASIMOV_HOME`,
+  a name that belongs to another manager) closes the session it just opened before the
+  error propagates, instead of leaving the keepalive and the transport running.
+- `RobotStore.put` refuses to replace an entry with one for a different manager unless the
+  caller chose the name (`asimov login --name`, `persist(name=)`): a manager answering
+  another robot's room can no longer take over that robot's saved URL and credential.
+- A DEL byte (U+007F) in a room or robot name no longer produces a `robots.toml` that
+  `tomllib` rejects.
+
 ### Added
 - Zero-config connect: `Robot()` with no config resolves one from `ASIMOV_MANAGER_URL` +
   `ASIMOV_CREDENTIAL`, else from `~/.asimov/robots.toml` (`$ASIMOV_HOME`; `ASIMOV_ROBOT`
