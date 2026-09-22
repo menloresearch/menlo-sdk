@@ -148,7 +148,9 @@ cfg.available_modes()  # ("udp", "hybrid", "livekit")
 robot = Robot(cfg, limits=None, link_timeout=2.0)  # bound, no network yet
 robot.connect("hybrid", timeout=5.0, media_timeout=3.0, connect_timeout=10.0)  # returns robot
 robot.connect()  # the config's one lane; ValueError when it has several
-robot.connect("livekit", require_state=False)  # media now; state/verbs unlock when the firmware reports
+robot.connect(
+    "livekit", require_state=False
+)  # media now; state/verbs unlock when the firmware reports
 robot.connect("livekit", persist=True)  # save URL + credential to the store after success
 robot.close()
 robot.connect("udp")  # switch lanes on the same Robot
@@ -156,8 +158,12 @@ robot = Robot(transport, limits=None, link_timeout=2.0)
 robot.open()  # any Transport
 
 # verbs — each returns a Sent immediately; the wire's own vocabulary
-robot.set_velocity(vx, vy, vyaw, duration=None, wait=False)  # held at 10 Hz until superseded/stop/duration
-robot.set_velocity(vx=0.25, duration=1.0, wait=True)  # blocks until the hold ended and its zero left
+robot.set_velocity(
+    vx, vy, vyaw, duration=None, wait=False
+)  # held at 10 Hz until superseded/stop/duration
+robot.set_velocity(
+    vx=0.25, duration=1.0, wait=True
+)  # blocks until the hold ended and its zero left
 robot.stop()  # zero velocity; stays in MOVE at rest, still balancing — how it stands still
 robot.stand()  # one-shot; STIFFEN to a pose, no balance loop — see the warning below
 robot.damp()  # one-shot; motors compliant NOW — the emergency verb

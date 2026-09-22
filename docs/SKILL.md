@@ -18,7 +18,7 @@ manager URL is the robot's web UI address — `http://192.168.22.32` (port 80) o
 ```python
 from asimov_sdk import Robot, Mode
 
-with Robot().connect() as robot:      # finds the robot; returns once the robot has reported state
+with Robot().connect() as robot:  # finds the robot; returns once the robot has reported state
     ...
 ```
 
@@ -102,10 +102,10 @@ import time
 from asimov_sdk import Mode, Robot
 
 with Robot().connect() as robot:
-    if robot.state.mode is Mode.DAMP:               # wake up: the only place stand() belongs
+    if robot.state.mode is Mode.DAMP:  # wake up: the only place stand() belongs
         robot.stand()
         robot.wait_for(Mode.STAND, timeout=15.0)
-    robot.set_velocity(vx=0.25, duration=1.0, wait=True)   # 0.25 m/s for 1 s, zero sent, returns
+    robot.set_velocity(vx=0.25, duration=1.0, wait=True)  # 0.25 m/s for 1 s, zero sent, returns
     robot.wait_for(Mode.MOVE, timeout=5.0)
     print("standing still (MOVE at zero velocity):", robot.state.mode.name, robot.state.upright)
     # Do NOT call robot.stand() here — it would stiffen a balancing robot and tip it over.
@@ -120,20 +120,23 @@ Without `wait=True`: `robot.set_velocity(vx=0.25, duration=1.0); time.sleep(1.2)
 import math
 from asimov_sdk import Mode, Robot
 
-RATE = 0.9                       # rad/s, under the 1.5 clamp
-SECONDS = math.pi / RATE         # 3.49 s for a half turn, open loop
+RATE = 0.9  # rad/s, under the 1.5 clamp
+SECONDS = math.pi / RATE  # 3.49 s for a half turn, open loop
 
 with Robot().connect() as robot:
     if robot.state.mode is Mode.DAMP:
-        robot.stand(); robot.wait_for(Mode.STAND, timeout=15.0)
+        robot.stand()
+        robot.wait_for(Mode.STAND, timeout=15.0)
     before = robot.state.yaw
-    robot.set_velocity(vyaw=RATE, duration=SECONDS, wait=True)   # + is counter-clockwise
+    robot.set_velocity(vyaw=RATE, duration=SECONDS, wait=True)  # + is counter-clockwise
     after = robot.wait_until(lambda s: s.age_s < 0.2, timeout=2.0).yaw
-    turned = math.remainder(after - before, math.tau)    # wrapped difference, in (-π, π]
+    turned = math.remainder(after - before, math.tau)  # wrapped difference, in (-π, π]
     print(f"turned {math.degrees(turned):+.0f}° (asked +180°)")
     residual = math.remainder(math.pi - turned, math.tau)  # what is left of the half turn
-    if abs(residual) > math.radians(15):                  # the gait slips; correct once
-        robot.set_velocity(vyaw=math.copysign(RATE, residual), duration=abs(residual) / RATE, wait=True)
+    if abs(residual) > math.radians(15):  # the gait slips; correct once
+        robot.set_velocity(
+            vyaw=math.copysign(RATE, residual), duration=abs(residual) / RATE, wait=True
+        )
 ```
 
 `yaw` is IMU heading relative to wherever the firmware booted, so only differences mean
