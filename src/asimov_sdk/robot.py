@@ -545,7 +545,9 @@ class Robot:
     def state(self) -> State:
         """The latest sample the robot pushed. Check ``state.age_s`` before trusting it."""
         s = self._state
-        if s is None:
+        if s is None or self._handshake_error is not None:
+            # A robot this SDK cannot talk to is an error, not a sample — even if something
+            # was cached before the mismatch was known.
             raise self._no_state()
         return s
 
