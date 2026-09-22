@@ -183,9 +183,33 @@ class RobotStore:
         return None
 
     # ── writing: every change is saved at once ───────────────────────────────
-    def put(self, robot: StoredRobot, *, default: bool | None = None) -> StoredRobot:
+    def put(
+        self,
+        robot: StoredRobot,
+        *,
+        default: bool | None = None,
+        allow_manager_change: bool = False,
+    ) -> StoredRobot:
         """Add or replace ``robot`` by name. ``default=None`` makes it the default only when
-        the store had none; ``True`` always, ``False`` never."""
+        the store had none; ``True`` always, ``False`` never.
+
+        The name usually comes from the ROOM the manager answered, and a manager decides
+        what it answers. So an entry is only replaced by one for the same manager unless
+        ``allow_manager_change`` says the caller chose the name deliberately: otherwise a
+        misconfigured (or hostile) manager answering another robot's room would silently
+        take over that robot's saved URL and credential."""
+        previous = self.robots.get(robot.name)
+        if (
+            previous is not None
+            and previous.manager_url != robot.manager_url
+            and not allow_manager_change
+        ):
+            raise ValueError(
+                f"{robot.name!r} is already saved for manager {previous.manager_url}, but this "
+                f"one answered from {robot.manager_url}. Save it under another name "
+                f"(`asimov login {robot.manager_url} --name <name>`), or forget the old entry "
+                f"first (`asimov logout {robot.name}`)."
+            )
         self.robots[robot.name] = robot
         if default or (default is None and self.default is None):
             self.default = robot.name
@@ -250,8 +274,9 @@ class RobotStore:
 
 def _toml_str(value: str) -> str:
     """A TOML basic string. JSON's escapes are a subset of TOML's, so ``json.dumps`` is
-    exactly the quoting needed."""
-    return json.dumps(value, ensure_ascii=False)
+    the quoting needed — except DEL (U+007F), which JSON leaves raw and TOML forbids in a
+    basic string. One such byte in a room name would make the whole file unreadable."""
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 def _toml_key(name: str) -> str:
@@ -324,7 +349,7 @@ def persist(config: ConnectionConfig, room: str | None, *, name: str | None = No
     previous = store.robots.get(entry.name)
     if previous is not None and previous.room and not room:
         entry = replace(entry, room=previous.room)
-    return store.put(entry)
+    return store.put(entry, allow_manager_change=name is not None)
 
 
 __all__ = [

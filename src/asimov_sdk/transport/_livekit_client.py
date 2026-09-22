@@ -236,8 +236,24 @@ class _LiveKitClient:
             ) from exc
 
     def close(self) -> None:
-        loop = self._loop
+        loop, thread = self._loop, self._thread
         self._connected = False
+        if loop is not None and threading.current_thread() is thread:
+            # Called ON the loop thread: a state callback (delivered by _pump_data_track)
+            # closed the Robot. Blocking here on our own loop would stall until the
+            # timeout, and stopping the loop right after would drop the zero-velocity
+            # packet Robot.close() just queued and the room.disconnect() with it. Leave
+            # asynchronously instead, and let that task stop the loop once it is done.
+            self._loop, self._thread = None, None
+            self._source = None
+
+            async def leave_then_stop() -> None:
+                with contextlib.suppress(Exception):
+                    await self._leave()
+                loop.stop()
+
+            loop.create_task(leave_then_stop())
+            return
         if loop is not None:
             with contextlib.suppress(Exception):
                 self._await(self._leave(), 5.0)
@@ -301,7 +317,11 @@ class _LiveKitClient:
         def run() -> None:
             asyncio.set_event_loop(loop)
             ready.set()
-            loop.run_forever()
+            try:
+                loop.run_forever()
+            finally:  # a loop stopped from inside itself (close() on this thread) ends here
+                with contextlib.suppress(Exception):
+                    loop.close()
 
         thread = threading.Thread(target=run, name="asimov-sdk-livekit", daemon=True)
         thread.start()
