@@ -49,8 +49,9 @@ Notes on the spelling, because the publish workflow compares it byte for byte wi
    git tag v0.2.0rc1 && git push origin v0.2.0rc1
    ```
 
-3. `publish.yml` builds sdist + wheel, refuses if the tag and the wheel's version differ,
-   twine-checks, then waits for the `pypi` environment's reviewer. Approve; it uploads.
+3. `publish.yml` refuses a tag that is not on `main`, builds sdist + wheel, refuses if the
+   tag and the wheel's version differ, twine-checks, then waits for the `pypi`
+   environment's reviewer. Approve; it uploads.
 4. **Bump main.** A one-line PR setting `__version__` back to the next `.dev0`
    (`0.2.0.dev0` after an rc, `0.3.0.dev0` after a final) and opening a fresh
    `## 0.3.0 — unreleased` section in the changelog.
@@ -61,6 +62,22 @@ force-pushed and no tag ever moves.
 **Hotfix** for a release that `main` has moved past: branch from the tag
 (`git switch -c hotfix/0.2.1 v0.2.0`), fix, set `0.2.1`, tag `v0.2.1` on that branch,
 publish, then cherry-pick the fix to `main`.
+
+## Why from main, and what stops a wrong release
+
+Releases are tagged on `main`; there are no release branches. That is what most robot
+SDKs do (Spot, LeRobot, MAVSDK, Kinova, Intrinsic) and it is enough while one line is
+supported. Three things make a wrong release impossible rather than merely discouraged:
+
+- a **tag ruleset** on `v*`: only maintainers may create these tags, nobody may move or
+  delete one;
+- the **`pypi` environment**: deployments allowed from tags `v*` only, one required
+  reviewer;
+- the **ancestry check** in `publish.yml`: the tagged commit must be reachable from `main`.
+
+If a day comes when an old line needs a fix after `main` has moved on, cut
+`release/v0.2` from the `v0.2.0` tag then, cherry-pick, tag `v0.2.1` there, and add
+`release/*` to the ancestry check. Nothing about starting on `main` prevents that.
 
 ## What a release must satisfy
 
