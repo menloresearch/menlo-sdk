@@ -38,6 +38,24 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          fetch-depth: 0 # the ancestry check below needs real history, not a shallow tip
+
+      # A release is a tag on main. A tag pushed on a feature branch (or on a commit
+      # that never merged) must not publish; the tag ruleset and the pypi environment
+      # gate WHO may release, this gates WHAT. Annotated tags are peeled to the commit.
+      - name: Verify the tag is on main
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # No fetch here: the checkout above (fetch-depth 0, no persisted credentials)
+          # already brought every branch, and a fetch would need a token it does not have.
+          tag_commit="$(git rev-parse "${TAG}^{commit}")"
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "::error::tag $TAG ($tag_commit) is not on main; releases are tagged on main only"
+            exit 1
+          fi
+          echo "tag $TAG is on main ($tag_commit)"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
@@ -77,13 +95,13 @@ jobs:
           fi
           echo "Tag and package version match: $PKG_VERSION"
 
-      # The wheel must ship the typing marker, the vendored protocol bindings
-      # with their stubs, the vendoring record and the licence — the same
-      # contract ci.yml checks, plus the licence file PyPI displays.
+      # The wheel must ship the typing marker and the licence, and declare the
+      # protocol dependency — the same contract ci.yml checks.
       - name: Check distributions
         run: |
           uvx twine check dist/*
-          python -m zipfile -l dist/*.whl | grep -E 'menlo/py.typed|_vendor/asimov_protocol/v1/asimov_state_pb2.pyi|_vendor/VENDORED.md|licenses/LICENSE'
+          python -m zipfile -l dist/*.whl | grep -E 'menlo/py.typed|licenses/LICENSE'
+          unzip -p dist/*.whl '*/METADATA' | grep -E '^Requires-Dist: asimov-protocol'
 
       - name: Upload distributions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

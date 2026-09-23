@@ -1,5 +1,5 @@
 # menlo-sdk — developer entry points. `uv` is the only tool assumed.
-.PHONY: sync lint fmt typecheck test integration live livekit check vendor-protocol check-vendor
+.PHONY: sync lint fmt typecheck test integration live livekit check
 
 sync:            ## create/refresh .venv from uv.lock
 	uv sync --all-groups
@@ -28,10 +28,6 @@ livekit:         ## real livekit.rtc vs `livekit-server --dev`. Needs MENLO_SDK_
                  ## MENLO_SDK_LIVEKIT_EDGE_TOKEN (identity `fake-edge`). See the test module.
 	uv run --extra livekit pytest -m livekit -s
 
-vendor-protocol: ## re-vendor the generated bindings: make vendor-protocol REF=v1.1.0
-	scripts/vendor_protocol.sh $(REF)
 
-check-vendor:    ## fail if the vendored bindings drift from the tag pinned in _vendor/VENDORED.md
-	scripts/vendor_protocol.sh --check
 
 check: lint typecheck test

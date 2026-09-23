@@ -16,6 +16,18 @@ wheels = [
 ]
 
 [[package]]
+name = "asimov-protocol"
+version = "1.2.1rc2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b7/42/60040f03117ee84437280144d0c38846b151cfa2eb1627626e43fa681a12/asimov_protocol-1.2.1rc2.tar.gz", hash = "sha256:6759723c027d9ef46ec9300d34713596170e06b2bd2763d31b8ad7cf9cd20fd2", size = 19234, upload-time = "2026-09-23T02:40:27.012Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e9/83/293da68af965c5190755612351dd498b55ec1b4211f5ba0f519bac0ba293/asimov_protocol-1.2.1rc2-py3-none-any.whl", hash = "sha256:94f59102a746c9f70a4f3ad97e431c3812db868f375ed3c1118d4c886e50bf9b", size = 28237, upload-time = "2026-09-23T02:40:25.771Z" },
+]
+
+[[package]]
 name = "ast-serialize"
 version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -221,6 +233,7 @@ wheels = [
 name = "menlo-sdk"
 source = { editable = "." }
 dependencies = [
+    { name = "asimov-protocol" },
     { name = "protobuf" },
 ]
 
@@ -232,6 +245,7 @@ livekit = [
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
+    { name = "packaging" },
     { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -241,6 +255,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "asimov-protocol", specifier = ">=1.2.1rc1,<2" },
     { name = "livekit", marker = "extra == 'livekit'", specifier = ">=1.1.4,<2" },
     { name = "protobuf", specifier = ">=5.29.3" },
 ]
@@ -249,6 +264,7 @@ provides-extras = ["livekit"]
 [package.metadata.requires-dev]
 dev = [
     { name = "mypy", specifier = ">=1.11" },
+    { name = "packaging", specifier = ">=24" },
     { name = "pillow", specifier = ">=10" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-timeout", specifier = ">=2.3" },

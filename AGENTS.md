@@ -30,8 +30,8 @@ robot: everything that speaks the Asimov wire lives in `menlo.asimov`; the top l
 - **Tests fail without the fix.** Every behavioural change ships a test that goes red when
   the change is reverted. The fake edge in `tests/conftest.py` speaks the real wire; if you
   change the wire, update the fake AND run `make integration` against the real connector.
-- **Bindings are pinned.** `_vendor/` is generated from one `asimov-protocol` tag recorded
-  in `_vendor/VENDORED.md`; move it with `make vendor-protocol REF=<tag>` and never edit it.
+- **Bindings are a dependency.** `asimov-protocol>=1.2.1rc1,<2` from PyPI; `menlo.asimov._proto`
+  imports it lazily. Never copy generated `_pb2` files into this repo.
 
 ## Dependencies
 

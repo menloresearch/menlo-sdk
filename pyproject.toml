@@ -16,11 +16,15 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Typing :: Typed",
 ]
-# The SDK's ONE runtime dependency is protobuf. The generated asimov.io bindings ride
-# inside the wheel (src/menlo/asimov/_vendor, pinned to the tag the edge pins — see
-# _vendor/VENDORED.md); an installed `asimov-protocol` package is preferred when present.
-# The floor matches the gencode's ValidateProtobufRuntimeVersion (plugin v29.3).
+# Two runtime dependencies. `asimov-protocol` is the generated asimov.io bindings, from
+# PyPI: its MAJOR tracks the wire directory (v1/) the SDK speaks, hence `<2`; its MINOR
+# is an additive schema change, hence the floor at the line the edge runs. The floor
+# names the rc explicitly while that is all PyPI has: pip and uv refuse a pre-release
+# for a plain `>=1.2` floor, and accept it when the specifier itself spells one. Tighten
+# to `>=1.2.1` once the final is out. `protobuf`'s floor matches the gencode's
+# ValidateProtobufRuntimeVersion (plugin v29.3).
 dependencies = [
+    "asimov-protocol>=1.2.1rc1,<2",
     "protobuf>=5.29.3",
 ]
 
@@ -34,6 +38,8 @@ livekit = ["livekit>=1.1.4,<2"]  # 1.1.4: first release with data tracks (the st
 menlo = "menlo.cli:main"
 
 [project.urls]
+Homepage = "https://github.com/menloresearch/menlo-sdk"
+Documentation = "https://github.com/menloresearch/menlo-sdk/blob/main/docs/REFERENCE.md"
 Repository = "https://github.com/menloresearch/menlo-sdk"
 Issues = "https://github.com/menloresearch/menlo-sdk/issues"
 Changelog = "https://github.com/menloresearch/menlo-sdk/blob/main/CHANGELOG.md"
@@ -45,6 +51,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "types-protobuf>=5.29",
+    "packaging>=24",  # test_proto_source checks the installed protocol against the declared line
     "pillow>=10",  # Frame.to_jpeg / Clip.save_frames are tested; the SDK itself never imports it
 ]
 
@@ -62,7 +69,6 @@ packages = ["src/menlo"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests", "examples"]
-extend-exclude = ["src/menlo/asimov/_vendor"]  # generated code, not ours to style
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF", "SIM", "PL"]
@@ -84,10 +90,9 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 files = ["src/menlo"]
-exclude = ["src/menlo/asimov/_vendor/"]
 
 [[tool.mypy.overrides]]
-module = ["asimov_protocol.*", "menlo.asimov._vendor.*", "numpy", "livekit.*", "cv2", "PIL.*"]
+module = ["asimov_protocol.*", "numpy", "livekit.*", "cv2", "PIL.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
