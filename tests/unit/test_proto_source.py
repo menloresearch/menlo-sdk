@@ -24,7 +24,7 @@ def test_the_installed_protocol_is_the_declared_line():
     from importlib.metadata import requires
 
     (spec,) = [r for r in requires("menlo-sdk") or [] if r.startswith("asimov-protocol")]
-    specifier = SpecifierSet(spec.split(" ", 1)[1] if " " in spec else spec[len("asimov-protocol") :])
+    specifier = SpecifierSet(spec.removeprefix("asimov-protocol").strip())
     installed = Version(version("asimov-protocol"))
     assert installed in specifier, (installed, specifier)
     assert Version("2.0") not in specifier and specifier.contains("1.2.1rc1", prereleases=True)
