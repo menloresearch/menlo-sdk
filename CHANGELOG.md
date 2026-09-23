@@ -3,7 +3,7 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.1.0 — unreleased
+## 0.1.0rc1 — 2026-09-23
 
 ### Changed
 - The distribution is `menlo-sdk` (repository `menloresearch/menlo-sdk`), published to PyPI on
