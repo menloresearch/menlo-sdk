@@ -120,7 +120,7 @@ Releases are the `v*` tags of this repo, published to PyPI by `.github/workflows
 how versions are chosen and cut is in [RELEASING.md](RELEASING.md).
 
 Two runtime dependencies, `asimov-protocol` (the generated `asimov.io` bindings, from PyPI;
-`>=1.2,<2`, the bound following the wire directory `v1/`) and `protobuf`; `[livekit]` is the
+`>=1.2.1rc1,<2`, the bound following the wire directory `v1/`) and `protobuf`; `[livekit]` is the
 one extra — a robot drives without it. The edge, its tools and this SDK import the same
 installed `asimov_protocol`, so one process holds one set of descriptors.
 

@@ -18,10 +18,16 @@ def test_bindings_load_from_asimov_protocol():
 
 
 def test_the_installed_protocol_is_the_declared_line():
-    """pyproject says asimov-protocol>=1.2,<2: MAJOR tracks the wire directory the SDK speaks
-    (v1/, PROTOCOL_VERSION 1), so a 2.x would be a different wire, not a newer package."""
+    """pyproject's asimov-protocol specifier: MAJOR tracks the wire directory the SDK speaks
+    (v1/, PROTOCOL_VERSION 1), so a 2.x would be a different wire, not a newer package.
+    The specifier is read from the installed SDK's own metadata, so this test follows it."""
+    from importlib.metadata import requires
+
+    (spec,) = [r for r in requires("menlo-sdk") or [] if r.startswith("asimov-protocol")]
+    specifier = SpecifierSet(spec.split(" ", 1)[1] if " " in spec else spec[len("asimov-protocol") :])
     installed = Version(version("asimov-protocol"))
-    assert installed in SpecifierSet(">=1.2,<2"), installed
+    assert installed in specifier, (installed, specifier)
+    assert Version("2.0") not in specifier and specifier.contains("1.2.1rc1", prereleases=True)
     assert installed.major == robots.PROTOCOL_VERSION
 
 

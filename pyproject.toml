@@ -18,10 +18,13 @@ classifiers = [
 ]
 # Two runtime dependencies. `asimov-protocol` is the generated asimov.io bindings, from
 # PyPI: its MAJOR tracks the wire directory (v1/) the SDK speaks, hence `<2`; its MINOR
-# is an additive schema change, hence the floor at the line the edge runs. `protobuf`'s
-# floor matches the gencode's ValidateProtobufRuntimeVersion (plugin v29.3).
+# is an additive schema change, hence the floor at the line the edge runs. The floor
+# names the rc explicitly while that is all PyPI has: pip and uv refuse a pre-release
+# for a plain `>=1.2` floor, and accept it when the specifier itself spells one. Tighten
+# to `>=1.2.1` once the final is out. `protobuf`'s floor matches the gencode's
+# ValidateProtobufRuntimeVersion (plugin v29.3).
 dependencies = [
-    "asimov-protocol>=1.2,<2",
+    "asimov-protocol>=1.2.1rc1,<2",
     "protobuf>=5.29.3",
 ]
 
