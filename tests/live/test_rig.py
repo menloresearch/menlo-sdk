@@ -1,6 +1,6 @@
 """Against a real robot or a menlo-studio rig (`menlo-studio up --container --sdk`).
 
-Set ``ASIMOV_SDK_LIVE_HOST`` (e.g. ``127.0.0.1``) to run. These are the only tests that
+Set ``MENLO_SDK_LIVE_HOST`` (e.g. ``127.0.0.1``) to run. These are the only tests that
 prove the SDK moves a body; the unit suite proves it speaks the wire. Kept short and
 observable: every step waits on the robot's own report, never on a sleep.
 
@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from asimov_sdk import Mode, Unknown
+from menlo.asimov import Mode, Unknown
 from tests.conftest import connect_udp
 
 pytestmark = pytest.mark.live

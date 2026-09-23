@@ -11,7 +11,7 @@ standing, not after a guessed delay.
 import sys
 import time
 
-from asimov_sdk import ConnectionConfig, Mode, Robot, UdpConfig
+from menlo.asimov import ConnectionConfig, Mode, Robot, UdpConfig
 
 
 def gz(state) -> str:

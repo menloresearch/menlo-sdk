@@ -12,10 +12,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from asimov_sdk import _proto, robots
-from asimov_sdk._command import Command, ModeCommand, Trajectory, Velocity
-from asimov_sdk._errors import ConnectError
-from asimov_sdk._state import Alert, Battery, BatteryProtection, Joint, Mode, State
+from menlo.asimov import _proto, robots
+from menlo.asimov._command import Command, ModeCommand, Trajectory, Velocity
+from menlo.asimov._errors import ConnectError
+from menlo.asimov._state import Alert, Battery, BatteryProtection, Joint, Mode, State
 
 #: LiveKit data topic carrying one serialized ``asimov.io.RobotCommand`` per packet.
 COMMAND_TOPIC = "commands"
@@ -40,7 +40,7 @@ def _pb() -> tuple[Any, Any, Any]:
 
 
 def encode_command(command: Command, sequence: int) -> bytes:
-    """One neutral :data:`~asimov_sdk._command.Command` -> one serialized
+    """One neutral :data:`~menlo.asimov._command.Command` -> one serialized
     ``asimov.io.RobotCommand``, stamped with ``sequence`` and the sender's wall clock.
 
     The same bytes go in a UDP datagram and in a LiveKit data packet: the edge parses one

@@ -9,9 +9,9 @@ import time
 
 import pytest
 
-from asimov_sdk import AudioChunk, Frame, Robot, UnsupportedError, WaitTimeoutError
-from asimov_sdk._command import Velocity
-from asimov_sdk._state import Joint, Mode, State
+from menlo.asimov import AudioChunk, Frame, Robot, UnsupportedError, WaitTimeoutError
+from menlo.asimov._command import Velocity
+from menlo.asimov._state import Joint, Mode, State
 from tests.conftest import connect_udp
 
 

@@ -6,7 +6,7 @@ A wait that keeps checking a frozen snapshot would happily "succeed" on a dead r
 
 import sys
 
-from asimov_sdk import (
+from menlo.asimov import (
     ConnectionConfig,
     Mode,
     Robot,

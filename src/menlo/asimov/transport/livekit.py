@@ -19,7 +19,7 @@ edge's arbiter beside the robot's other controllers, and pass the same safety la
 
 LiveKit is an EXTRA. Every ``livekit`` import lives in ``_livekit_client``, behind a lazy
 function; importing this module, and driving a robot on the UDP lane, works with livekit
-absent. Install it with ``pip install "asimov-sdk[livekit]"``.
+absent. Install it with ``pip install "menlo-sdk[livekit]"``.
 
 **The SDK never holds a LiveKit API secret.** There is no ``api_key``/``api_secret``
 parameter anywhere: a caller presents a token the robot's manager minted, or a callable
@@ -37,22 +37,28 @@ import contextlib
 import logging
 import threading
 
-from asimov_sdk._command import Command
-from asimov_sdk._errors import ConnectError, NotConnectedError, UnsupportedError
-from asimov_sdk._media import AudioChunk, Frame
-from asimov_sdk._state import State, TransportKind
-from asimov_sdk.transport._livekit_client import LiveKitClient, TokenProvider, _LiveKitClient
-from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TRACK, _pb, decode_state, encode_command
-from asimov_sdk.transport.base import (
+from menlo.asimov._command import Command
+from menlo.asimov._errors import ConnectError, NotConnectedError, UnsupportedError
+from menlo.asimov._media import AudioChunk, Frame
+from menlo.asimov._state import State, TransportKind
+from menlo.asimov.transport._livekit_client import LiveKitClient, TokenProvider, _LiveKitClient
+from menlo.asimov.transport._wire import (
+    COMMAND_TOPIC,
+    STATE_TRACK,
+    _pb,
+    decode_state,
+    encode_command,
+)
+from menlo.asimov.transport.base import (
     AudioCallback,
     ControllerCallback,
     FrameCallback,
     OutcomeCallback,
     StateCallback,
 )
-from asimov_sdk.transport.udp import COMMAND_PORT, STATE_PORT, UdpTransport
+from menlo.asimov.transport.udp import COMMAND_PORT, STATE_PORT, UdpTransport
 
-log = logging.getLogger("asimov_sdk.transport.livekit")
+log = logging.getLogger("menlo.asimov.transport.livekit")
 
 #: How long ``open()`` waits for the room's media tracks before it decides what this
 #: transport carries. A capability is claimed from a track that ARRIVED, never from one a

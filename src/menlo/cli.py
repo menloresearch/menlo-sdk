@@ -1,9 +1,9 @@
-"""``asimov`` — the credential store from the shell, so a script can be ``Robot().connect()``.
+"""``menlo`` — the credential store from the shell, so a script can be ``Robot().connect()``.
 
-    asimov login http://192.168.22.32 --credential <credential>   # validate, then save
-    asimov robots                                                  # what is saved, default first
-    asimov use menlo-0001                                          # the default robot
-    asimov logout menlo-0001                                       # forget one
+    menlo login http://192.168.22.32 --credential <credential>   # validate, then save
+    menlo robots                                                  # what is saved, default first
+    menlo use menlo-0001                                          # the default robot
+    menlo logout menlo-0001                                       # forget one
 
 ``login`` proves the credential before it is kept: the manager is asked for a LiveKit
 token exactly as ``connect()`` would ask, and a manager that refuses leaves the store as it
@@ -20,10 +20,10 @@ import getpass
 import sys
 from collections.abc import Sequence
 
-from asimov_sdk import __version__
-from asimov_sdk._errors import ConnectError
-from asimov_sdk.connection import ManagerConfig
-from asimov_sdk.store import RobotStore, StoredRobot, robot_name
+from menlo import __version__
+from menlo.asimov._errors import ConnectError
+from menlo.asimov.connection import ManagerConfig
+from menlo.asimov.store import RobotStore, StoredRobot, robot_name
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -36,16 +36,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return int(handler(args))
     except (ConnectError, ValueError, KeyError, OSError) as exc:
-        print(f"asimov {args.command}: {_message(exc)}", file=sys.stderr)
+        print(f"menlo {args.command}: {_message(exc)}", file=sys.stderr)
         return 1
 
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="asimov",
+        prog="menlo",
         description="Save the robots this machine may drive, so scripts can be Robot().connect().",
     )
-    p.add_argument("--version", action="version", version=f"asimov-sdk {__version__}")
+    p.add_argument("--version", action="version", version=f"menlo-sdk {__version__}")
     sub = p.add_subparsers(dest="command")
 
     login = sub.add_parser(
@@ -124,7 +124,7 @@ def _prompt_credential() -> str:
 def _robots(_args: argparse.Namespace) -> int:
     store = RobotStore()
     if not len(store):
-        print(f"no robots saved in {store.path}; add one with: asimov login <manager-url>")
+        print(f"no robots saved in {store.path}; add one with: menlo login <manager-url>")
         return 0
     width = max(len(r.name) for r in store)
     for robot in sorted(store, key=lambda r: (r.name != store.default, r.name)):

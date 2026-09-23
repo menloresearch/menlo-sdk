@@ -2,12 +2,12 @@
 
 ``livekit.rtc`` is asyncio; this SDK is threaded. This module owns that mismatch and
 nothing else: a dedicated event-loop thread, ``run_coroutine_threadsafe`` in, plain
-callbacks out. Everything above it — :class:`~asimov_sdk.transport.livekit.LiveKitTransport`,
-:class:`~asimov_sdk.transport.livekit.HybridTransport`, ``Robot`` — sees the
+callbacks out. Everything above it — :class:`~menlo.asimov.transport.livekit.LiveKitTransport`,
+:class:`~menlo.asimov.transport.livekit.HybridTransport`, ``Robot`` — sees the
 :class:`LiveKitClient` protocol and never an ``rtc`` object, which is why the unit suite
 fakes this seam in forty lines and never needs livekit installed.
 
-LiveKit is an EXTRA (``pip install "asimov-sdk[livekit]"``). The import happens inside
+LiveKit is an EXTRA (``pip install "menlo-sdk[livekit]"``). The import happens inside
 :func:`_rtc`, when a room is actually joined — importing the SDK, and
 ``robot.connect("udp")``, must work with livekit absent.
 
@@ -34,10 +34,10 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, Protocol
 
-from asimov_sdk._errors import ConnectError, LinkLostError
-from asimov_sdk._media import AudioChunk, Frame
+from menlo.asimov._errors import ConnectError, LinkLostError
+from menlo.asimov._media import AudioChunk, Frame
 
-log = logging.getLogger("asimov_sdk.transport.livekit")
+log = logging.getLogger("menlo.asimov.transport.livekit")
 
 #: A token, or something that mints a fresh one each time a room is joined. The SDK never
 #: holds the LiveKit API secret: the robot's manager mints tokens, the SDK presents them.
@@ -59,7 +59,7 @@ def _rtc() -> Any:
     except ImportError as exc:  # pragma: no cover - environment, not logic
         raise ConnectError(
             "the LiveKit lane needs the livekit extra, which is not part of the core SDK "
-            '(`pip install "asimov-sdk[livekit]"`, or `pip install "livekit>=1.1,<2"`). '
+            '(`pip install "menlo-sdk[livekit]"`, or `pip install "livekit>=1.1,<2"`). '
             "The UDP lane (connect('udp')) needs none of it."
         ) from exc
     return rtc
@@ -326,7 +326,7 @@ class _LiveKitClient:
                 with contextlib.suppress(Exception):
                     loop.close()
 
-        thread = threading.Thread(target=run, name="asimov-sdk-livekit", daemon=True)
+        thread = threading.Thread(target=run, name="menlo-sdk-livekit", daemon=True)
         thread.start()
         if not ready.wait(5.0):  # pragma: no cover - the interpreter is wedged
             raise ConnectError("the LiveKit event loop thread did not start")
@@ -504,7 +504,7 @@ class _LiveKitClient:
         fmt = (chunk.sample_rate_hz, chunk.channels)
         if self._source is None:
             self._source = rtc.AudioSource(chunk.sample_rate_hz, chunk.channels)
-            track = rtc.LocalAudioTrack.create_audio_track("asimov-sdk-speaker", self._source)
+            track = rtc.LocalAudioTrack.create_audio_track("menlo-sdk-speaker", self._source)
             await self._room.local_participant.publish_track(
                 track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
             )

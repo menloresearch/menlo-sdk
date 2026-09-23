@@ -10,7 +10,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from asimov_sdk import (
+from menlo.asimov import (
     ConnectError,
     ConnectionConfig,
     LinkLostError,
@@ -20,8 +20,8 @@ from asimov_sdk import (
     Robot,
     UdpConfig,
 )
-from asimov_sdk.connection import MODES
-from asimov_sdk.transport import HybridTransport, LiveKitTransport, UdpTransport
+from menlo.asimov.connection import MODES
+from menlo.asimov.transport import HybridTransport, LiveKitTransport, UdpTransport
 from tests.conftest import FakeLiveKitClient, FakeManager, route_manager_rooms_to
 
 # ── the config itself ─────────────────────────────────────────────────────────
@@ -334,7 +334,7 @@ def test_a_lane_this_robot_left_cannot_write_into_the_next_session(edge):
 
 
 def _keepalive_threads() -> list[threading.Thread]:
-    return [t for t in threading.enumerate() if t.name == "asimov-sdk-keepalive"]
+    return [t for t in threading.enumerate() if t.name == "menlo-sdk-keepalive"]
 
 
 def test_reconnecting_from_on_link_lost_leaves_exactly_one_keepalive(edge):

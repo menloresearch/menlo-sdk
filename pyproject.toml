@@ -1,5 +1,5 @@
 [project]
-name = "asimov-sdk"
+name = "menlo-sdk"
 dynamic = ["version"]
 description = "Drive an Asimov robot from Python: one Robot, pluggable transports."
 readme = "README.md"
@@ -17,26 +17,26 @@ classifiers = [
     "Typing :: Typed",
 ]
 # The SDK's ONE runtime dependency is protobuf. The generated asimov.io bindings ride
-# inside the wheel (src/asimov_sdk/_vendor, pinned to the tag the edge pins — see
+# inside the wheel (src/menlo/asimov/_vendor, pinned to the tag the edge pins — see
 # _vendor/VENDORED.md); an installed `asimov-protocol` package is preferred when present.
 # The floor matches the gencode's ValidateProtobufRuntimeVersion (plugin v29.3).
 dependencies = [
     "protobuf>=5.29.3",
 ]
 
-# The media lane is an EXTRA on purpose: `pip install asimov-sdk` with no extra drives a
+# The media lane is an EXTRA on purpose: `pip install menlo-sdk` with no extra drives a
 # robot over UDP, and every `livekit` import in the SDK is lazy and lives in one module
-# (src/asimov_sdk/transport/_livekit_client.py).
+# (src/menlo/asimov/transport/_livekit_client.py).
 [project.optional-dependencies]
 livekit = ["livekit>=1.1.4,<2"]  # 1.1.4: first release with data tracks (the state carrier)
 
 [project.scripts]
-asimov = "asimov_sdk.cli:main"  # login / robots / use / logout: the credential store
+menlo = "menlo.cli:main"
 
 [project.urls]
-Repository = "https://github.com/menloresearch/asimov-sdk"
-Issues = "https://github.com/menloresearch/asimov-sdk/issues"
-Changelog = "https://github.com/menloresearch/asimov-sdk/blob/main/CHANGELOG.md"
+Repository = "https://github.com/menloresearch/menlo-sdk"
+Issues = "https://github.com/menloresearch/menlo-sdk/issues"
+Changelog = "https://github.com/menloresearch/menlo-sdk/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -53,16 +53,16 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/asimov_sdk/__init__.py"
+path = "src/menlo/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/asimov_sdk"]
+packages = ["src/menlo"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests", "examples"]
-extend-exclude = ["src/asimov_sdk/_vendor"]  # generated code, not ours to style
+extend-exclude = ["src/menlo/asimov/_vendor"]  # generated code, not ours to style
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF", "SIM", "PL"]
@@ -83,11 +83,11 @@ ignore = [
 python_version = "3.12"
 strict = true
 warn_unreachable = true
-files = ["src/asimov_sdk"]
-exclude = ["src/asimov_sdk/_vendor/"]
+files = ["src/menlo"]
+exclude = ["src/menlo/asimov/_vendor/"]
 
 [[tool.mypy.overrides]]
-module = ["asimov_protocol.*", "asimov_sdk._vendor.*", "numpy", "livekit.*", "cv2", "PIL.*"]
+module = ["asimov_protocol.*", "menlo.asimov._vendor.*", "numpy", "livekit.*", "cv2", "PIL.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
@@ -96,6 +96,6 @@ testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider --timeout=60"
 markers = [
     "integration: needs an asimov-edge checkout (ASIMOV_EDGE_SRC); drives the real UdpConnector in-process",
-    "live: needs a running robot or studio rig (ASIMOV_SDK_LIVE_HOST)",
-    "livekit: needs the livekit extra and a LiveKit server (`livekit-server --dev`, or ASIMOV_SDK_LIVEKIT_URL)",
+    "live: needs a running robot or studio rig (MENLO_SDK_LIVE_HOST)",
+    "livekit: needs the livekit extra and a LiveKit server (`livekit-server --dev`, or MENLO_SDK_LIVEKIT_URL)",
 ]

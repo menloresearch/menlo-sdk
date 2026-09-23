@@ -23,8 +23,8 @@ import threading
 import time
 from dataclasses import dataclass
 
-from asimov_sdk._command import Command
-from asimov_sdk._errors import CommandRefusedError, OutcomeUnknownError
+from menlo.asimov._command import Command
+from menlo.asimov._errors import CommandRefusedError, OutcomeUnknownError
 
 
 class Refusal(enum.IntEnum):

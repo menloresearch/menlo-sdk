@@ -5,20 +5,20 @@ JWT, so two participants in one room need two tokens; joining twice with the sam
 the server see a duplicate identity and disconnect the first. These tests put the SDK and a
 stand-in for the robot's edge in the same room, so:
 
-* ``ASIMOV_SDK_LIVEKIT_TOKEN``      — the SDK's, identity ``sdk``
-* ``ASIMOV_SDK_LIVEKIT_EDGE_TOKEN`` — the stand-in edge's, identity ``fake-edge``
+* ``MENLO_SDK_LIVEKIT_TOKEN``      — the SDK's, identity ``sdk``
+* ``MENLO_SDK_LIVEKIT_EDGE_TOKEN`` — the stand-in edge's, identity ``fake-edge``
 
 Run with ``make livekit`` after starting a server::
 
     livekit-server --dev            # api key devkey / secret secret, ws://127.0.0.1:7880
     uv sync --extra livekit
     lk token create --api-key devkey --api-secret secret --join \\
-        --room asimov-sdk-it --identity sdk       --valid-for 24h
+        --room menlo-sdk-it --identity sdk       --valid-for 24h
     lk token create --api-key devkey --api-secret secret --join \\
-        --room asimov-sdk-it --identity fake-edge --valid-for 24h
-    ASIMOV_SDK_LIVEKIT_URL=ws://127.0.0.1:7880 \\
-    ASIMOV_SDK_LIVEKIT_TOKEN=<the sdk one> \\
-    ASIMOV_SDK_LIVEKIT_EDGE_TOKEN=<the fake-edge one> uv run pytest -m livekit
+        --room menlo-sdk-it --identity fake-edge --valid-for 24h
+    MENLO_SDK_LIVEKIT_URL=ws://127.0.0.1:7880 \\
+    MENLO_SDK_LIVEKIT_TOKEN=<the sdk one> \\
+    MENLO_SDK_LIVEKIT_EDGE_TOKEN=<the fake-edge one> uv run pytest -m livekit
 
 These tests skip LOUDLY and cleanly when the extra is not installed, or no server or token
 is named. The SDK mints no token — it has no API secret — so the tokens come from the
@@ -33,34 +33,34 @@ import time
 
 import pytest
 
-from asimov_sdk import ConnectError, Robot
-from asimov_sdk._command import Velocity
-from asimov_sdk.connection import ConnectionConfig, LiveKitConfig
-from asimov_sdk.transport._livekit_client import _LiveKitClient, identity_from_token
-from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
-from asimov_sdk.transport.livekit import LiveKitTransport
+from menlo.asimov import ConnectError, Robot
+from menlo.asimov._command import Velocity
+from menlo.asimov.connection import ConnectionConfig, LiveKitConfig
+from menlo.asimov.transport._livekit_client import _LiveKitClient, identity_from_token
+from menlo.asimov.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
+from menlo.asimov.transport.livekit import LiveKitTransport
 
 pytestmark = pytest.mark.livekit
 
 #: A LiveKit join grant is scoped to ONE room, so every test here uses the same one — the
-#: room the two tokens were minted for. Override with ASIMOV_SDK_LIVEKIT_ROOM.
-ROOM = os.environ.get("ASIMOV_SDK_LIVEKIT_ROOM", "asimov-sdk-it")
+#: room the two tokens were minted for. Override with MENLO_SDK_LIVEKIT_ROOM.
+ROOM = os.environ.get("MENLO_SDK_LIVEKIT_ROOM", "menlo-sdk-it")
 
 
 @pytest.fixture
 def livekit_url() -> str:
     pytest.importorskip("livekit.rtc", reason="the livekit extra is not installed")
-    url = os.environ.get("ASIMOV_SDK_LIVEKIT_URL")
+    url = os.environ.get("MENLO_SDK_LIVEKIT_URL")
     if not url:
-        pytest.skip("ASIMOV_SDK_LIVEKIT_URL not set — no LiveKit server to join")
+        pytest.skip("MENLO_SDK_LIVEKIT_URL not set — no LiveKit server to join")
     return url
 
 
 @pytest.fixture
 def token() -> str:
-    tok = os.environ.get("ASIMOV_SDK_LIVEKIT_TOKEN")
+    tok = os.environ.get("MENLO_SDK_LIVEKIT_TOKEN")
     if not tok:
-        pytest.skip("ASIMOV_SDK_LIVEKIT_TOKEN not set — the SDK never mints its own token")
+        pytest.skip("MENLO_SDK_LIVEKIT_TOKEN not set — the SDK never mints its own token")
     return tok
 
 
@@ -68,10 +68,10 @@ def token() -> str:
 def edge_token() -> str:
     """A SECOND token, for the stand-in edge. One token cannot carry two participants: the
     identity is a claim inside it, and LiveKit disconnects the earlier duplicate."""
-    tok = os.environ.get("ASIMOV_SDK_LIVEKIT_EDGE_TOKEN")
+    tok = os.environ.get("MENLO_SDK_LIVEKIT_EDGE_TOKEN")
     if not tok:
         pytest.skip(
-            "ASIMOV_SDK_LIVEKIT_EDGE_TOKEN not set — the stand-in edge needs its own "
+            "MENLO_SDK_LIVEKIT_EDGE_TOKEN not set — the stand-in edge needs its own "
             "token (an identity is a claim inside the JWT, so one token is one participant)"
         )
     return tok
@@ -107,7 +107,7 @@ def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token, e
                 time.sleep(0.05)
             assert received, "the commands topic did not reach the other participant"
             mirror = encode_command(Velocity(vx=0.1), seq)
-            from asimov_sdk._proto import load
+            from menlo.asimov._proto import load
 
             a, b = load().command.RobotCommand(), load().command.RobotCommand()
             a.ParseFromString(received[0])
@@ -147,7 +147,7 @@ def test_the_speaker_publishes_a_real_audio_track(livekit_url, token):
     client = _LiveKitClient(livekit_url, ROOM, token=token)
     client.connect()
     try:
-        from asimov_sdk import AudioChunk
+        from menlo.asimov import AudioChunk
 
         chunk = AudioChunk(48_000, 1, 480, "pcm_s16le", bytes(960), stream_id="speaker")
         for _ in range(3):
@@ -172,16 +172,16 @@ def test_the_loop_thread_goes_away_with_close(livekit_url, token):
     """A client that leaked its event-loop thread would keep a process alive after close()."""
     client = _LiveKitClient(livekit_url, ROOM, token=token)
     client.connect()
-    assert "asimov-sdk-livekit" in {t.name for t in threading.enumerate()}
+    assert "menlo-sdk-livekit" in {t.name for t in threading.enumerate()}
     client.close()
     time.sleep(0.5)
-    assert "asimov-sdk-livekit" not in {t.name for t in threading.enumerate()}
+    assert "menlo-sdk-livekit" not in {t.name for t in threading.enumerate()}
     client.connect()  # and the same client joins again
     client.close()
 
 
 def _a_robot_state() -> bytes:
-    from asimov_sdk._proto import load
+    from menlo.asimov._proto import load
 
     pb = load()
     msg = pb.state.RobotState(current_mode=pb.common.CONTROL_MODE_DAMP, protocol_version=1)

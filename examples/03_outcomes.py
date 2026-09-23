@@ -8,7 +8,7 @@ effect" is read from state, and works today.
 
 import sys
 
-from asimov_sdk import (
+from menlo.asimov import (
     Applied,
     ConnectionConfig,
     Mode,

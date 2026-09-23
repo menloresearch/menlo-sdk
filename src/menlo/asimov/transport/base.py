@@ -1,10 +1,10 @@
 """The seam between the robot API and a wire.
 
-A :class:`Transport` moves neutral :data:`~asimov_sdk._command.Command` objects to the
-robot and neutral :class:`~asimov_sdk._state.State` samples (and, when the edge grows
-them, :class:`~asimov_sdk._outcome.Outcome` verdicts) back. It owns encoding, sockets
+A :class:`Transport` moves neutral :data:`~menlo.asimov._command.Command` objects to the
+robot and neutral :class:`~menlo.asimov._state.State` samples (and, when the edge grows
+them, :class:`~menlo.asimov._outcome.Outcome` verdicts) back. It owns encoding, sockets
 and threads. It knows nothing about latching, clamping, waits or the error model — those
-live in :class:`~asimov_sdk.robot.Robot`, once, for every transport.
+live in :class:`~menlo.asimov.robot.Robot`, once, for every transport.
 
 Three transports ship: ``UdpTransport`` (the robot's LAN lane), ``LiveKitTransport``
 (commands and media over a room) and ``HybridTransport`` (UDP commands, room media). Any
@@ -16,10 +16,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from asimov_sdk._command import Command
-from asimov_sdk._media import AudioChunk, Frame
-from asimov_sdk._outcome import Applied, Refused
-from asimov_sdk._state import State, TransportKind
+from menlo.asimov._command import Command
+from menlo.asimov._media import AudioChunk, Frame
+from menlo.asimov._outcome import Applied, Refused
+from menlo.asimov._state import State, TransportKind
 
 StateCallback = Callable[[State], None]
 FrameCallback = Callable[[Frame], None]

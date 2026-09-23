@@ -6,7 +6,7 @@ Against a real robot: its edge must run with --udp-control --udp-state-host <thi
 
 import sys
 
-from asimov_sdk import ConnectionConfig, Robot, UdpConfig
+from menlo.asimov import ConnectionConfig, Robot, UdpConfig
 
 host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
 

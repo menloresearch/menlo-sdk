@@ -11,7 +11,7 @@ frozen robot from a still one is not a monitor.
 import sys
 import time
 
-from asimov_sdk import ConnectionConfig, Mode, Robot, StateStaleError, UdpConfig
+from menlo.asimov import ConnectionConfig, Mode, Robot, StateStaleError, UdpConfig
 
 
 def gz(state) -> str:

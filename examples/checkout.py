@@ -52,10 +52,10 @@ import sys
 import threading
 import time
 
-from asimov_sdk import (
-    AsimovError,
+from menlo.asimov import (
     ConnectError,
     ConnectionConfig,
+    MenloError,
     Mode,
     Robot,
     State,
@@ -233,7 +233,7 @@ def wait_damped(robot: Robot, timeout: float = 5.0) -> State:
     `wait_for(Mode.DAMP)` RAISES on a robot that is already fault-DAMPed — which is the
     most likely reason we are damping at all, since `check_sample` fails on `s.faulted`
     and the firmware has DAMPed itself by then. Used inside the cleanup's
-    `suppress(AsimovError)` that made `--damp-on-fail` confirm nothing at all.
+    `suppress(MenloError)` that made `--damp-on-fail` confirm nothing at all.
     """
     deadline = time.monotonic() + timeout
     while True:
@@ -322,7 +322,7 @@ def stage_stand(robot: Robot, args: argparse.Namespace, progress: Progress) -> N
             f"stand: {exc} (a robot that was DAMPed after a fall keeps refusing STAND until "
             "the firmware restarts; on the simulator, restart the rig)"
         ) from exc
-    except AsimovError as exc:
+    except MenloError as exc:
         # A dead link or a stale stream is a different problem, and telling the operator
         # to restart the rig sends them to the wrong place.
         raise CheckFailed(f"stand: {exc}") from exc
@@ -529,7 +529,7 @@ def main() -> int:
     # argparse takes "nan" and negatives happily. --stand-s nan made hold_still's loop
     # never run and the stage report PASS; --stand-timeout nan raised ValueError from
     # deep inside wait_until AFTER stand() had been sent, and ValueError is not in the
-    # (CheckFailed, AsimovError) handler below, so --damp-on-fail never ran.
+    # (CheckFailed, MenloError) handler below, so --damp-on-fail never ran.
     positive = (
         "vx",
         "walk_s",
@@ -558,7 +558,7 @@ def main() -> int:
             "never succeed"
         )
     # A recording path that cannot be opened should not cost a connection, and OSError
-    # is not an AsimovError so it would escape the handler as a traceback.
+    # is not a MenloError so it would escape the handler as a traceback.
     if args.record:
         try:
             with open(args.record, "w", encoding="utf-8"):
@@ -595,7 +595,7 @@ def main() -> int:
                 stage_damp(robot, args, progress)
         except KeyboardInterrupt:
             failed = "aborted by the operator"
-        except (CheckFailed, AsimovError) as exc:
+        except (CheckFailed, MenloError) as exc:
             failed = str(exc)
         if failed is not None:
             print(f"\nFAIL {failed}")
@@ -612,7 +612,7 @@ def main() -> int:
                     robot.damp()
                     wait_damped(robot)
                     print("   damped (--damp-on-fail)")
-                except (CheckFailed, AsimovError) as exc:
+                except (CheckFailed, MenloError) as exc:
                     print(f"   DAMP MAY NOT HAVE TAKEN EFFECT: {exc} — use the E-stop")
             else:
                 try:
@@ -623,7 +623,7 @@ def main() -> int:
                         print(f"   left as commanded; {describe(robot.state)}")
                     else:
                         print(f"   nothing was sent to the robot; {describe(robot.state)}")
-                except AsimovError as exc:
+                except MenloError as exc:
                     print(f"   could not report the final state: {exc}")
     if failed is None:
         print("\nall requested stages passed")

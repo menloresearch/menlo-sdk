@@ -1,5 +1,5 @@
 """The credential store and the zero-config lookup: Robot().connect() finds the robot in the
-environment or in ~/.asimov/robots.toml, and connect(persist=True) puts it there — after a
+environment or in ~/.menlo/robots.toml, and connect(persist=True) puts it there — after a
 connect that worked, never before."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ import stat
 
 import pytest
 
-from asimov_sdk import (
+from menlo.asimov import (
     ConnectError,
     ConnectionConfig,
     LiveKitConfig,
@@ -19,7 +19,7 @@ from asimov_sdk import (
     StoredRobot,
     UdpConfig,
 )
-from asimov_sdk.store import resolve_connection, robot_name, store_path
+from menlo.asimov.store import resolve_connection, robot_name, store_path
 from tests.conftest import route_manager_rooms_to
 
 CRED = "eyJpZCI6ImEwY2QxNmRiIn0.secret"
@@ -103,8 +103,8 @@ def test_a_missing_default_is_ignored_and_a_loose_mode_is_warned_about(tmp_path,
     assert _mode(path) == 0o600, "saving repairs the mode"
 
 
-def test_asimov_home_moves_the_store(monkeypatch, tmp_path):
-    monkeypatch.setenv("ASIMOV_HOME", str(tmp_path / "elsewhere"))
+def test_menlo_home_moves_the_store(monkeypatch, tmp_path):
+    monkeypatch.setenv("MENLO_HOME", str(tmp_path / "elsewhere"))
     assert store_path() == tmp_path / "elsewhere" / "robots.toml"
     RobotStore().put(StoredRobot("a", "http://a", "c"))
     assert (tmp_path / "elsewhere" / "robots.toml").exists()
@@ -116,7 +116,7 @@ def test_asimov_home_moves_the_store(monkeypatch, tmp_path):
 def test_the_environment_wins_then_the_store_then_a_clear_error(monkeypatch):
     with pytest.raises(ConnectError) as info:
         resolve_connection()
-    for hint in ("ConnectionConfig", "ASIMOV_MANAGER_URL", "ASIMOV_CREDENTIAL", "asimov login"):
+    for hint in ("ConnectionConfig", "MENLO_MANAGER_URL", "MENLO_CREDENTIAL", "menlo login"):
         assert hint in str(info.value)
 
     store = RobotStore()
@@ -125,28 +125,28 @@ def test_the_environment_wins_then_the_store_then_a_clear_error(monkeypatch):
     assert isinstance(cfg.livekit, ManagerConfig) and cfg.livekit.url == "http://192.168.22.32"
     assert cfg.livekit.credential == CRED and cfg.available_modes() == ("livekit",)
 
-    monkeypatch.setenv("ASIMOV_MANAGER_URL", "10.0.0.7:8080")
-    monkeypatch.setenv("ASIMOV_CREDENTIAL", "env-cred")
+    monkeypatch.setenv("MENLO_MANAGER_URL", "10.0.0.7:8080")
+    monkeypatch.setenv("MENLO_CREDENTIAL", "env-cred")
     cfg = resolve_connection()
     assert isinstance(cfg.livekit, ManagerConfig)
     assert cfg.livekit.url == "http://10.0.0.7:8080" and cfg.livekit.credential == "env-cred"
 
-    monkeypatch.delenv("ASIMOV_CREDENTIAL")
-    with pytest.raises(ConnectError, match="ASIMOV_CREDENTIAL is not"):
+    monkeypatch.delenv("MENLO_CREDENTIAL")
+    with pytest.raises(ConnectError, match="MENLO_CREDENTIAL is not"):
         resolve_connection()
 
 
-def test_asimov_robot_picks_a_named_entry_and_names_the_ones_it_has(monkeypatch):
+def test_menlo_robot_picks_a_named_entry_and_names_the_ones_it_has(monkeypatch):
     store = RobotStore()
     store.put(StoredRobot("a", "http://a", "ca"))
     store.put(StoredRobot("b", "http://b", "cb"))
-    monkeypatch.setenv("ASIMOV_ROBOT", "b")
+    monkeypatch.setenv("MENLO_ROBOT", "b")
     cfg = resolve_connection()
     assert isinstance(cfg.livekit, ManagerConfig) and cfg.livekit.url == "http://b"
-    monkeypatch.setenv("ASIMOV_ROBOT", "c")
-    with pytest.raises(ConnectError, match=r"ASIMOV_ROBOT='c' names no robot.*it has: a, b"):
+    monkeypatch.setenv("MENLO_ROBOT", "c")
+    with pytest.raises(ConnectError, match=r"MENLO_ROBOT='c' names no robot.*it has: a, b"):
         resolve_connection()
-    monkeypatch.delenv("ASIMOV_ROBOT")
+    monkeypatch.delenv("MENLO_ROBOT")
     store.default = None
     store.save()
     with pytest.raises(ConnectError, match="2 robots and no default"):
@@ -154,8 +154,8 @@ def test_asimov_robot_picks_a_named_entry_and_names_the_ones_it_has(monkeypatch)
 
 
 def test_a_robot_with_no_config_binds_to_the_environment_and_picks_the_only_lane(monkeypatch):
-    monkeypatch.setenv("ASIMOV_MANAGER_URL", "http://10.0.0.7")
-    monkeypatch.setenv("ASIMOV_CREDENTIAL", "env-cred")
+    monkeypatch.setenv("MENLO_MANAGER_URL", "http://10.0.0.7")
+    monkeypatch.setenv("MENLO_CREDENTIAL", "env-cred")
     robot = Robot()
     assert robot.config.available_modes() == ("livekit",)
     assert robot.config.only_mode() == "livekit"
@@ -207,9 +207,9 @@ def test_a_successful_connect_with_persist_saves_the_robot_under_its_serial(
         assert robot.info.transport == "livekit"
 
 
-def test_asimov_persist_in_the_environment_does_the_same(edge, manager, monkeypatch):
+def test_menlo_persist_in_the_environment_does_the_same(edge, manager, monkeypatch):
     route_manager_rooms_to(edge, monkeypatch)
-    monkeypatch.setenv("ASIMOV_PERSIST", "1")
+    monkeypatch.setenv("MENLO_PERSIST", "1")
     cfg = ConnectionConfig(livekit=ManagerConfig(url=manager.url, credential=CRED))
     with Robot(cfg).connect("livekit", timeout=3.0):
         pass

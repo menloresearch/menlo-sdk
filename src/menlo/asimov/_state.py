@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Literal
 
-from asimov_sdk._command import Limits
+from menlo.asimov._command import Limits
 
 #: A transport names its wire. A Literal, so a check against a name that no longer exists
 #: is a type error rather than a test that can never pass.

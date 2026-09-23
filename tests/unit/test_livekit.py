@@ -16,7 +16,7 @@ import wave
 
 import pytest
 
-from asimov_sdk import (
+from menlo.asimov import (
     AudioChunk,
     ConnectError,
     Frame,
@@ -28,13 +28,13 @@ from asimov_sdk import (
     UnsupportedError,
     WaitTimeoutError,
 )
-from asimov_sdk._command import Velocity
-from asimov_sdk._media import Clip
-from asimov_sdk.transport._livekit_client import (
+from menlo.asimov._command import Velocity
+from menlo.asimov._media import Clip
+from menlo.asimov.transport._livekit_client import (
     _LiveKitClient,
 )
-from asimov_sdk.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
-from asimov_sdk.transport.livekit import LiveKitTransport
+from menlo.asimov.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
+from menlo.asimov.transport.livekit import LiveKitTransport
 from tests.conftest import FakeLiveKitClient, make_livekit_robot
 
 # ── the wire contract ─────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ def test_a_command_is_one_bare_RobotCommand_on_the_commands_topic(edge, livekit_
     assert edge.wait_for(lambda rx: any(c.mode == 1 for c in rx))
     topic, payload = next(p for p in client.published if p[0] == COMMAND_TOPIC)
     assert topic == "commands", "the topic identifies the type; there is no envelope"
-    from asimov_sdk._proto import load
+    from menlo.asimov._proto import load
 
     decoded = load().command.RobotCommand()
     decoded.ParseFromString(payload)
@@ -61,7 +61,7 @@ def test_the_livekit_payload_is_byte_identical_to_the_udp_one(edge, livekit_robo
     sent = robot.set_velocity(vx=0.2)
     _topic, payload = client.published[-1]
     mirror = encode_command(Velocity(0.2, 0.0, 0.0), sent.sequence)
-    from asimov_sdk._proto import load
+    from menlo.asimov._proto import load
 
     a, b = load().command.RobotCommand(), load().command.RobotCommand()
     a.ParseFromString(payload)
@@ -407,7 +407,7 @@ def test_bgr8_to_rgb_swaps_channels_without_flipping_the_image() -> None:
 
     A channel swap has to reorder bytes *within* each pixel, so pixel and row order survive.
     """
-    from asimov_sdk._media import _rgb_bytes
+    from menlo.asimov._media import _rgb_bytes
 
     # Four distinguishable BGR pixels in a 2x2 frame.
     bgr = bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])

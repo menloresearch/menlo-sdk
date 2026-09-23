@@ -8,7 +8,7 @@ the same room as one more participant to do the driving.
     ┌──────────────┐       LiveKit room "robot-<robot serial>"       ┌──────────────┐
     │ robot's edge │  video+audio tracks ─────────────────────────> │ agent        │
     │              │  <──────────── data topic "commands" ───────── │ (this file)  │
-    │              │  ─────────────  data track "state" ──────────> │ + asimov_sdk │
+    │              │  ─────────────  data track "state" ──────────> │ + menlo.asimov │
     └──────────────┘                                                └──────────────┘
 
 The room convention
@@ -21,7 +21,7 @@ The room convention
   manager mints one token per participant. The SDK has no ``identity`` argument; it reads
   the token's back and reports it (``ManagerConfig(label=...)`` names your session).
 * **data topic "commands"**: one bare serialized ``asimov.io.RobotCommand`` per packet,
-  reliable, exactly the protobuf the UDP lane sends. ``asimov_sdk`` writes these for you.
+  reliable, exactly the protobuf the UDP lane sends. ``menlo.asimov`` writes these for you.
 * **data track "state"**: one bare serialized ``asimov.io.RobotState`` per frame, pushed
   by the edge at 10 Hz, delivered in order; each frame's ``user_timestamp`` is the edge's
   receive clock (``State.edge_timestamp_us``). ``robot.state`` is the decoded latest one.
@@ -39,11 +39,11 @@ The SDK's job is the robot: verbs, state, waits, safety.
 
 Running it
 ----------
-    pip install "asimov-sdk[livekit]" "livekit-agents[google]~=1.0"
+    pip install "menlo-sdk[livekit]" "livekit-agents[google]~=1.0"
     # the agent FRAMEWORK's LiveKit credentials — never the SDK's:
     export LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=...
     # the SDK's: the robot's manager and a credential from its /sdk page
-    export ASIMOV_MANAGER_URL=http://<robot> ASIMOV_CREDENTIAL=...   # or: asimov login
+    export MENLO_MANAGER_URL=http://<robot> MENLO_CREDENTIAL=...   # or: menlo login
     python examples/agent_room.py dev
 
 ``LIVEKIT_API_KEY``/``LIVEKIT_API_SECRET`` belong to the agent framework, which is a server
@@ -56,11 +56,11 @@ from __future__ import annotations
 
 import os
 
-from asimov_sdk import ConnectionConfig, ManagerConfig, Mode, Robot
+from menlo.asimov import ConnectionConfig, ManagerConfig, Mode, Robot
 
 # The robot's manager, and a credential from its /sdk page. No LiveKit token anywhere.
-MANAGER = os.environ.get("ASIMOV_MANAGER_URL", "http://127.0.0.1:8080")
-CREDENTIAL = os.environ.get("ASIMOV_CREDENTIAL", "")
+MANAGER = os.environ.get("MENLO_MANAGER_URL", "http://127.0.0.1:8080")
+CREDENTIAL = os.environ.get("MENLO_CREDENTIAL", "")
 
 
 def drive_from_the_same_room() -> None:
@@ -106,7 +106,7 @@ def agent_entrypoint(ctx: object) -> None:
             )
 
     The plugin does the sampling: about 1 fps of JPEG from the video track and 16 kHz PCM
-    from the audio track. Drive with ``asimov_sdk`` from a tool the model can call, or from
+    from the audio track. Drive with ``menlo.asimov`` from a tool the model can call, or from
     a thread beside the session — ``Robot`` is thread-safe and every verb returns at once.
     """
     raise NotImplementedError("install livekit-agents and paste the block above")
@@ -115,7 +115,7 @@ def agent_entrypoint(ctx: object) -> None:
 if __name__ == "__main__":
     if not CREDENTIAL:
         raise SystemExit(
-            "set ASIMOV_CREDENTIAL to a credential from the robot's manager (/sdk page). "
+            "set MENLO_CREDENTIAL to a credential from the robot's manager (/sdk page). "
             "The SDK asks the manager for the room and a LiveKit token itself."
         )
     drive_from_the_same_room()
