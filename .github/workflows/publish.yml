@@ -48,7 +48,8 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          git fetch --quiet origin main
+          # No fetch here: the checkout above (fetch-depth 0, no persisted credentials)
+          # already brought every branch, and a fetch would need a token it does not have.
           tag_commit="$(git rev-parse "${TAG}^{commit}")"
           if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
             echo "::error::tag $TAG ($tag_commit) is not on main; releases are tagged on main only"
