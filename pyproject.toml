@@ -62,8 +62,14 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 path = "src/menlo/__init__.py"
 
+# Core metadata pinned to 2.4: hatchling >= 1.32 writes 2.5, which the twine inside
+# pypa/gh-action-pypi-publish < 1.14.2 (and any older tooling) rejects as unknown.
 [tool.hatch.build.targets.wheel]
 packages = ["src/menlo"]
+core-metadata-version = "2.4"
+
+[tool.hatch.build.targets.sdist]
+core-metadata-version = "2.4"
 
 [tool.ruff]
 line-length = 100
