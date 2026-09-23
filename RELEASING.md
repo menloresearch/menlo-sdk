@@ -82,9 +82,9 @@ If a day comes when an old line needs a fix after `main` has moved on, cut
 ## What a release must satisfy
 
 - CI green on the merge commit (lint, mypy strict, unit tests on 3.12 and 3.13, the
-  vendored-bindings check and the real-edge integration job).
-- The vendored protocol bindings match a *released* `asimov-protocol` tag (`make check-vendor`),
-  and `menlo.asimov.robots.PROTOCOL_VERSION` matches what the edge speaks.
+  real-edge integration job).
+- The `asimov-protocol` floor in `pyproject.toml` names a release that is on PyPI, and
+  `menlo.asimov.robots.PROTOCOL_VERSION` matches what the edge speaks.
 - A `## <version> — <date>` heading in `CHANGELOG.md`.
 
 ## Dry run

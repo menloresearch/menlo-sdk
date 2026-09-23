@@ -12,7 +12,8 @@ Thanks for looking. This SDK is small on purpose; changes that keep it small are
   (version numbers, rc, tags, PyPI) is described in `RELEASING.md`.
 - Commit messages describe the change and why; the body should let a reader reconstruct
   the reasoning without the pull request.
-- Generated code under `src/menlo/asimov/_vendor/` is never edited by hand; move the pin with
-  `make vendor-protocol REF=<tag>`.
+- The `asimov.io` bindings come from the `asimov-protocol` package on PyPI
+  (`asimov-protocol>=1.2,<2` in `pyproject.toml`). Move the floor when the SDK starts using
+  something a newer protocol MINOR added; the `<2` bound moves only with the wire directory.
 
 Open a pull request against `main`. A review from a maintainer is required before merge.

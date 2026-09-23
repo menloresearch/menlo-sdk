@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## 0.1.0rc1 — 2026-09-23
 
 ### Changed
+- `asimov-protocol` is a declared dependency (`>=1.2,<2`, from PyPI) instead of a tree
+  vendored into the wheel. One installed copy of the bindings per process; the `_vendor/`
+  directory, `scripts/vendor_protocol.sh`, `make vendor-protocol` / `check-vendor` and the
+  vendored-bindings CI job are gone.
 - The distribution is `menlo-sdk` (repository `menloresearch/menlo-sdk`), published to PyPI on
   `v*` tags. The import is `menlo`, one subpackage per robot: the Asimov biped is
   `menlo.asimov` (`from menlo.asimov import Robot, Mode`). The console script is `menlo`

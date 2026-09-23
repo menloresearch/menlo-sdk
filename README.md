@@ -119,11 +119,10 @@ uv add "menlo-sdk @ git+https://github.com/menloresearch/menlo-sdk.git"
 Releases are the `v*` tags of this repo, published to PyPI by `.github/workflows/publish.yml`;
 how versions are chosen and cut is in [RELEASING.md](RELEASING.md).
 
-The core's only runtime dependency is `protobuf`, and `[livekit]` is the one extra — a
-robot drives without it. The generated `asimov.io` bindings ship inside
-the package, pinned to an `asimov-protocol` tag (`src/menlo/asimov/_vendor/VENDORED.md`). If
-the `asimov-protocol` package is installed as well and is the same release, the SDK uses
-that copy so one process holds one set of descriptors.
+Two runtime dependencies, `asimov-protocol` (the generated `asimov.io` bindings, from PyPI;
+`>=1.2,<2`, the bound following the wire directory `v1/`) and `protobuf`; `[livekit]` is the
+one extra — a robot drives without it. The edge, its tools and this SDK import the same
+installed `asimov_protocol`, so one process holds one set of descriptors.
 
 ## The robot side
 
@@ -304,13 +303,11 @@ make integration   # the real asimov-edge UdpConnector in-process; ASIMOV_EDGE_S
 make live          # a robot or simulator; MENLO_SDK_LIVE_HOST=<host>
 make livekit       # real livekit.rtc vs `livekit-server --dev`; needs MENLO_SDK_LIVEKIT_URL
                    # plus TWO tokens for one room (_TOKEN and _EDGE_TOKEN)
-make check-vendor  # vendored bindings match the pinned asimov-protocol tag
-make vendor-protocol REF=v1.1.0
 ```
 
-CI runs the checks on Python 3.12 and 3.13 and builds the wheel. Two jobs need read access
-to other menloresearch repositories and skip with a warning when the repository secret is
-absent: the real-edge integration job and the vendored-bindings check.
+CI runs the checks on Python 3.12 and 3.13 and builds the wheel. One job needs read access
+to another menloresearch repository and skips with a warning when the repository secret is
+absent: the real-edge integration job.
 
 ```
 src/menlo/
@@ -330,7 +327,6 @@ src/menlo/asimov/   the Asimov biped
   transport/        Transport protocol, UdpTransport, LiveKitTransport, HybridTransport,
                     _wire.py (the protobufs both lanes share) and _livekit_client.py
                     (the ONE module that imports livekit, lazily)
-  _vendor/          generated asimov.io bindings at the pinned tag
 examples/           runnable scripts; examples/demos/ are the three walkthroughs,
                     examples/agent_room.py is the LiveKit-agent room convention
 docs/SKILL.md       the two-page reference for an agent writing a script against this SDK
@@ -338,5 +334,4 @@ docs/SKILL.md       the two-page reference for an agent writing a script against
 
 ## License
 
-MIT. The vendored bindings are generated from `menloresearch/asimov-protocol` and carry
-that repository's terms.
+MIT. The `asimov.io` bindings are the `asimov-protocol` package (MIT, `menloresearch/asimov-protocol`).

@@ -94,13 +94,13 @@ jobs:
           fi
           echo "Tag and package version match: $PKG_VERSION"
 
-      # The wheel must ship the typing marker, the vendored protocol bindings
-      # with their stubs, the vendoring record and the licence — the same
-      # contract ci.yml checks, plus the licence file PyPI displays.
+      # The wheel must ship the typing marker and the licence, and declare the
+      # protocol dependency — the same contract ci.yml checks.
       - name: Check distributions
         run: |
           uvx twine check dist/*
-          python -m zipfile -l dist/*.whl | grep -E 'menlo/py.typed|_vendor/asimov_protocol/v1/asimov_state_pb2.pyi|_vendor/VENDORED.md|licenses/LICENSE'
+          python -m zipfile -l dist/*.whl | grep -E 'menlo/py.typed|licenses/LICENSE'
+          unzip -p dist/*.whl '*/METADATA' | grep -E '^Requires-Dist: asimov-protocol'
 
       - name: Upload distributions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
