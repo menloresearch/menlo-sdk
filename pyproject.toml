@@ -38,6 +38,8 @@ livekit = ["livekit>=1.1.4,<2"]  # 1.1.4: first release with data tracks (the st
 menlo = "menlo.cli:main"
 
 [project.urls]
+Homepage = "https://github.com/menloresearch/menlo-sdk"
+Documentation = "https://github.com/menloresearch/menlo-sdk/blob/main/docs/REFERENCE.md"
 Repository = "https://github.com/menloresearch/menlo-sdk"
 Issues = "https://github.com/menloresearch/menlo-sdk/issues"
 Changelog = "https://github.com/menloresearch/menlo-sdk/blob/main/CHANGELOG.md"
