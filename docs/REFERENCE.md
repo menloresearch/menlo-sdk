@@ -90,8 +90,8 @@ uv add "menlo-sdk[livekit]"         # + the media lane (hybrid and livekit modes
 uv add "menlo-sdk @ git+https://github.com/menloresearch/menlo-sdk.git"
 ```
 
-Releases are the `v*` tags of this repo, published to PyPI by `.github/workflows/publish.yml`;
-how versions are chosen and cut is in [RELEASING.md](../RELEASING.md).
+Releases are the `v*` tags of this repo, each with a GitHub Release carrying the files that were
+uploaded to PyPI; how versions are chosen and cut is in [RELEASING.md](../RELEASING.md).
 
 Two runtime dependencies, `asimov-protocol` (the generated `asimov.io` bindings, from PyPI;
 `>=1.2.1rc1,<2`, the bound following the wire directory `v1/`) and `protobuf`; `[livekit]` is the

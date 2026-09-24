@@ -35,70 +35,86 @@ Notes on the spelling, because the publish workflow compares it byte for byte wi
 `src/menlo/__init__.py` → `__version__` (`menlo.asimov` re-exports it). hatch reads it (`pyproject.toml`,
 `[tool.hatch.version]`); nothing else declares it. `menlo --version` prints it.
 
+## Where releases come from
+
+This repository is a mirror. The SDK is developed in `sdk/` of Menlo's internal robot
+repository, and every change merged there is copied here, one commit each, by
+[Copybara](https://github.com/google/copybara); the commit's `GitOrigin-RevId` line names the
+source commit. Nothing is committed here directly: an edit made here is overwritten by the next
+mirror run. Releases are cut in the robot repository too, and arrive here as a `v*` tag, a
+GitHub Release and a PyPI upload.
+
 ## The ritual
 
 `main` carries `X.Y.Z.dev0`, the version being worked towards. It is never tagged.
 
-1. **Release PR.** Set `__version__` to the release (`0.2.0rc1` or `0.2.0`). In
-   `CHANGELOG.md`, rename `## 0.2.0 — unreleased` to `## 0.2.0rc1 — 2026-10-03` (or the
-   final). Merge.
-2. **Tag the merge commit** with `v` + the exact version, and push the tag:
+1. **Release PR** in the robot repository. Set `__version__` to the release (`0.2.0rc1` or
+   `0.2.0`). In `CHANGELOG.md`, rename `## 0.2.0 — unreleased` to `## 0.2.0rc1 — 2026-10-03`
+   (or the final). Merge.
+2. **Tag the merge commit** there with `sdk/v` + the exact version, annotated:
 
    ```bash
    git switch main && git pull --ff-only
-   git tag v0.2.0rc1 && git push origin v0.2.0rc1
+   git tag -a sdk/v0.2.0rc1 -m "menlo-sdk 0.2.0rc1" && git push origin sdk/v0.2.0rc1
    ```
 
-3. `publish.yml` refuses a tag that is not on `main`, builds sdist + wheel, refuses if the
-   tag and the wheel's version differ, twine-checks, then waits for the `pypi`
-   environment's reviewer. Approve; it uploads.
+3. The `sdk-release` workflow does the rest, stopping at the first thing that is wrong:
+   - builds the sdist and wheel from the tagged `sdk/` tree alone, and refuses if the tag,
+     the wheel's version and the `CHANGELOG.md` heading disagree, or the version is `.dev`;
+   - runs this repository's checks (ruff, mypy `--strict`, unit tests on 3.12 and 3.13) on
+     the tagged tree;
+   - waits for a reviewer on its `pypi` environment, then waits for that tree to be
+     mirrored here and uploads the files it built;
+   - checks PyPI now holds exactly those files (SHA-256), tags the mirrored commit
+     `v0.2.0rc1` here (same tree, different commit), and publishes the GitHub Release: the
+     changelog section, an install line, the commits since the previous tag, the wheel, the
+     sdist and `SHA256SUMS`. An `rc`, `a` or `b` is marked as a pre-release.
 4. **Bump main.** A one-line PR setting `__version__` back to the next `.dev0`
    (`0.2.0.dev0` after an rc, `0.3.0.dev0` after a final) and opening a fresh
    `## 0.3.0 — unreleased` section in the changelog.
 
 An rc that needs changes: fix on `main`, repeat from step 1 with `rc2`. Nothing is
-force-pushed and no tag ever moves.
+force-pushed and no tag ever moves. The `v*` tag comes after the upload, so a rejected or failed
+upload leaves nothing here. Failed jobs can be re-run: a file PyPI already has is compared rather
+than uploaded again, an existing tag must already point at the mirrored commit, a draft Release is
+completed and a published one is checked against `SHA256SUMS`.
 
-**Hotfix** for a release that `main` has moved past: branch from the tag
-(`git switch -c hotfix/0.2.1 v0.2.0`), fix, set `0.2.1`, tag `v0.2.1` on that branch,
-publish, then cherry-pick the fix to `main`.
+## What stops a wrong release
 
-## Why from main, and what stops a wrong release
+- the **ancestry check**: the tagged commit must be a commit of `main`'s first-parent line,
+  which is what the mirror copies;
+- the **mirror check**: the `v*` tag goes on the commit whose tree is byte-identical to the
+  tagged `sdk/` tree, and only after the checks have passed on that tree;
+- the **`pypi` environment**: one required reviewer before anything reaches PyPI;
+- **tag rules**: tags cannot be moved or deleted, and only the mirror creates `v*` tags here.
 
-Releases are tagged on `main`; there are no release branches. That is what most robot
-SDKs do (Spot, LeRobot, MAVSDK, Kinova, Intrinsic) and it is enough while one line is
-supported. Three things make a wrong release impossible rather than merely discouraged:
-
-- a **tag ruleset** on `v*`: only maintainers may create these tags, nobody may move or
-  delete one;
-- the **`pypi` environment**: deployments allowed from tags `v*` only, one required
-  reviewer;
-- the **ancestry check** in `publish.yml`: the tagged commit must be reachable from `main`.
-
-If a day comes when an old line needs a fix after `main` has moved on, cut
-`release/v0.2` from the `v0.2.0` tag then, cherry-pick, tag `v0.2.1` there, and add
-`release/*` to the ancestry check. Nothing about starting on `main` prevents that.
+A fix for a release that `main` has moved past is not supported yet (the ancestry check
+refuses it). If that day comes, cut `release/v0.2` from the release commit, cherry-pick, and
+extend the ancestry check and the mirror to that branch.
 
 ## What a release must satisfy
 
-- CI green on the merge commit (lint, mypy strict, unit tests on 3.12 and 3.13, the
-  real-edge integration job).
+- The release workflow re-runs lint, mypy strict and the unit tests (3.12 and 3.13) on the tagged
+  tree itself. The real-edge integration job runs in this repository's CI when the release
+  commit is mirrored; the `pypi` reviewer checks it passed there before approving.
 - The `asimov-protocol` floor in `pyproject.toml` names a release that is on PyPI, and
   `menlo.asimov.robots.PROTOCOL_VERSION` matches what the edge speaks.
 - A `## <version> — <date>` heading in `CHANGELOG.md`.
 
 ## Dry run
 
-`workflow_dispatch` on `publish.yml` runs the build job only (no upload). Locally:
-
 ```bash
 uv build && uvx twine check dist/*
 ```
 
+CI here builds the wheel on every push, which is the same build the release uploads.
+
 ## Authentication
 
-There is no PyPI token. The publish job holds `id-token: write`; GitHub mints a short-lived
+There is no PyPI token. The upload job holds `id-token: write`; GitHub mints a short-lived
 OIDC token for the run and PyPI exchanges it for a 15-minute upload token because a
-*trusted publisher* rule on the project says: owner `menloresearch`, repo `menlo-sdk`,
-workflow `publish.yml`, environment `pypi`. The `pypi` environment's required reviewer is
-the human gate.
+*trusted publisher* rule on the project names the robot repository, workflow
+`sdk-release.yml` and environment `pypi`. That environment's required reviewer is the human
+gate. The mirror, the `v*` tag and the GitHub Release are written by a GitHub App that is
+installed on the mirror repositories only; its key is held by the robot environments that
+publish (`mirror`, deployable from main; `pypi`, behind its reviewer), never by the repository.
