@@ -3,7 +3,10 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.1.0rc3 — 2026-09-25
+## 0.1.0rc4 — 2026-09-25
+
+0.1.0rc3 was tagged but never published: the release workflow refused its own tag. rc4 is the
+same SDK, released with the workflow fixed.
 
 ### Changed
 - Releases are cut from Menlo's internal repository, the SDK's source, and reach this

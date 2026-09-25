@@ -10,6 +10,6 @@
 keeps the credentials scripts connect with. ``__version__`` is the distribution's.
 """
 
-__version__ = "0.1.0rc3"
+__version__ = "0.1.0rc4"
 
 __all__ = ["__version__"]
