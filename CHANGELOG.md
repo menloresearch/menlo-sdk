@@ -3,6 +3,21 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.0rc3 — 2026-09-25
+
+### Changed
+- Releases are cut from Menlo's internal repository, the SDK's source, and reach this
+  repository as a mirrored `v*` tag with a GitHub Release carrying the files uploaded to PyPI
+  (`RELEASING.md`). This repository no longer publishes by itself.
+
+### Fixed
+- The error raised when the wire bindings cannot be imported names the module that failed
+  and installs both runtime dependencies, `asimov-protocol` and `protobuf`; it used to call
+  protobuf the only one.
+
+### Added
+- README links `SECURITY.md` for private vulnerability reports.
+
 ## 0.1.0rc2 — 2026-09-23
 
 ### Changed
