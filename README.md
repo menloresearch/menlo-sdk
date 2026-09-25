@@ -86,6 +86,8 @@ token on every connect; the SDK never holds a LiveKit secret.
   [changelog](https://github.com/menloresearch/menlo-sdk/blob/main/CHANGELOG.md).
 - Versions follow PEP 440; pre-releases (`0.1.0rc1`) install only with `pip install --pre`.
   How releases are cut: [RELEASING.md](https://github.com/menloresearch/menlo-sdk/blob/main/RELEASING.md).
+- Found a security problem? Report it privately:
+  [SECURITY.md](https://github.com/menloresearch/menlo-sdk/blob/main/SECURITY.md).
 
 ## License
 

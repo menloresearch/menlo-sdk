@@ -18,8 +18,8 @@
 
 One ``Robot``, one API, three lanes chosen at connect time: ``"udp"`` (the robot's LAN
 lane, no server), ``"hybrid"`` (UDP control + LiveKit media) and ``"livekit"`` (everything
-over the room). LiveKit is an optional extra — the core SDK's only runtime dependency is
-protobuf.
+over the room). LiveKit is an optional extra — the core SDK's runtime dependencies are
+``asimov-protocol`` (the generated wire bindings) and ``protobuf``.
 """
 
 from menlo import __version__

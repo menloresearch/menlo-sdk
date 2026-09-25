@@ -33,8 +33,9 @@ def _pb() -> tuple[Any, Any, Any]:
         b = _proto.load()
     except ImportError as exc:  # pragma: no cover - environment, not logic
         raise ConnectError(
-            "protobuf is not installed; it is the SDK's only runtime dependency "
-            "(`pip install protobuf>=5.29.3`)."
+            f"the asimov.io wire bindings could not be imported ({exc}); the SDK needs "
+            "`asimov-protocol` and `protobuf`: "
+            '`pip install "asimov-protocol>=1.2.1rc1,<2" "protobuf>=5.29.3"`.'
         ) from exc
     return b.command, b.common, b.state
 

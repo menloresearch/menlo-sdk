@@ -188,7 +188,7 @@ class LiveKitTransport(_MediaPlane):
     def open(self) -> None:
         if self._lk_open:
             raise ConnectError("this LiveKitTransport is already open")
-        _pb()  # fail here, with the protobuf install hint, not on the loop thread
+        _pb()  # fail here, with the dependency install hint, not on the loop thread
         self._lk.connect()
         self._lk_open = True
         self.endpoint = self._describe()

@@ -35,11 +35,11 @@ robot: everything that speaks the Asimov wire lives in `menlo.asimov`; the top l
 
 ## Dependencies
 
-Runtime core: `protobuf` only — `pip install menlo-sdk` with no extra must drive a robot
-(the UDP lane). The media lane adds one extra, `[livekit]`, and every `livekit` import in
-the SDK is lazy and lives in `transport/_livekit_client.py`; nothing else may import it,
-and `robot.connect("udp")` must never reach it. Optional at call time, never at import time:
-numpy, Pillow and OpenCV are named in an error, never depended on.
+Runtime core: `asimov-protocol` and `protobuf` only — `pip install menlo-sdk` with no extra
+must drive a robot (the UDP lane). The media lane adds one extra, `[livekit]`, and every
+`livekit` import in the SDK is lazy and lives in `transport/_livekit_client.py`; nothing
+else may import it, and `robot.connect("udp")` must never reach it. Optional at call time,
+never at import time: numpy, Pillow and OpenCV are named in an error, never depended on.
 
 Dev: ruff, mypy (strict), pytest. Simulator for live tests:
 `menlo-studio up --container --sdk`. A LiveKit server for `make livekit`:
