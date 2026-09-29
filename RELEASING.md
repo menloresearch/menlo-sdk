@@ -48,9 +48,14 @@ GitHub Release and a PyPI upload.
 
 `main` carries `X.Y.Z.dev0`, the version being worked towards. It is never tagged.
 
-1. **Release PR** in the robot repository. Set `__version__` to the release (`0.2.0rc1` or
-   `0.2.0`). In `CHANGELOG.md`, rename `## 0.2.0 — unreleased` to `## 0.2.0rc1 — 2026-10-03`
-   (or the final). Merge.
+1. **Release PR** in the robot repository. Run the `prepare-release` workflow (Actions →
+   prepare-release → package `sdk`, version `0.2.0rc1`), or
+   `gh workflow run prepare-release.yml -R menloresearch/robot -f package=sdk -f version=0.2.0rc1`.
+   It sets `__version__`, turns `## 0.2.0 — unreleased` in `CHANGELOG.md` into
+   `## 0.2.0rc1 — <date>` (or drafts that section from the `sdk/` commits since the last
+   release), and opens the PR. It refuses a version that is not above the current one, already
+   tagged or already on PyPI. Rewrite a drafted section for users, then merge. By hand, the same
+   edit is `tools/release/bump.py sdk 0.2.0rc1`.
 2. **Tag the merge commit** there with `sdk/v` + the exact version, annotated:
 
    ```bash
