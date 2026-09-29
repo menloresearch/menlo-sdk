@@ -3,6 +3,15 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.0rc5 — 2026-09-29
+
+No change to the SDK itself: this release exercises the new release preparation.
+
+### Changed
+- `RELEASING.md`: the release PR is opened by a workflow that sets the version and this
+  changelog section, and refuses a version that is not above the current one, already tagged or
+  already on PyPI.
+
 ## 0.1.0rc4 — 2026-09-25
 
 0.1.0rc3 was tagged but never published: the release workflow refused its own tag. rc4 is the
