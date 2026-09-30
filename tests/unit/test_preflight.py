@@ -72,6 +72,14 @@ def test_an_armed_healthy_robot_is_ready_to_move():
     assert check.ok and check.problems == () and str(check) == "ready to move"
 
 
+def test_each_action_reads_as_a_sentence():
+    assert str(evaluate("stand", _state(Mode.DAMP, battery=GOOD_BATTERY), armed=False)) == (
+        "ready to stand"
+    )
+    check = evaluate("trajectory", _state(Mode.DAMP, battery=GOOD_BATTERY), armed=False)
+    assert str(check).startswith("not ready to run a trajectory:\n  - wrong_mode: ")
+
+
 def test_unknown_fields_are_warnings_never_guesses():
     check = evaluate("move", _state(temp=None), armed=True)
     assert check.ok
@@ -104,6 +112,8 @@ def test_a_fault_names_the_alerts_from_error_flags():
     fault = next(p for p in check.problems if p.code == "faulted")
     assert "FALL_DETECTED" in fault.message and "MOTOR_OVERTEMP" in fault.message
     assert "until the firmware restarts" in fault.message
+    # Not also "stand() it first": a latched fault is not cleared by standing.
+    assert "wrong_mode" not in _codes(check)
 
 
 def test_a_tilted_stand_says_how_far():

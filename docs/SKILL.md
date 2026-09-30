@@ -74,8 +74,8 @@ Each verb returns a `Sent` at once; nothing blocks unless you ask.
 | `set_velocity(vx=0, vy=0, vyaw=0, *, duration=None, wait=False) -> Sent` | walk: `vx` forward m/s, `vy` left m/s, `vyaw` counter-clockwise rad/s. Held (re-sent at 10 Hz) until `stop()`, another verb, or `duration` s, then zero is sent. Clamped to `Limits()`, the firmware caps 0.4 m/s, 0.4 m/s, 0.8 rad/s; `Sent.clamped` says so. |
 | `stop() -> Sent` | zero velocity. The robot stays in MOVE, balancing in place: this is how a walk ends. |
 | `stand() -> Sent` | DAMP to STAND. Holds a pose without a balance loop. Only from DAMP; never after walking. |
-| `damp() -> Sent` | every actuator compliant now; a standing robot folds. Not an emergency stop: use the E-Stop in Asimov Manager. |
-| `trajectory(positions, *, kp=None, kd=None) -> Sent` | one joint setpoint (radians, `robot.info.dof` values, firmware order). Walking policy off. `goto(positions, duration=2.0, wait=True)` interpolates from the current pose and holds. Robot must be supported. Joint control ends with `damp()`, with the robot still supported. |
+| `damp() -> Sent` | every actuator compliant now; a standing robot folds. Not an emergency stop: use the E-Stop in Asimov Manager, or cut power at the battery unit. |
+| `trajectory(positions, *, kp=None, kd=None) -> Sent` | one joint setpoint (radians, `robot.info.dof` values, firmware order, in the frame `state.joint_pos` reports; the SDK converts the biped's ankle motors to the pitch and roll the firmware reads). Walking policy off. `goto(positions, duration=2.0, wait=True)` interpolates from the current pose and holds. Robot must be supported. Joint control ends with `damp()`, with the robot still supported. |
 
 `set_velocity` returns at once. Pass `wait=True` to block until the hold ended *and* its
 zero was sent, or `time.sleep(duration)`. A verb called mid-hold (including `close()` at the
@@ -149,12 +149,13 @@ with Robot().connect() as robot:
         robot.stand()
         robot.wait_for(Mode.STAND)
     robot.wait_ready("move")  # armed: STAND held upright for 0.5 s
-    robot.set_velocity(vx=0.2, duration=3.0, wait=True)  # 0.2 m/s for 3 s, zero sent, returns
+    robot.set_velocity(vx=0.3, duration=3.0, wait=True)  # 0.3 m/s for 3 s, zero sent, returns
     robot.stop()  # MOVE at zero velocity: the robot balances in place
     # Do not call robot.stand() here: it would stiffen a balancing robot and tip it over.
 ```
 
-The same script is [examples/05_stand_and_walk.py](../examples/05_stand_and_walk.py).
+The same steps, split in two with a preflight check before each, are
+[examples/stand.py](../examples/stand.py) and [examples/walk.py](../examples/walk.py).
 
 ## Example 2: turn 180° and verify from the IMU
 

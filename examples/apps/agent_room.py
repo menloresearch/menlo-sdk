@@ -1,53 +1,90 @@
 """An agent's tools for the robot: look through its camera and walk, from inside its room.
 
+  g       let the agent move              space   pause the agent, balancing in place
+  b       damp (asks first)               x       quit (Ctrl-C also quits)
+
 The robot publishes its camera and microphone as ordinary LiveKit tracks, so an agent
 framework in the same room sees and hears it directly; the SDK joins as one more participant
-to drive. walk() moves the robot: it must be on its feet with clear floor around it, and the
-Asimov Manager E-Stop open. Connection mode: livekit. Run: python examples/apps/agent_room.py
+to drive. The walk tool refuses until you press g. Here a short plan stands in for the agent.
+Connection mode: livekit. Run stand.py first; the robot must be on its feet, hanging from its
+gantry hook, with clear floor around it.
+Run in a terminal: python examples/apps/agent_room.py
 """
 
-from __future__ import annotations
-
+import sys
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
-from menlo.asimov import Mode, Robot
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # check.py and keyboard.py
+
+from check import require_ready
+from keyboard import NextKey, confirm_and_damp, stop_if_moving, terminal_keys
+from menlo.asimov import Robot
+
+MAX_WALK_S = 5.0  # the walk tool never holds a velocity longer than this
+TICK_S = 0.1
 
 
-def look(robot: Robot, path: str = "view.jpg") -> str:
-    """Tool: save what the robot sees as a JPEG (needs Pillow) and return the path."""
-    # region look
-    if not robot.has("camera"):
-        return "this robot publishes no camera"
-    photo = robot.camera.photo()  # the next fresh frame, rgb8
-    Path(path).write_bytes(photo.to_jpeg())
-    return path
+class Tools:
+    """What the agent may call. walk() does nothing until the operator allows it."""
+
+    def __init__(self, robot: Robot) -> None:
+        self.robot = robot
+        self.may_move = False
+
+    # region main
+    def look(self, path: str = "view.jpg") -> str:
+        """Save what the robot sees as a JPEG (needs Pillow) and return the path."""
+        if not self.robot.has("camera"):
+            return "this robot publishes no camera"
+        Path(path).write_bytes(self.robot.camera.photo().to_jpeg())
+        return path
+
+    def walk(self, vx: float = 0.0, vyaw: float = 0.0, seconds: float = 2.0) -> str:
+        """Walk at vx m/s and turn at vyaw rad/s for at most MAX_WALK_S, then stop."""
+        if not self.may_move:
+            return "paused: the operator has not allowed the robot to move"
+        check = self.robot.preflight("move")
+        if not check.ok:
+            return str(check)  # the model reads why it cannot walk
+        duration = min(seconds, MAX_WALK_S)
+        sent = self.robot.set_velocity(vx=vx, vyaw=vyaw, duration=duration)
+        return f"walking for {duration:.1f} s" + (" (clamped)" if sent.clamped else "")
+
     # endregion
 
 
-def walk(robot: Robot, vx: float = 0.0, vyaw: float = 0.0, seconds: float = 2.0) -> str:
-    """Tool: walk at vx m/s and turn at vyaw rad/s for at most 5 s, then stop."""
-    # region walk
-    check = robot.preflight("move")
-    if any(p.code != "not_armed" for p in check.blocking):
-        return str(check)  # the model reads why it cannot walk
-    robot.wait_ready("move")
-    sent = robot.set_velocity(vx=vx, vyaw=vyaw, duration=min(seconds, 5.0), wait=True)
-    robot.stop()  # end in MOVE at zero velocity, balancing; never STAND after a walk
-    return "walked" + (" (clamped to the robot's limits)" if sent.clamped else "")
-    # endregion
-
-
-def main() -> None:
+def main(next_key: NextKey) -> None:
     with Robot().connect("livekit") as robot:
-        print(robot.info.endpoint)  # room@url as the identity Asimov Manager issued
-        if robot.state.mode is Mode.DAMP:
-            robot.wait_ready("stand")
-            robot.stand()
-            robot.wait_for(Mode.STAND)
-        print(look(robot))
-        print(walk(robot, vyaw=0.4, seconds=2.0))
-        # An agent in the same room calls look() and walk() as its tools.
+        print(robot.info.endpoint)  # room@url, as the identity Asimov Manager issued
+        require_ready(robot, "move")
+        tools = Tools(robot)
+        # An agent in the room calls look() and walk() as its tools. This plan stands in.
+        plan: list[Callable[[], str]] = [tools.look, partial(tools.walk, vx=0.3, seconds=2.0)]
+        print("g let the agent move, space pause, b damp, x quit")
+        try:
+            while True:
+                key = next_key(TICK_S)
+                if key in ("x", "\x03"):
+                    break
+                if key == "g":
+                    tools.may_move = True
+                elif key == " ":
+                    tools.may_move = False
+                    stop_if_moving(robot)
+                    print("paused")
+                elif key == "b":
+                    tools.may_move = False
+                    print(confirm_and_damp(robot, next_key))
+                if tools.may_move and plan:
+                    print(plan.pop(0)())
+        except KeyboardInterrupt:
+            pass
+        finally:
+            stop_if_moving(robot)
 
 
 if __name__ == "__main__":
-    main()
+    with terminal_keys() as keys:
+        main(keys)

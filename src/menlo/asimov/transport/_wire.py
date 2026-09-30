@@ -65,7 +65,7 @@ def encode_command(command: Command, sequence: int) -> bytes:
     elif isinstance(command, Trajectory):
         msg.mode = common.CONTROL_MODE_MOVE  # a trajectory drives; the packet must not say DAMP
         msg.command_control = common.COMMAND_CONTROL_TRAJECTORY
-        msg.all_trajectory.positions.extend(command.positions)
+        msg.all_trajectory.positions.extend(robots.trajectory_wire_positions(command.positions))
         if command.kp is not None:
             msg.all_trajectory.kp.extend(command.kp)
         if command.kd is not None:

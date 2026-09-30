@@ -365,9 +365,8 @@ def test_anything_but_yes_cancels_and_sends_nothing(edge, at_edge, answer, capsy
     answer(typed)
     assert main(["damp"]) == 4
     out = capsys.readouterr().out
-    assert (
-        "→ damp: every actuator goes limp and a standing robot folds. Not an emergency stop" in out
-    )
+    assert "→ damp: every actuator goes limp and a standing robot folds" in out
+    assert "the robot must be supported. Not an emergency stop" in out
     assert "Cancelled; nothing sent." in out
     assert edge.received == []
 

@@ -26,9 +26,8 @@ before any network I/O, naming the field and the command that sets it. Commands 
 Asimov Edge's arbiter beside the robot's other controllers and pass the same safety layer,
 whichever connection mode they arrive on.
 
-Examples: [01_connect_udp.py](../examples/01_connect_udp.py),
-[02_connect_hybrid.py](../examples/02_connect_hybrid.py),
-[03_connect_livekit.py](../examples/03_connect_livekit.py).
+Example: [connect.py](../examples/connect.py) builds the config for each of the three
+connection modes side by side.
 
 ## Connection modes
 
@@ -71,8 +70,8 @@ hybrid, livekit   camera   <- a video track, decoded to rgb8 Frames
 There is no envelope, framing or type tag: the port, or the topic, says what the bytes are. Each
 command carries `protocol_version = 1`, a sequence number and the sender's clock in
 `timestamp_us`; neither Asimov Edge nor the firmware checks that clock, and there is no
-timestamp window. [11_raw_livekit.py](../examples/11_raw_livekit.py) speaks this protocol with
-`livekit` and `asimov-protocol` only.
+timestamp window. The scripts in [livekit_raw/](../examples/livekit_raw) speak this protocol
+with `livekit` and `asimov-protocol` only.
 
 The SDK never holds a LiveKit API secret. There is no `api_key`/`api_secret` parameter
 anywhere in it: a caller brings a join token minted by Asimov Manager, or a callable that
@@ -140,7 +139,7 @@ menlo robots add NAME [--mode MODE] [--udp HOST] [--manager URL] [--credential C
 menlo robots remove NAME | menlo robots use NAME
 menlo status [--watch] [--json]              # READY / NOT READY / FAULTED; sends nothing
 menlo stand [-y]                             # DAMP -> STAND, then waits until armed
-menlo walk --vx 0.2 --duration 3 [-y]        # 0 < duration <= 10 s, then stop()
+menlo walk --vx 0.3 --duration 3 [-y]        # 0 < duration <= 10 s, then stop()
 menlo stop                                   # zero velocity, only in MOVE; never asks
 menlo damp [-y]                              # every actuator compliant; not an emergency stop
 ```
@@ -152,8 +151,8 @@ send anything:
 
 ```text
 lab (udp, 192.168.22.32) · DAMP · battery 82 % → stand, then wait until armed
-lab (hybrid, 192.168.22.32) · STAND, armed · battery 82 % → walk vx 0.20 m/s, vy 0.00 m/s, vyaw 0.00 rad/s for 3.0 s, then stop
-lab (udp, 192.168.22.32) · MOVE · battery 82 % → damp: every actuator goes limp and a standing robot folds. Not an emergency stop; use the E-Stop in Asimov Manager for that.
+lab (hybrid, 192.168.22.32) · STAND, armed · battery 82 % → walk vx 0.30 m/s, vy 0.00 m/s, vyaw 0.00 rad/s for 3.0 s, then stop
+lab (udp, 192.168.22.32) · MOVE · battery 82 % → damp: every actuator goes limp and a standing robot folds, so the robot must be supported. Not an emergency stop: use the E-Stop in Asimov Manager, or cut power at the battery unit.
 ```
 
 A speed above the limits shows the value that is sent, then the one asked for:
@@ -314,7 +313,9 @@ sent.wait_outcome()  # Unknown on every connection mode: Asimov Edge reports no 
 problem is blocking, `problems` (blocking first, then warnings), `has(code)`, and a readable
 `str()`. It sends nothing and never raises for a robot condition. `action` is `"stand"`,
 `"move"` (`set_velocity`) or `"trajectory"` (`trajectory` and `goto`). `stand` is ok from
-DAMP or STAND; `move` and `trajectory` are ok in MOVE or in an armed STAND.
+DAMP or STAND; `move` and `trajectory` are ok in MOVE or in an armed STAND. `str()` reads
+"ready to stand", "not ready to move:" or "not ready to run a trajectory:", then one line
+per problem.
 
 | code | blocking | when |
 |---|---|---|
@@ -327,7 +328,7 @@ DAMP or STAND; `move` and `trajectory` are ok in MOVE or in an armed STAND.
 | `unknown_battery` | no | the robot reports no battery |
 | `joint_hot` | yes | an actuator at or above 60 C |
 | `unknown_joint_temp` | no | the robot reports no actuator temperatures |
-| `wrong_mode` | yes | stand from MOVE; move or trajectory from DAMP |
+| `wrong_mode` | yes | stand from MOVE; move or trajectory from DAMP (not reported with `faulted`: standing does not clear a latch) |
 | `not_armed` | yes | STAND has not been held upright for 0.5 s |
 | `unknown_gravity` | no | no gravity vector, so tilt and arming cannot be checked; `move` and `trajectory` then pass in STAND unverified |
 
@@ -339,8 +340,8 @@ raises `NotReadyError` (carrying `.preflight`) after `timeout`, or at once on `f
 upright (gravity z below -0.87) for 0.5 s. A velocity sent before that is neither refused
 nor reported: the robot stays in STAND while a `duration` runs. Call `wait_ready("move")`
 after `stand()` and before the first `set_velocity`. See
-[04_preflight.py](../examples/04_preflight.py) and
-[05_stand_and_walk.py](../examples/05_stand_and_walk.py).
+[check.py](../examples/check.py), [stand.py](../examples/stand.py) and
+[walk.py](../examples/walk.py).
 
 ## Safety model
 
@@ -372,15 +373,22 @@ after `stand()` and before the first `set_velocity`. See
 - `trajectory()` and `goto()` put every joint under position control with the walking
   policy off: the robot does not balance itself while one is in force. On a standing biped
   use them with the robot supported, or with gains known to hold the legs. Without `kp`/`kd`,
-  Asimov Edge applies its own per-joint gain table. `goto()` holds its target until another
-  verb; `trajectory()` is one setpoint you clock yourself. Joint control ends with `damp()`,
-  with the robot still supported; [08_move_joints.py](../examples/08_move_joints.py) does this.
+  Asimov Edge applies its own per-joint gain table. Positions are in the frame
+  `state.joint_pos` reports. On the biped each ankle is reported as its two motors (A, B),
+  and the SDK sends those as the ankle pitch and roll the firmware reads there. The firmware
+  limits ankle pitch to 0.35 rad and roll to 0.1 rad, so a trajectory of the reported pose
+  holds the robot still when both ankles are within those limits, as they are standing.
+  `trajectory()` and `goto()` raise `ValueError` for an ankle target more than 0.02 rad past
+  a limit, before anything is sent. `goto()` holds its target until another
+  verb; `trajectory()` is one setpoint you clock yourself. Joint control ends in DAMP, with
+  the robot still supported: call `damp()`, or stop sending and Asimov Edge puts the robot in
+  DAMP 2 s after the last setpoint, as [move_joints.py](../examples/move_joints.py) does.
 - **`stand()` holds a pose without a balance loop.** It blends every joint to a fixed pose and
   holds it with position gains, with no balance loop. It is the verb that wakes the robot
   (DAMP, then STAND, then MOVE): call it only from DAMP, after `wait_ready("stand")`.
   Asking a free-standing biped to stiffen after walking tips it over. To stand still
   after a walk, call `stop()` and stay in MOVE at zero velocity, where the policy keeps
-  balancing. [06_stop_and_shutdown.py](../examples/06_stop_and_shutdown.py) ends a walk.
+  balancing. [walk.py](../examples/walk.py) ends a walk this way.
 - **The last command in effect wins; `goto()` yields to any other verb.** The firmware obeys
   whichever command arrived last. A `goto()` is fenced by the SDK: any verb from any
   thread (`damp()`, `stand()`, a velocity) ends it before its next setpoint leaves.
@@ -436,15 +444,16 @@ the repository root:
 ```bash
 make sync          # install the SDK and the development tools
 make check         # ruff, mypy --strict (the SDK and the examples) and the unit tests
-make live          # against a robot or the simulator; MENLO_SDK_LIVE_HOST=<host>
+make live          # against a robot; MENLO_SDK_LIVE_HOST=<host>
 make livekit       # against `livekit-server --dev`; needs MENLO_SDK_LIVEKIT_URL
                    # plus two tokens for one room (_TOKEN and _EDGE_TOKEN)
 ```
 
-`make check` needs no robot: the unit tests run the SDK against a simulated Asimov Edge in
-the test process that speaks the same protocol as the robot. They run every example this
-way except [11_raw_livekit.py](../examples/11_raw_livekit.py), which needs a LiveKit
-server. CI runs the same checks on Python 3.12 and 3.13 and builds the wheel.
+`make check` needs no robot: the unit tests run the SDK against the test suite's stand-in
+for the robot, which runs in the test process and speaks the same protocol as the robot.
+They run every example this way. The interactive ones (`keyboard.py` and the apps) get a
+scripted key source, and the `livekit_raw/` scripts that only read a room are skipped: they
+need a LiveKit server. CI runs the same checks on Python 3.12 and 3.13 and builds the wheel.
 
 ```
 src/menlo/
@@ -465,6 +474,6 @@ src/menlo/asimov/   the Asimov biped
   transport/        Transport protocol, UdpTransport, LiveKitTransport, HybridTransport,
                     _wire.py (the protobufs every connection mode shares) and
                     _livekit_client.py (the one module that imports livekit, lazily)
-examples/           runnable scripts, 01 to 11, and apps/; indexed in examples/README.md
+examples/           runnable scripts, livekit_raw/ and apps/; indexed in examples/README.md
 docs/SKILL.md       the two-page reference for an agent writing a script against this SDK
 ```

@@ -1,5 +1,5 @@
 """The LiveKit lanes against a faked client seam: the wire contract, the capability
-honesty, the media API — and the promise that none of it is needed to drive a robot.
+honesty, the media API, and the promise that none of it is needed to drive a robot.
 
 Nothing here imports livekit. That is the point: every ``livekit`` import in the SDK sits
 behind ``transport/_livekit_client.py``, so the suite fakes that seam and the tests run on
@@ -416,3 +416,65 @@ def test_bgr8_to_rgb_swaps_channels_without_flipping_the_image() -> None:
 
     # rgb8 is handed back untouched.
     assert _rgb_bytes(Frame(width=2, height=2, encoding="rgb8", data=bgr)) == bgr
+
+
+def test_close_waits_for_every_stream_reader_to_close_its_stream():
+    """close() lets each reader's aclose() run to the end before the loop stops; a real
+    aclose() awaits a round trip to the native library, so a stream left mid-close stays
+    open."""
+    client = _LiveKitClient("ws://x", "r", token="t")
+    closed: list[str] = []
+
+    class Stream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Event().wait()  # a live stream: the next frame never comes
+
+        async def aclose(self):
+            await asyncio.sleep(0.05)
+            closed.append("state")
+
+    class Track:
+        info = type("Info", (), {"name": STATE_TRACK, "sid": "DTR_state"})()
+
+        def subscribe(self, **_):
+            return Stream()
+
+    class Room:
+        async def disconnect(self):
+            await asyncio.sleep(0)
+
+    client.on_data_track(STATE_TRACK, lambda payload, ts: None)
+    client._start_loop()
+    client._room = Room()
+    client._on_data_track_published(Track())
+    time.sleep(0.1)  # the reader is waiting on its stream
+    client.close()
+    assert closed == ["state"], "close() stopped the loop before the stream was closed"
+
+
+def test_close_delivers_a_queued_command_before_leaving_the_room():
+    """The zero close() queues must reach the SFU before disconnect: a publish still in
+    flight when the room is left is never delivered."""
+    client = _LiveKitClient("ws://x", "r", token="t")
+    events: list[str] = []
+
+    class Participant:
+        async def publish_data(self, payload, *, reliable, topic):
+            await asyncio.sleep(0.1)  # a round trip to the native library
+            events.append(f"publish {payload!r}")
+
+    class Room:
+        local_participant = Participant()
+
+        async def disconnect(self):
+            events.append("disconnect")
+
+    client._start_loop()
+    client._room = Room()
+    client._connected = True
+    client.publish_data(b"zero", topic=COMMAND_TOPIC)
+    client.close()
+    assert events == ["publish b'zero'", "disconnect"], events

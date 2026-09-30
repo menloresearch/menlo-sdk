@@ -98,6 +98,7 @@ from menlo.asimov._preflight import (
     ARM_HOLD_S,
     ARM_MAX_GAP_S,
     PERMANENT,
+    PHRASES,
     Action,
     Preflight,
     Problem,
@@ -328,7 +329,7 @@ class Robot:
             if not self._closed:
                 raise RuntimeError("this Robot is already connected; close() it first")
             self._transport = tx
-            self._subscribed = False  # the new transport has not heard our callbacks yet
+            self._subscribed = False  # the new transport has not heard our callbacks
             self._derived_caps = frozenset()  # the previous robot's battery is not this one's
         self._camera._rebind()
         self._microphone._rebind()
@@ -473,9 +474,9 @@ class Robot:
         if self._handshake_error is not None:
             return self._handshake_error
         if self._closed:
-            return NotConnectedError("not connected: no state received yet")
+            return NotConnectedError("not connected: no state received")
         return NotConnectedError(
-            "the robot has not reported state yet (this session did not wait for it: "
+            "the robot has not reported state (this session did not wait for it: "
             "require_state=False). Media works now; robot.state, robot.info and the motion "
             "verbs need the firmware's state stream"
         )
@@ -648,11 +649,14 @@ class Robot:
                 return check
             permanent = [p for p in check.blocking if p.code in PERMANENT]
             if permanent:
-                raise NotReadyError(f"not ready to {action}: {permanent[0]}", preflight=check)
+                raise NotReadyError(
+                    f"not ready to {PHRASES[action]}: {permanent[0]}", preflight=check
+                )
             if time.monotonic() >= deadline:
                 reasons = "; ".join(str(p) for p in check.blocking)
                 raise NotReadyError(
-                    f"not ready to {action} after {timeout:.1f} s: {reasons}", preflight=check
+                    f"not ready to {PHRASES[action]} after {timeout:.1f} s: {reasons}",
+                    preflight=check,
                 )
             time.sleep(poll)
 
@@ -772,13 +776,15 @@ class Robot:
         the last setpoint and then DAMPs, so clock these yourself or use :meth:`goto`.
         Without ``kp``/``kd``, Asimov Edge applies its own per-joint gain table. A ``kp``/``kd``
         entry of zero or less means the firmware substitutes its DAMP gains for that joint
-        (limp). ``ValueError`` unless ``len(positions) == info.dof``, or
-        when only one of ``kp``/``kd`` is given (Asimov Edge ignores a lone gain)."""
+        (limp). ``ValueError`` unless ``len(positions) == info.dof``, when only one of
+        ``kp``/``kd`` is given (Asimov Edge ignores a lone gain), or when a biped ankle target
+        is outside the pitch and roll the firmware limits it to (it would be clamped)."""
         pos = tuple(float(p) for p in positions)
         if self._info is not None and len(pos) != self._info.dof:
             raise ValueError(
                 f"trajectory has {len(pos)} positions; this robot has {self._info.dof} motors"
             )
+        robots.check_ankle_limits(pos)
         t = Trajectory(
             pos,
             tuple(float(x) for x in kp) if kp is not None else None,
@@ -813,7 +819,9 @@ class Robot:
         ``wait``, blocks until every joint is within ``tolerance`` radians of the target, or
         raises :class:`WaitTimeoutError` after ``timeout`` (default ``duration + 2``); the
         target is still held after that timeout until another verb. Every argument is
-        validated before the first setpoint leaves. Returns the ``Sent`` of the first setpoint.
+        validated before the first setpoint leaves: a biped ankle target outside the firmware's
+        ankle pitch and roll limits raises ``ValueError``, as in :meth:`trajectory`. Returns the
+        ``Sent`` of the first setpoint.
         """
         target = tuple(float(p) for p in positions)
         _positive_finite("duration", duration)
@@ -831,6 +839,7 @@ class Robot:
         start = current.joint_pos
         if len(target) != len(start):
             raise ValueError(f"goto has {len(target)} positions; this robot reports {len(start)}")
+        robots.check_ankle_limits(target)
         kp_t = tuple(float(x) for x in kp) if kp is not None else None
         kd_t = tuple(float(x) for x in kd) if kd is not None else None
         steps = max(1, round(duration * hz))
@@ -1030,7 +1039,7 @@ class Robot:
             if s is not None:
                 last_seen = s.received_at
             elif self._info is None:
-                # A session that did not wait for the robot and has not heard it yet: a
+                # A session that did not wait for the robot and has not heard it: a
                 # stream that never started is not one that went quiet, and no verb has
                 # been accepted, so there is nothing to zero.
                 last_seen = time.monotonic()

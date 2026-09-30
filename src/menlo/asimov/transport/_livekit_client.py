@@ -38,6 +38,8 @@ from menlo.asimov._errors import ConnectError, LinkLostError
 from menlo.asimov._media import AudioChunk, Frame
 
 log = logging.getLogger("menlo.asimov.transport.livekit")
+#: How long leaving the room waits for its readers and queued packets to finish.
+LEAVE_DRAIN_S = 2.0
 
 #: A token, or something that mints a fresh one each time a room is joined. The SDK never
 #: holds the LiveKit API secret: the robot's manager mints tokens, the SDK presents them.
@@ -163,6 +165,7 @@ class _LiveKitClient:
         self._connected = False
         self._send_error: BaseException | None = None
         self._tasks: set[Future[Any]] = set()
+        self._publishes: set[Future[Any]] = set()  # command packets queued, not yet sent
         self._tracks: set[str] = set()
         self._cv = threading.Condition()
         self._data_track_cbs: dict[str, list[DataTrackCallback]] = {}
@@ -259,7 +262,7 @@ class _LiveKitClient:
             return
         if loop is not None:
             with contextlib.suppress(Exception):
-                self._await(self._leave(), 5.0)
+                self._await(self._leave(), 3 * LEAVE_DRAIN_S + 1.0)
         self._stop_loop()
         self._room = None
         self._source = None
@@ -292,6 +295,8 @@ class _LiveKitClient:
         future = asyncio.run_coroutine_threadsafe(
             room.local_participant.publish_data(payload, reliable=True, topic=topic), loop
         )
+        self._publishes.add(future)
+        future.add_done_callback(self._publishes.discard)
         future.add_done_callback(self._note_publish)
 
     def _note_publish(self, future: Future[Any]) -> None:
@@ -373,6 +378,11 @@ class _LiveKitClient:
         log.debug("joined %s as %s", self.endpoint, self._identity or "(no sub in the token)")
 
     async def _leave(self) -> None:
+        # Every command packet already queued (the zero close() just sent) is delivered
+        # before the room is left; a publish still pending after LEAVE_DRAIN_S is dropped.
+        pending = [asyncio.wrap_future(f) for f in tuple(self._publishes)]
+        if pending:
+            await asyncio.wait(pending, timeout=LEAVE_DRAIN_S)
         for task in tuple(self._tasks):
             task.cancel()
         self._data_track_readers.clear()
@@ -380,6 +390,17 @@ class _LiveKitClient:
         if room is not None:
             with contextlib.suppress(Exception):
                 await room.disconnect()
+        # Then let every task left on this loop finish before the loop stops: the cancelled
+        # readers close their native streams. A task still running after LEAVE_DRAIN_S is
+        # cancelled.
+        current = asyncio.current_task()
+        rest = {t for t in asyncio.all_tasks() if t is not current}
+        if rest:
+            _, stuck = await asyncio.wait(rest, timeout=LEAVE_DRAIN_S)
+            for t in stuck:
+                t.cancel()
+            if stuck:
+                await asyncio.wait(stuck, timeout=LEAVE_DRAIN_S)
 
     def _on_disconnected(self, *_: Any) -> None:
         self._connected = False

@@ -5,7 +5,7 @@
     menlo robots add lab --mode udp --udp 192.168.22.32
     menlo status --watch                            # READY / NOT READY / FAULTED, live
     menlo stand                                     # DAMP -> STAND, then wait until armed
-    menlo walk --vx 0.2 --duration 3                # a bounded walk, then stop()
+    menlo walk --vx 0.3 --duration 3                # a bounded walk, then stop()
     menlo stop                                      # zero velocity (stays in MOVE), at once
     menlo damp                                      # every actuator compliant
 

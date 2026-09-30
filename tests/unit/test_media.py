@@ -186,7 +186,7 @@ def test_has_tracks_a_media_capability_disappearing_mid_session(media):
     """`has()` must answer for NOW, not for what was true at connect.
 
     `RobotInfo` is frozen at connect, but a room lane loses its camera when the track
-    unsubscribes. A script gating on `has("camera")` — the documented safe pattern —
+    unsubscribes. A script gating on `has("camera")` (the documented safe pattern)
     should then skip cleanly instead of taking the UnsupportedError it was avoiding.
     """
     tx, robot = media

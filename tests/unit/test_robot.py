@@ -2,7 +2,7 @@
 
 Every test here is a promise a script author relies on. They run without a robot; the
 wire is bare protobuf over loopback UDP, so a fake edge in a thread exercises the whole
-path — encoding, the hold, the waits, the error model.
+path: encoding, the hold, the waits, the error model.
 """
 
 from __future__ import annotations
@@ -177,7 +177,7 @@ def test_a_superseded_velocity_never_reaches_the_robot(edge, robot):
 def test_trajectory_length_must_match_the_robot(edge, robot):
     with pytest.raises(ValueError):
         robot.trajectory([0.0] * 24)
-    robot.trajectory([0.1] * 25, kp=[50.0] * 25, kd=[2.0] * 25)
+    robot.trajectory([0.05] * 25, kp=[50.0] * 25, kd=[2.0] * 25)
     assert edge.wait_for(lambda r: any(c.HasField("all_trajectory") for c in r))
     c = next(c for c in edge.received if c.HasField("all_trajectory"))
     assert len(c.all_trajectory.positions) == 25 and len(c.all_trajectory.kp) == 25
@@ -703,7 +703,7 @@ def test_connect_direct_takes_link_timeout(edge):
 def test_outcomes_drains_at_call_time_not_first_iteration(edge, robot):
     sent = robot.stand()
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
-    it = robot.outcomes()  # not iterated yet
+    it = robot.outcomes()  # not iterated
     assert len(robot._refusals) == 0, "the drain must happen when outcomes() is called"
     assert [o.name for o in it] == ["stand"]
 

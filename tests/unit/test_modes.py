@@ -1,7 +1,7 @@
 """The same promises, three times: udp (A0), hybrid (A) and pure LiveKit (B).
 
 The rule this file exists to enforce: if a feature only works in one mode, it is not done.
-Every test here is mode-agnostic behaviour — a verb, a hold, a wait, the error model — and
+Every test here is mode-agnostic behaviour (a verb, a hold, a wait, the error model), and
 the ``any_robot`` fixture runs it over each lane against the same fake edge.
 
 Mode-SPECIFIC behaviour lives elsewhere: the UDP lane's sockets and datagram filtering in
@@ -18,6 +18,7 @@ import pytest
 from menlo.asimov import LinkLostError, Mode, NotConnectedError, StateStaleError, Unknown
 from menlo.asimov.recording import load
 from menlo.asimov.robot import KEEPALIVE_HZ
+from tests.conftest import ankle_coupling
 
 MODES = {"udp", "hybrid", "livekit"}
 
@@ -138,12 +139,66 @@ def test_a_trajectory_is_validated_and_encoded_on_every_lane(edge, any_robot):
     _mode, robot = any_robot
     with pytest.raises(ValueError):
         robot.trajectory([0.0] * 3)  # this robot has 25 motors
-    robot.trajectory([0.1] * 25, kp=[10.0] * 25, kd=[1.0] * 25)
+    robot.trajectory([0.05] * 25, kp=[10.0] * 25, kd=[1.0] * 25)
     assert edge.wait_for(lambda rx: any(c.HasField("all_trajectory") for c in rx))
     cmd = next(c for c in edge.received if c.HasField("all_trajectory"))
     assert len(cmd.all_trajectory.positions) == 25
-    assert cmd.all_trajectory.positions[0] == pytest.approx(0.1)
+    assert cmd.all_trajectory.positions[0] == pytest.approx(0.05)
     assert cmd.mode == 2, "a trajectory drives; the packet must not say DAMP"
+
+
+def test_a_trajectory_of_the_reported_pose_keeps_the_ankles_there_on_every_lane(edge, any_robot):
+    # The state reports the ankle motors (A, B); the firmware reads a trajectory's ankle
+    # entries as pitch and roll. Sent as reported, a held pose would move both ankles.
+    _mode, robot = any_robot
+    pose = [0.0] * 25
+    pose[4], pose[5], pose[10], pose[11] = 0.15, -0.05, -0.1, 0.12
+    robot.trajectory(pose)
+    assert edge.wait_for(lambda rx: any(c.HasField("all_trajectory") for c in rx))
+    cmd = next(c for c in edge.received if c.HasField("all_trajectory"))
+    assert ankle_coupling(list(cmd.all_trajectory.positions)) == pytest.approx(pose)
+
+
+# The biped's STAND pose as the firmware holds it (default_pos read as ankle pitch and
+# roll, then coupled to motors A and B), and one read from a standing robot's state.
+FIRMWARE_STAND_ANKLES = (-0.606, 0.606, 0.606, -0.606)
+REPORTED_STAND_ANKLES = (-0.4416, 0.4400, 0.4511, -0.4515)
+
+
+@pytest.mark.parametrize("ankles", [FIRMWARE_STAND_ANKLES, REPORTED_STAND_ANKLES])
+def test_a_standing_pose_is_within_the_ankle_limits(edge, robot, ankles):
+    pose = [0.0] * 25
+    pose[4], pose[5], pose[10], pose[11] = ankles
+    robot.trajectory(pose)
+    edge.state.joint_pos[:] = pose
+    time.sleep(0.05)
+    robot.goto(pose, duration=0.1, hz=20.0, wait=True, timeout=3.0)
+
+
+@pytest.mark.parametrize(
+    ("index", "ankles", "words"),
+    [
+        # A = B = 0.2 is ankle roll -0.25 rad: the firmware would clamp it to -0.1
+        ("trajectory", (0.2, 0.2, 0.0, 0.0), ("L_Ankle", "roll", "0.1 rad")),
+        # A = -B = 0.8 on the right is ankle pitch 0.396 rad, past 0.35
+        ("goto", (0.0, 0.0, 0.8, -0.8), ("R_Ankle", "pitch", "0.35 rad")),
+    ],
+)
+def test_an_ankle_target_outside_the_firmware_limits_is_refused_before_sending(
+    edge, robot, index, ankles, words
+):
+    pose = [0.0] * 25
+    pose[4], pose[5], pose[10], pose[11] = ankles
+    before = len(edge.received)
+    with pytest.raises(ValueError) as err:
+        if index == "trajectory":
+            robot.trajectory(pose)
+        else:
+            robot.goto(pose, duration=0.1, wait=False)
+    for word in words:
+        assert word in str(err.value)
+    time.sleep(0.1)
+    assert not any(c.HasField("all_trajectory") for c in edge.received[before:])
 
 
 def test_goto_interpolates_from_the_reported_pose_on_every_lane(edge, any_robot):

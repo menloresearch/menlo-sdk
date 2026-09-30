@@ -2,7 +2,7 @@
 
 The fake edge in conftest is shaped like the connector; this proves the shape. It needs
 an asimov-edge checkout on the path (``ASIMOV_EDGE_SRC``, pinned in ``edge.pin``), so it
-is marked ``integration`` and skips — loudly, by name — when that is missing.
+is marked ``integration`` and skips (loudly, by name) when that is missing.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.integration
 
 EDGE_SRC = os.environ.get("ASIMOV_EDGE_SRC")
 if not EDGE_SRC:
-    pytest.skip("ASIMOV_EDGE_SRC not set — cannot import asimov-edge", allow_module_level=True)
+    pytest.skip("ASIMOV_EDGE_SRC not set: cannot import asimov-edge", allow_module_level=True)
 sys.path.insert(0, EDGE_SRC)
 
 

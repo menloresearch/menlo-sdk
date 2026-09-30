@@ -288,7 +288,7 @@ def stand(args: argparse.Namespace) -> int:
             ) from None
         _say("STAND reported. Waiting for the robot to arm (0.5 s upright)...")
         robot.wait_ready("move", timeout=ARM_TIMEOUT_S)
-        _say("[green]Armed[/]: ready to walk, e.g. [bold]menlo walk --vx 0.2 --duration 3[/]")
+        _say("[green]Armed[/]: ready to walk, e.g. [bold]menlo walk --vx 0.3 --duration 3[/]")
     return EXIT_OK
 
 
@@ -375,8 +375,9 @@ def stop(args: argparse.Namespace) -> int:
 def damp(args: argparse.Namespace) -> int:
     with connected(args) as robot:
         doing = (
-            "damp: every actuator goes limp and a standing robot folds. "
-            "Not an emergency stop; use the E-Stop in Asimov Manager for that."
+            "damp: every actuator goes limp and a standing robot folds, so the robot must be "
+            "supported. Not an emergency stop: use the E-Stop in Asimov Manager, or cut power "
+            "at the battery unit."
         )
         if not go_ahead(args, robot, doing):
             return EXIT_CANCELLED

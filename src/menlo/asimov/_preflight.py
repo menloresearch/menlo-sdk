@@ -43,6 +43,8 @@ from menlo.asimov._state import ALERT_NAMES, Mode, State
 #: ``trajectory`` and ``goto``.
 Action = Literal["stand", "move", "trajectory"]
 ACTIONS: tuple[Action, ...] = get_args(Action)
+#: How each action reads in a sentence: "ready to stand", "not ready to run a trajectory".
+PHRASES: dict[Action, str] = {"stand": "stand", "move": "move", "trajectory": "run a trajectory"}
 
 #: A decision to move is made on a sample at most this old (5 samples at the 10 Hz of
 #: the livekit connection mode).
@@ -98,7 +100,7 @@ class Preflight:
         return any(p.code == code for p in self.problems)
 
     def __str__(self) -> str:
-        head = f"ready to {self.action}" if self.ok else f"not ready to {self.action}"
+        head = ("ready to " if self.ok else "not ready to ") + PHRASES[self.action]
         if not self.problems:
             return head
         return head + ":\n" + "\n".join(f"  - {p}" for p in self.problems)
@@ -144,7 +146,9 @@ def _mode_problems(action: Action, state: State, armed: bool | None) -> list[Pro
         return problems
 
     # move / trajectory: from an armed STAND, or in MOVE
-    if mode is Mode.DAMP:
+    if mode is Mode.DAMP and state.faulted:
+        pass  # the latched fault is the reason, and stand() does not clear it
+    elif mode is Mode.DAMP:
         add(Problem("wrong_mode", "the robot is in DAMP; stand() it first", True))
     elif mode is Mode.UNKNOWN:
         add(Problem("wrong_mode", "the robot reports an unknown robot mode", True))

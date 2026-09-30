@@ -154,7 +154,8 @@ class LiveKitTransport(_MediaPlane):
     default_outcome_timeout: float = 1.0
     silence_hint: str = (
         "The room was joined, so the token and the URL are good. Is the robot's edge in "
-        f"this room, and is it publishing the {STATE_TRACK!r} data track?"
+        f"this room, and is it publishing the {STATE_TRACK!r} data track? It publishes no "
+        "state while the robot's firmware is not reporting."
     )
 
     def __init__(
@@ -288,7 +289,7 @@ class HybridTransport(_MediaPlane):
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def open(self) -> None:
-        self._udp.open()  # raises if it is already open; nothing has been started yet
+        self._udp.open()  # raises if it is already open; nothing has been started
         try:
             self._lk.connect()
         except Exception:

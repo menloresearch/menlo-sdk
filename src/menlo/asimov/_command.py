@@ -105,7 +105,12 @@ class ModeCommand:
 
 @dataclass(frozen=True, slots=True)
 class Trajectory:
-    """Direct joint targets for EVERY motor, in firmware order, radians.
+    """Direct joint targets for EVERY motor, in firmware order, radians, in the same frame
+    ``State.joint_pos`` reports. (On the biped, the ankle entries are the A and B motors;
+    the SDK sends them as the ankle pitch and roll the firmware reads there, and the
+    firmware limits those to 0.35 rad and 0.1 rad.) Holding a reported pose within those
+    ankle limits holds the robot still; ``Robot.trajectory`` and ``Robot.goto`` refuse a
+    target outside them with ``ValueError``.
 
     A setpoint, not a queue: the robot holds the latest one. Length must equal the
     robot's DOF; Asimov Edge refuses anything else, so we refuse first. ``kp``/``kd`` are

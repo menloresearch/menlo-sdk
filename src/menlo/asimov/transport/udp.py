@@ -56,7 +56,8 @@ class UdpTransport:
     kind: TransportKind = "udp"
     default_outcome_timeout: float = 0.5
     silence_hint: str = (
-        "Is Asimov Edge running with udp-control on, and is its udp-state-host this machine?"
+        "Is Asimov Edge running with udp-control on, and is its udp-state-host this machine? "
+        "Asimov Edge also sends no state while the robot's firmware is not reporting."
     )
     #: UDP carries commands and state only. Battery rides inside RobotState and is
     #: reported per robot (see RobotInfo.capabilities); media is not on this wire.

@@ -22,6 +22,15 @@ from menlo.asimov.recording import load
 from tests.conftest import connect_udp
 
 
+def _pose(value: float) -> list[float]:
+    """Every joint at ``value``, the ankles (A, B motors 4, 5, 10, 11) at zero: equal A and B
+    is an ankle roll the firmware limits to 0.1 rad, and a goto refuses a target past it."""
+    pose = [value] * 25
+    for i in (4, 5, 10, 11):
+        pose[i] = 0.0
+    return pose
+
+
 def test_battery_protection_flags_are_named_and_charging_follows_the_sign():
     b = Battery(48.0, 2.0, 80.0, 30.0, BatteryProtection((1 << 12) | 1))
     assert b.protecting and b.charging
@@ -119,7 +128,7 @@ def test_goto_clocks_setpoints_from_the_current_pose_then_holds_the_target(edge,
     for i in range(25):
         edge.state.joint_pos[i] = 0.1
     time.sleep(0.05)
-    robot.goto([0.5] * 25, duration=0.5, hz=20, wait=False)
+    robot.goto(_pose(0.5), duration=0.5, hz=20, wait=False)
     assert edge.wait_for(lambda r: sum(c.HasField("all_trajectory") for c in r) >= 10, timeout=2.0)
     traj = [c.all_trajectory.positions[0] for c in edge.received if c.HasField("all_trajectory")]
     motion = traj[:10]
@@ -138,7 +147,7 @@ def test_goto_clocks_setpoints_from_the_current_pose_then_holds_the_target(edge,
 
 
 def test_a_velocity_verb_cancels_a_running_goto(edge, robot):
-    robot.goto([0.5] * 25, duration=1.0, hz=20, wait=False)
+    robot.goto(_pose(0.5), duration=1.0, hz=20, wait=False)
     time.sleep(0.15)
     robot.set_velocity(vx=0.1)
     n = sum(c.HasField("all_trajectory") for c in edge.received)
@@ -148,7 +157,7 @@ def test_a_velocity_verb_cancels_a_running_goto(edge, robot):
 
 def test_goto_wait_times_out_when_the_robot_does_not_follow(edge, robot):
     with pytest.raises(WaitTimeoutError):
-        robot.goto([0.5] * 25, duration=0.2, hz=20, wait=True, timeout=0.5)
+        robot.goto(_pose(0.5), duration=0.2, hz=20, wait=True, timeout=0.5)
 
 
 def test_alerts_sent_every_20th_frame_are_carried_forward_for_stable_reads():
@@ -187,12 +196,12 @@ def test_goto_refuses_to_plan_from_a_stale_pose(edge, robot):
     edge.pushing = False
     time.sleep(0.7)
     with pytest.raises(StateStaleError):
-        robot.goto([0.5] * 25, duration=0.5, wait=False)
+        robot.goto(_pose(0.5), duration=0.5, wait=False)
 
 
 def test_a_held_goto_stops_when_the_link_is_lost(edge, robot):
     robot.link_timeout = 0.3
-    robot.goto([0.5] * 25, duration=0.2, hz=20, wait=False)
+    robot.goto(_pose(0.5), duration=0.2, hz=20, wait=False)
     time.sleep(0.3)
     edge.pushing = False
     time.sleep(0.8)
@@ -226,7 +235,7 @@ def test_recording_restores_the_callback_set_after_construction(edge, robot, tmp
 
 
 def test_goto_captures_its_generation_with_the_first_setpoint(edge, robot):
-    """A verb that lands during goto()'s first send must cancel the motion. Simulated by
+    """A verb that lands during goto()'s first send must cancel the motion. Staged by
     bumping the generation from inside the first trajectory send."""
     real_send = robot._send
     fired = []
@@ -239,7 +248,7 @@ def test_goto_captures_its_generation_with_the_first_setpoint(edge, robot):
         return result
 
     robot._send = racing_send  # type: ignore[method-assign]
-    robot.goto([0.5] * 25, duration=0.3, hz=20, wait=False)
+    robot.goto(_pose(0.5), duration=0.3, hz=20, wait=False)
     time.sleep(0.5)
     n_traj = sum(c.HasField("all_trajectory") for c in edge.received)
     assert n_traj == 1, f"{n_traj} trajectory setpoints went out after the takeover verb"
@@ -251,7 +260,7 @@ def test_goto_captures_its_generation_with_the_first_setpoint(edge, robot):
 )
 def test_goto_validates_its_arguments_before_any_setpoint_leaves(edge, robot, kw):
     with pytest.raises(ValueError):
-        robot.goto([0.5] * 25, duration=0.3, wait=False, **kw)
+        robot.goto(_pose(0.5), duration=0.3, wait=False, **kw)
     time.sleep(0.1)
     assert not any(c.HasField("all_trajectory") for c in edge.received)
 
@@ -285,7 +294,7 @@ def test_recording_logs_the_safety_zero_sent_on_link_loss(edge, robot, tmp_path)
 def test_damp_from_another_thread_ends_a_running_goto_before_its_next_setpoint(edge, robot):
     """The docs promise goto() is fenced: a mode verb from any thread ends it, and no
     setpoint follows the verb. A hand-rolled trajectory loop is the unfenced case."""
-    robot.goto([0.4] * 25, duration=5.0, hz=50, wait=False)
+    robot.goto(_pose(0.4), duration=5.0, hz=50, wait=False)
     assert edge.wait_for(lambda r: sum(c.HasField("all_trajectory") for c in r) >= 5, timeout=2.0)
     done = threading.Event()
 

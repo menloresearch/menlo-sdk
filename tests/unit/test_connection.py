@@ -96,7 +96,7 @@ def test_manager_config_asks_the_manager_with_the_credential_and_mints_per_join(
 )
 def test_a_loopback_livekit_url_from_the_manager_is_rewritten_to_the_managers_host(manager, minted):
     """The manager reports the URL it gave the EDGE. On a robot whose SFU runs beside the
-    edge that is ws://localhost:7880 — right on the robot, "connection refused" here."""
+    edge that is ws://localhost:7880: right on the robot, "connection refused" here."""
     manager.reply["url"] = minted
     lk = ManagerConfig(url=manager.url, credential="c").resolve()
     assert lk.url == "ws://127.0.0.1:7880"  # the manager fixture lives on 127.0.0.1
@@ -258,7 +258,7 @@ def test_a_bound_robot_touches_nothing_until_connect(edge):
     with pytest.raises(NotConnectedError):
         _ = robot.state
     with pytest.raises(NotConnectedError, match=r"call connect\(mode\)"):
-        robot.camera.latest()  # media resolves the transport lazily: none yet
+        robot.camera.latest()  # media resolves the transport lazily: none so far
     with pytest.raises(NotConnectedError, match=r"call connect\(mode\) instead of open"):
         robot.open()
     with pytest.raises(NotConnectedError, match="live session"):

@@ -66,7 +66,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       # asimov-edge is an internal repo: the workflow's own token cannot read it. Without
-      # ASIMOV_REPOS_TOKEN this job warns and skips instead of failing the PR — the unit
+      # ASIMOV_REPOS_TOKEN this job warns and skips instead of failing the PR: the unit
       # suite already drives the wire against a fake edge; this job is the extra proof.
       - name: Token check
         id: tok

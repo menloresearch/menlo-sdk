@@ -27,12 +27,25 @@ def _free_port() -> int:
     return port
 
 
+def ankle_coupling(positions: list[float]) -> list[float]:
+    """What the biped firmware does to a trajectory's ankle entries: it reads them as the
+    ankle's (pitch, roll), limits them to 0.35 and 0.1 rad, and drives motors A and B."""
+    if len(positions) != 25:
+        return positions
+    for a, b in ((4, 5), (10, 11)):
+        pitch = max(-0.35, min(0.35, positions[a]))
+        roll = max(-0.1, min(0.1, positions[b]))
+        positions[a] = 2.02 * pitch - 0.8 * roll
+        positions[b] = -2.02 * pitch - 0.8 * roll
+    return positions
+
+
 class FakeEdge:
     """The edge's UDP lane, as the SDK sees it: bare ``RobotCommand`` in, bare
     ``RobotState`` pushed out to a configured host at a configured rate.
 
-    Deliberately shaped like ``asimov-edge``'s ``UdpConnector`` — sender address ignored,
-    state to ONE destination — so a test that passes here says something about the robot.
+    Deliberately shaped like ``asimov-edge``'s ``UdpConnector`` (sender address ignored,
+    state to ONE destination), so a test that passes here says something about the robot.
     Records every decoded command; the state it pushes is whatever the test sets.
 
     ``firmware=True`` makes the robot mode follow the commands the way the Motion Control
@@ -40,7 +53,8 @@ class FakeEdge:
     trajectory) is entered only from STAND once the robot has been upright (gravity z below
     -0.87) for ``arm_hold_s``, and until then the robot stays in STAND; MOVE -> STAND stays
     armed; a velocity or trajectory while DAMPed is dropped (the edge's DAMP gate); a
-    trajectory in MOVE sets the reported joint positions to its targets; and a latched
+    trajectory in MOVE sets the reported joint positions to its targets (after the
+    firmware's ankle coupling); and a latched
     fault (``fault()``) holds DAMP and ignores STAND and MOVE.
     """
 
@@ -133,7 +147,7 @@ class FakeEdge:
                 if c.HasField("all_trajectory") and self._mode() == pb.CONTROL_MODE_MOVE:
                     # The joints reach a trajectory's targets at once: tracking is perfect.
                     del self.state.joint_pos[:]
-                    self.state.joint_pos.extend(c.all_trajectory.positions)
+                    self.state.joint_pos.extend(ankle_coupling(list(c.all_trajectory.positions)))
             elif c.mode == pb.CONTROL_MODE_STAND:
                 self._enter(pb.CONTROL_MODE_STAND)
             elif c.mode == pb.CONTROL_MODE_DAMP:
@@ -281,7 +295,7 @@ class FakeLiveKitClient:
 
     This is why no unit test needs livekit installed, or a server running: the SDK's only
     ``livekit`` imports live behind this seam, so faking the seam exercises everything
-    above it — the topics, the wire bytes, the capability honesty, the media plumbing.
+    above it: the topics, the wire bytes, the capability honesty, the media plumbing.
 
     ``carry_state=False`` is the hybrid lane's shape: media only, because control and state
     are on the UDP transport beside it.
@@ -562,5 +576,5 @@ def live_host() -> str:
     """A real robot, named by MENLO_SDK_LIVE_HOST. Skips LOUDLY otherwise."""
     host = os.environ.get("MENLO_SDK_LIVE_HOST")
     if not host:
-        pytest.skip("MENLO_SDK_LIVE_HOST not set — no live robot to drive")
+        pytest.skip("MENLO_SDK_LIVE_HOST not set: no live robot to drive")
     return host

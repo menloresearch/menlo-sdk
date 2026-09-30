@@ -1,6 +1,8 @@
-"""Record 3 s of robot state to a JSON-lines file, then read it back and summarise it.
+"""Record a few seconds of robot state to a JSON-lines file, then read it back.
 
-Sends nothing. Connection mode: the saved robot's. Run: python examples/10_record_and_replay.py
+Sends nothing. Connects to the saved robot (`menlo setup`), or to the robot the MENLO_*
+environment variables describe.
+Run: python examples/record_and_replay.py
 """
 
 import time
@@ -10,14 +12,15 @@ from menlo.asimov import Robot
 from menlo.asimov.recording import load
 
 PATH = "run.jsonl"
+SECONDS = 3.0
 
-# region record
+# region main
+# Every state sample and every command sent while the block runs goes to PATH.
 with Robot().connect() as robot, robot.record(PATH) as recording:
-    time.sleep(3.0)
+    time.sleep(SECONDS)
 print(f"recorded {recording.samples} states and {recording.commands_written} commands")
-# endregion
 
-# region replay
+# Each line is one JSON object; "kind" says whether it is a state or a command.
 lines = list(load(PATH))
 states = [line for line in lines if line["kind"] == "state"]
 print("robot modes seen:", dict(Counter(s["mode"] for s in states)))

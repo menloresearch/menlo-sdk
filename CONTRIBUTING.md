@@ -5,7 +5,7 @@ This SDK is small on purpose; changes that keep it small are welcome.
 - Read `AGENTS.md` first: it states the rules (wire verbs, no guessing, tests that fail
   without the fix).
 - `make sync && make check` must pass: ruff, mypy `--strict`, and the unit suite, which
-  runs against a simulated edge and needs no robot.
+  runs against the test suite's stand-in for the robot and needs no robot.
 - Every behavioural change ships a test that fails on the previous code. If you change the
   wire, update `tests/conftest.py` and run `make integration` against the real connector.
 - Public API changes go in `CHANGELOG.md` under the unreleased version. Cutting a release

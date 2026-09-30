@@ -3,6 +3,50 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Changed
+- The package description is "Python SDK for Menlo robots: Asimov 1." The README is shorter:
+  installation, a quickstart in plain Python, the examples, safety, connection modes, and the
+  command line near the end.
+- New examples, one purpose each, with settings as constants at the top of the file and no
+  command-line arguments: `check.py`, `connect.py`, `read_state.py`, `stand.py`, `walk.py`,
+  `damp.py`, `keyboard.py`, `move_joints.py`, `camera_and_audio.py` and
+  `record_and_replay.py`. Every script that moves the robot runs `require_ready()` from
+  `check.py` first. `keyboard.py` drives in short bounded holds that stop when you let go.
+- `livekit_raw/` replaces the single raw LiveKit example: a shared `manager_token.py`, and
+  `send_commands.py`, `read_state.py`, `camera.py` and `audio.py`.
+- `apps/follow_the_ball.py` and `apps/agent_room.py` move nothing until you press g; space
+  pauses, b damps after asking, x quits.
+
+- `walk.py` walks at 0.3 m/s; `keyboard.py` drives at 0.3 m/s forward and sideways and turns
+  at 0.6 rad/s. `move_joints.py` uses `goto()`'s own 0.05 rad tolerance.
+- `Preflight` reads "not ready to run a trajectory" for the `"trajectory"` action, and so do
+  the `NotReadyError` messages.
+- With a latched fault, `preflight("move")` and `preflight("trajectory")` report `faulted`
+  alone, without `wrong_mode` telling you to stand: standing does not clear a latch.
+- `menlo damp` says the robot must be supported, and names both emergency stops: the E-Stop in
+  Asimov Manager, or cutting power at the battery unit.
+- A connect that hears no state says that Asimov Edge also sends none while the robot's
+  firmware is not reporting.
+
+### Fixed
+- `trajectory()` and `goto()` on the biped moved both ankles when asked to hold them. The
+  state reports each ankle as its two motors (A, B), but the firmware reads a trajectory's
+  ankle entries as the ankle's pitch and roll. The SDK now sends the pitch and roll that put
+  the motors where you asked, so a trajectory of a reported pose within the firmware's ankle
+  limits holds the robot still, and `goto()` reaches its target instead of timing out.
+- `trajectory()` and `goto()` raise `ValueError` for a biped ankle target more than 0.02 rad
+  past the firmware's ankle limits (pitch 0.35 rad, roll 0.1 rad), before anything is sent.
+  The firmware would clamp such a target, so the ankle would not go where it was sent.
+- `close()` on livekit and hybrid stopped its event loop without waiting for the camera,
+  microphone and state readers, so a stream still closing was left open. It now waits, up to
+  2 s, for them to close their streams. Command packets already queued, such as the zero
+  velocity `close()` sends, are delivered before the SDK leaves the room.
+
+### Removed
+- The numbered examples `01_connect_udp.py` to `11_raw_livekit.py`.
+
 ## 0.1.0rc6 — 2026-09-30
 
 ### Added

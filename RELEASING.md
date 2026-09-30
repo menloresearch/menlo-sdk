@@ -93,9 +93,9 @@ completed and a published one is checked against `SHA256SUMS`.
 - the **`pypi` environment**: one required reviewer before anything reaches PyPI;
 - **tag rules**: tags cannot be moved or deleted, and only the mirror creates `v*` tags here.
 
-A fix for a release that `main` has moved past is not supported yet (the ancestry check
-refuses it). If that day comes, cut `release/v0.2` from the release commit, cherry-pick, and
-extend the ancestry check and the mirror to that branch.
+The release workflow refuses a fix for a release that `main` has moved past: the ancestry
+check stops it. Such a fix needs a `release/v0.2` branch cut from the release commit, the fix
+cherry-picked onto it, and the ancestry check and the mirror extended to that branch.
 
 ## What a release must satisfy
 

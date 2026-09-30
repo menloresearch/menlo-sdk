@@ -1,7 +1,7 @@
 [project]
 name = "menlo-sdk"
 dynamic = ["version"]
-description = "Python SDK for Asimov robots: walking, joint control, robot state, camera and audio over UDP or LiveKit."
+description = "Python SDK for Menlo robots: Asimov 1."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -95,11 +95,20 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 files = ["src/menlo", "examples"]
+# Examples are scripts, not a package: examples/read_state.py and livekit_raw/read_state.py
+# are two modules, named from these roots (read_state, livekit_raw.read_state).
+mypy_path = ["src", "examples"]
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = ["asimov_protocol.*", "numpy", "livekit.*", "cv2", "PIL.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
+
+# The livekit_raw scripts import their neighbour by its script name, as Python runs them.
+[[tool.mypy.overrides]]
+module = ["manager_token"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

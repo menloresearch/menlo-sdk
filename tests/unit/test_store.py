@@ -1,5 +1,5 @@
 """The credential store and the zero-config lookup: Robot().connect() finds the robot in the
-environment or in ~/.menlo/robots.toml, and connect(persist=True) puts it there — after a
+environment or in ~/.menlo/robots.toml, and connect(persist=True) puts it there after a
 connect that worked, never before."""
 
 from __future__ import annotations

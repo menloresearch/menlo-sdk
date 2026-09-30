@@ -5,8 +5,8 @@ JWT, so two participants in one room need two tokens; joining twice with the sam
 the server see a duplicate identity and disconnect the first. These tests put the SDK and a
 stand-in for the robot's edge in the same room, so:
 
-* ``MENLO_SDK_LIVEKIT_TOKEN``      — the SDK's, identity ``sdk``
-* ``MENLO_SDK_LIVEKIT_EDGE_TOKEN`` — the stand-in edge's, identity ``fake-edge``
+* ``MENLO_SDK_LIVEKIT_TOKEN``: the SDK's, identity ``sdk``
+* ``MENLO_SDK_LIVEKIT_EDGE_TOKEN``: the stand-in edge's, identity ``fake-edge``
 
 Run with ``make livekit`` after starting a server::
 
@@ -21,7 +21,7 @@ Run with ``make livekit`` after starting a server::
     MENLO_SDK_LIVEKIT_EDGE_TOKEN=<the fake-edge one> uv run pytest -m livekit
 
 These tests skip LOUDLY and cleanly when livekit is not installed, or no server or token
-is named. The SDK mints no token — it has no API secret — so the tokens come from the
+is named. The SDK mints no token (it has no API secret), so the tokens come from the
 environment exactly as they come from the robot's manager in production.
 """
 
@@ -42,7 +42,7 @@ from menlo.asimov.transport.livekit import LiveKitTransport
 
 pytestmark = pytest.mark.livekit
 
-#: A LiveKit join grant is scoped to ONE room, so every test here uses the same one — the
+#: A LiveKit join grant is scoped to ONE room, so every test here uses the same one: the
 #: room the two tokens were minted for. Override with MENLO_SDK_LIVEKIT_ROOM.
 ROOM = os.environ.get("MENLO_SDK_LIVEKIT_ROOM", "menlo-sdk-it")
 
@@ -52,7 +52,7 @@ def livekit_url() -> str:
     pytest.importorskip("livekit.rtc", reason="livekit is not installed")
     url = os.environ.get("MENLO_SDK_LIVEKIT_URL")
     if not url:
-        pytest.skip("MENLO_SDK_LIVEKIT_URL not set — no LiveKit server to join")
+        pytest.skip("MENLO_SDK_LIVEKIT_URL not set: no LiveKit server to join")
     return url
 
 
@@ -60,7 +60,7 @@ def livekit_url() -> str:
 def token() -> str:
     tok = os.environ.get("MENLO_SDK_LIVEKIT_TOKEN")
     if not tok:
-        pytest.skip("MENLO_SDK_LIVEKIT_TOKEN not set — the SDK never mints its own token")
+        pytest.skip("MENLO_SDK_LIVEKIT_TOKEN not set: the SDK never mints its own token")
     return tok
 
 
@@ -71,7 +71,7 @@ def edge_token() -> str:
     tok = os.environ.get("MENLO_SDK_LIVEKIT_EDGE_TOKEN")
     if not tok:
         pytest.skip(
-            "MENLO_SDK_LIVEKIT_EDGE_TOKEN not set — the stand-in edge needs its own "
+            "MENLO_SDK_LIVEKIT_EDGE_TOKEN not set: the stand-in edge needs its own "
             "token (an identity is a claim inside the JWT, so one token is one participant)"
         )
     return tok
@@ -134,7 +134,7 @@ def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token, e
 
 
 def test_connecting_on_livekit_reports_a_room_that_has_no_robot_in_it(livekit_url, token):
-    """A room the SDK can join but no edge answers in is a ConnectError naming the topic —
+    """A room the SDK can join but no edge answers in is a ConnectError naming the topic,
     never a Robot that looks connected."""
     with pytest.raises(ConnectError) as info:
         Robot(ConnectionConfig(livekit=LiveKitConfig(livekit_url, ROOM, token))).connect(

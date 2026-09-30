@@ -198,7 +198,7 @@ def lk_client(monkeypatch):
 
 def test_close_from_the_loop_thread_still_sends_the_zero_and_leaves_the_room(lk_client):
     """What Robot.close() does from an on_state callback on the livekit lane: queue the
-    safety zero, then close the client — on the client's own loop thread."""
+    safety zero, then close the client, on the client's own loop thread."""
     loop, thread = lk_client._loop, lk_client._thread
     assert loop is not None and thread is not None and thread.is_alive()
     took: list[float] = []
