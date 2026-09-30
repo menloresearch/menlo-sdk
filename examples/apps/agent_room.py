@@ -2,7 +2,8 @@
 
 The robot publishes its camera and microphone as ordinary LiveKit tracks, so an agent
 framework in the same room sees and hears it directly; the SDK joins as one more participant
-to drive. Connection mode: livekit. Run: python examples/apps/agent_room.py
+to drive. walk() moves the robot: it must be on its feet with clear floor around it, and the
+Asimov Manager E-Stop open. Connection mode: livekit. Run: python examples/apps/agent_room.py
 """
 
 from __future__ import annotations

@@ -49,7 +49,7 @@ Behaviours worth knowing before the first script:
   balancing in place. STAND is a different thing: it stiffens every joint to a fixed
   pose and runs **no balance loop**, so a free-standing biped asked to stiffen after
   walking tips over. ``stand()`` is for waking a robot up (DAMP -> STAND -> MOVE), or for
-  one that is held, craned or on its stand, never for finishing a walk.
+  one hanging from its gantry hook or seated on a bench, never for finishing a walk.
 * **Your own setpoint loop owns the robot; ``goto()`` does not.** The firmware obeys
   whichever command arrived last. A ``goto()`` is fenced: any verb from any thread
   (``damp()``, ``stand()``, a velocity) bumps the generation and the goto thread stops
@@ -61,7 +61,7 @@ Behaviours worth knowing before the first script:
   block, including by exception, leaves the robot standing still, not walking.
 * **Nothing here is an emergency stop.** ``damp()`` makes every actuator compliant and a
   standing biped folds; it raises on a dead link like every other verb, and ``close()`` is
-  the one that swallows. Use the robot's physical stop in an emergency.
+  the one that swallows. Use the E-Stop in Asimov Manager in an emergency.
 """
 
 from __future__ import annotations
@@ -754,7 +754,7 @@ class Robot:
 
     def damp(self) -> Sent:
         """Every actuator goes compliant now. A standing or walking biped folds to the
-        ground. A software command, not an emergency stop: use the robot's physical stop
+        ground. A software command, not an emergency stop: use the E-Stop in Asimov Manager
         for that. A fault latched by the firmware keeps the robot in DAMP until the firmware
         restarts."""
         return self._once("damp", ModeCommand("damp"))

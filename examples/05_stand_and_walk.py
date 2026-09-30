@@ -1,6 +1,6 @@
 """Stand the robot up if it is in DAMP, walk forward at 0.2 m/s for 3 s, and stop.
 
-The robot must be on its feet, held or on its stand, with 1 m of clear floor ahead.
+The robot must be on its feet, hanging from its gantry hook, with 1 m of clear floor ahead.
 Connection mode: the saved robot's. Run: python examples/05_stand_and_walk.py
 """
 

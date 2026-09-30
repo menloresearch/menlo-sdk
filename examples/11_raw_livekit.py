@@ -87,7 +87,7 @@ def why_not_stand(latest: list[Any]) -> str | None:
         if b.soc_percent < BATTERY_LOW_PERCENT:
             return f"the battery is at {b.soc_percent:.0f} %"
     if any(t >= JOINT_HOT_C for t in state.joint_temp):
-        return f"an actuator is at {max(state.joint_temp):.0f} C"
+        return f"an actuator is at {max(state.joint_temp):.0f} °C"
     if state.current_mode != asimov_common_pb2.CONTROL_MODE_DAMP:
         return "the robot is not in DAMP"
     return None

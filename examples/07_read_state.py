@@ -24,7 +24,7 @@ with Robot().connect() as robot:
     for _ in range(10):
         s = robot.state
         temps = [(j.temp, j.name) for j in s.joints if j.temp is not None]
-        hottest = "{1} {0:.0f} C".format(*max(temps)) if temps else "not reported"
+        hottest = "{1} {0:.0f} °C".format(*max(temps)) if temps else "not reported"
         battery = f"{s.battery.soc_percent:.0f} %" if s.battery else "not reported"
         print(
             f"{s.mode.name:5}  armed {robot.armed}  upright {s.upright}  "

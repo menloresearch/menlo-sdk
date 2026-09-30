@@ -376,7 +376,7 @@ def damp(args: argparse.Namespace) -> int:
     with connected(args) as robot:
         doing = (
             "damp: every actuator goes limp and a standing robot folds. "
-            "Not an emergency stop; use the robot's physical stop for that."
+            "Not an emergency stop; use the E-Stop in Asimov Manager for that."
         )
         if not go_ahead(args, robot, doing):
             return EXIT_CANCELLED

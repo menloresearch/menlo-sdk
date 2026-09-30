@@ -153,7 +153,7 @@ send anything:
 ```text
 lab (udp, 192.168.22.32) · DAMP · battery 82 % → stand, then wait until armed
 lab (hybrid, 192.168.22.32) · STAND, armed · battery 82 % → walk vx 0.20 m/s, vy 0.00 m/s, vyaw 0.00 rad/s for 3.0 s, then stop
-lab (udp, 192.168.22.32) · MOVE · battery 82 % → damp: every actuator goes limp and a standing robot folds. Not an emergency stop; use the robot's physical stop for that.
+lab (udp, 192.168.22.32) · MOVE · battery 82 % → damp: every actuator goes limp and a standing robot folds. Not an emergency stop; use the E-Stop in Asimov Manager for that.
 ```
 
 A speed above the limits shows the value that is sent, then the one asked for:
@@ -344,7 +344,7 @@ after `stand()` and before the first `set_velocity`. See
 
 ## Safety model
 
-- **Nothing in the SDK is an emergency stop.** Use the robot's physical stop.
+- **Nothing in the SDK is an emergency stop.** Use the E-Stop in Asimov Manager, or cut power at the battery unit.
 - **Velocity limits.** The Motion Control Board firmware caps velocity at 0.4 m/s forward
   and sideways and 0.8 rad/s turning. `Limits()` defaults to those caps, so `Sent.clamped`
   is true exactly when the robot would not walk at the speed asked for. Set lower limits

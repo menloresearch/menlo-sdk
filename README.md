@@ -97,7 +97,7 @@ Read the [safety page](https://docs.menlo.ai/asimov/1/program/sdk/safety) before
 - The robot enters MOVE from STAND only once it is armed: STAND held upright for 0.5 s. A velocity sent earlier leaves the robot in STAND and nothing reports it. Call `wait_ready("move")` between `stand()` and the first `set_velocity()`.
 - A critical alert (a fall, actuator over-temperature, battery protection, a joint limit, lost actuator communication, a watchdog) latches DAMP until the firmware restarts. `preflight()` reports `faulted`, `wait_ready()` raises `NotReadyError` with the code `faulted`, `wait_for()` and `wait_until()` raise `RobotFaultedError`, and nothing a script sends clears it.
 - The SDK re-sends a held velocity at 10 Hz and sends zero velocity on `stop()`, and on `close()`, the end of a `with` block or a lost link while it holds a velocity. On udp and hybrid, Asimov Edge zeroes velocity 2 s after the last command it received; the robot stays in MOVE, balancing. A trajectory not re-sent for 2 s puts the robot in DAMP.
-- Nothing in the SDK is an emergency stop. `damp()` makes every actuator compliant and a standing robot folds. For the physical stop, see [Stopping the robot](https://docs.menlo.ai/asimov/1/operate/safety/stopping).
+- Nothing in the SDK is an emergency stop. `damp()` makes every actuator compliant and a standing robot folds. For the E-Stop and cutting power, see [Stopping the robot](https://docs.menlo.ai/asimov/1/operate/safety/stopping).
 
 ## Examples
 

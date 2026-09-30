@@ -213,7 +213,7 @@ def test_07_read_state_prints_and_sends_nothing(run, fw_edge):
     out = run("07_read_state.py")
     lines = [line for line in out.splitlines() if line.startswith("DAMP")]
     assert len(lines) == 10
-    assert "hottest joint Neck_Yaw 41 C" in lines[0] and "battery not reported" in lines[0]
+    assert "hottest joint Neck_Yaw 41 °C" in lines[0] and "battery not reported" in lines[0]
     assert fw_edge.received == []
 
 

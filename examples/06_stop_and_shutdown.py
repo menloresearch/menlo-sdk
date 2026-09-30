@@ -1,7 +1,8 @@
 """Turn in place, end the turn early with stop(), and with --damp finish in DAMP.
 
-stop() ends a walk: the robot stays in MOVE and balances. Pass --damp only with the robot
-supported (held, craned or on its stand). Connection mode: the saved robot's.
+The robot must be on its feet with clear floor around it for the turn. stop() ends a walk:
+the robot stays in MOVE and balances. Pass --damp only with the robot supported (hanging
+from its gantry hook or seated on a bench). Connection mode: the saved robot's.
 Run: python examples/06_stop_and_shutdown.py [--damp]
 """
 
@@ -31,7 +32,7 @@ with Robot().connect() as robot:
     # region shutdown
     if args.damp:
         # DAMP makes every actuator compliant: a standing robot folds to the ground.
-        # It is not an emergency stop; use the robot's physical stop for that.
+        # It is not an emergency stop; use the E-Stop in Asimov Manager for that.
         robot.damp()
         robot.wait_for(Mode.DAMP)
     # endregion

@@ -1,7 +1,7 @@
 """Turn the head 0.3 rad to the left and back with goto(), then damp.
 
-The robot must be supported (held, craned or on its stand): joint control turns the walking
-policy off, so nothing balances it, and the example ends in DAMP.
+The robot must be supported (hanging from its gantry hook or seated on a bench): joint
+control turns the walking policy off, so nothing balances it, and the example ends in DAMP.
 Run: python examples/08_move_joints.py --supported
 """
 
