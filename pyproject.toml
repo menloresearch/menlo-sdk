@@ -1,7 +1,7 @@
 [project]
 name = "menlo-sdk"
 dynamic = ["version"]
-description = "Drive an Asimov robot from Python: one Robot, pluggable transports."
+description = "Python SDK for Asimov robots: walking, joint control, robot state, camera and audio over UDP or LiveKit."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -16,30 +16,29 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Typing :: Typed",
 ]
-# Two runtime dependencies. `asimov-protocol` is the generated asimov.io bindings, from
-# PyPI: its MAJOR tracks the wire directory (v1/) the SDK speaks, hence `<2`; its MINOR
-# is an additive schema change, hence the floor at the line the edge runs. The floor
-# names the rc explicitly while that is all PyPI has: pip and uv refuse a pre-release
-# for a plain `>=1.2` floor, and accept it when the specifier itself spells one. Tighten
-# to `>=1.2.1` once the final is out. `protobuf`'s floor matches the gencode's
-# ValidateProtobufRuntimeVersion (plugin v29.3).
+# `asimov-protocol` is the generated asimov.io bindings, from PyPI: its MAJOR tracks the
+# wire directory (v1/) the SDK speaks, hence `<2`; its MINOR is an additive schema change,
+# hence the floor at the line Asimov Edge runs. The floor names a pre-release on purpose:
+# pip and uv skip pre-releases for a plain `>=1.2` floor, and accept them when the
+# specifier itself spells one. `protobuf`'s floor matches the gencode's
+# ValidateProtobufRuntimeVersion (plugin v29.3). `livekit` carries the hybrid and livekit
+# connection modes (1.1.4 is the first release with data tracks, the state carrier); `questionary` and `rich` are the
+# `menlo` command line. All three are imported lazily: `import menlo.asimov` and
+# `connect("udp")` load none of them.
 dependencies = [
     "asimov-protocol>=1.2.1rc1,<2",
     "protobuf>=5.29.3",
+    "livekit>=1.1.4,<2",
+    "questionary>=2.0,<3",
+    "rich>=13.7",
 ]
-
-# The media lane is an EXTRA on purpose: `pip install menlo-sdk` with no extra drives a
-# robot over UDP, and every `livekit` import in the SDK is lazy and lives in one module
-# (src/menlo/asimov/transport/_livekit_client.py).
-[project.optional-dependencies]
-livekit = ["livekit>=1.1.4,<2"]  # 1.1.4: first release with data tracks (the state carrier)
 
 [project.scripts]
 menlo = "menlo.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/menloresearch/menlo-sdk"
-Documentation = "https://github.com/menloresearch/menlo-sdk/blob/main/docs/REFERENCE.md"
+Documentation = "https://docs.menlo.ai/asimov/1/program/sdk"
 Repository = "https://github.com/menloresearch/menlo-sdk"
 Issues = "https://github.com/menloresearch/menlo-sdk/issues"
 Changelog = "https://github.com/menloresearch/menlo-sdk/blob/main/CHANGELOG.md"
@@ -95,7 +94,7 @@ ignore = [
 python_version = "3.12"
 strict = true
 warn_unreachable = true
-files = ["src/menlo"]
+files = ["src/menlo", "examples"]
 
 [[tool.mypy.overrides]]
 module = ["asimov_protocol.*", "numpy", "livekit.*", "cv2", "PIL.*"]
@@ -107,6 +106,6 @@ testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider --timeout=60"
 markers = [
     "integration: needs an asimov-edge checkout (ASIMOV_EDGE_SRC); drives the real UdpConnector in-process",
-    "live: needs a running robot or studio rig (MENLO_SDK_LIVE_HOST)",
-    "livekit: needs the livekit extra and a LiveKit server (`livekit-server --dev`, or MENLO_SDK_LIVEKIT_URL)",
+    "live: needs a running robot (MENLO_SDK_LIVE_HOST)",
+    "livekit: needs a LiveKit server (`livekit-server --dev`, or MENLO_SDK_LIVEKIT_URL)",
 ]

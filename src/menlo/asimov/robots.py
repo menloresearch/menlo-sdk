@@ -1,9 +1,9 @@
 """Per-robot facts the wire does not carry.
 
-The SDK cannot ask a robot for its
-joint names. Until it can, the tables here fill in what a 25-DOF ``RobotState`` means.
-Every table names its source; if that source moves, the table is wrong and must move
-with it — do not "fix" a name here without re-reading the firmware profile.
+The SDK cannot ask a robot for its joint names, so the tables here say what a 25-DOF
+``RobotState`` means. Every table names its source; if that source moves, the table is
+wrong and must move with it. Do not "fix" a name here without re-reading the firmware
+profile.
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ PROTOCOL_VERSION = 1
 def joint_names_for(dof: int) -> tuple[str, ...] | None:
     """Best-known joint names for a body with ``dof`` motors, or ``None``.
 
-    Only the biped is known. A 6-motor arm gets ``None`` — joints are then addressed by
-    index and ``State.joint(name)`` raises — which is better than a wrong name.
+    Only the biped is known. A 6-motor arm gets ``None``: joints are then addressed by
+    index and ``State.joint(name)`` raises, which is better than a wrong name.
     """
     if dof == len(ASIMOV_1_BIPED_JOINTS):
         return ASIMOV_1_BIPED_JOINTS

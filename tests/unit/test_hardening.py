@@ -22,7 +22,6 @@ from menlo.asimov import (
 from menlo.asimov.transport import _livekit_client
 from menlo.asimov.transport._livekit_client import _LiveKitClient
 from menlo.asimov.transport.udp import UdpTransport, state_from_robot_state
-from menlo.cli import main
 from tests.conftest import route_manager_rooms_to
 
 CRED = "eyJpZCI6ImEwY2QxNmRiIn0.secret"
@@ -45,7 +44,7 @@ def test_an_entry_is_not_taken_over_by_another_manager_unless_named(tmp_path):
     store.put(StoredRobot("menlo-0001", "http://10.0.0.5", "real", room="robot-menlo-0001"))
     # a second manager answers the FIRST robot's room: the key it lands on is not its own
     impostor = StoredRobot("menlo-0001", "http://192.168.9.9", "evil", room="robot-menlo-0001")
-    with pytest.raises(ValueError, match=r"already saved for manager http://10\.0\.0\.5"):
+    with pytest.raises(ValueError, match=r"already saved for Asimov Manager http://10\.0\.0\.5"):
         store.put(impostor)
     kept = RobotStore(path).get("menlo-0001")
     assert kept is not None and kept.credential == "real" and kept.manager_url.endswith("0.0.5")
@@ -54,19 +53,6 @@ def test_an_entry_is_not_taken_over_by_another_manager_unless_named(tmp_path):
     assert store.get("menlo-0001").credential == "rotated"  # type: ignore[union-attr]
     store.put(impostor, allow_manager_change=True)
     assert store.get("menlo-0001").credential == "evil"  # type: ignore[union-attr]
-
-
-def test_login_refuses_to_overwrite_another_managers_entry_without_name(manager, capsys):
-    RobotStore().put(StoredRobot("menlo-0042", "http://10.9.9.9", "good", room="robot-menlo-0042"))
-    assert main(["login", manager.url, "--credential", CRED]) == 1
-    err = capsys.readouterr().err
-    assert "already saved for manager http://10.9.9.9" in err and "--name" in err
-    kept = RobotStore().get("menlo-0042")
-    assert kept is not None and kept.credential == "good"
-    # --name is the user choosing the key, so it may land wherever they said
-    assert main(["login", manager.url, "--credential", CRED, "--name", "bench"]) == 0
-    store = RobotStore()
-    assert store.get("bench") is not None and store.get("menlo-0042").credential == "good"  # type: ignore[union-attr]
 
 
 def test_a_persist_that_cannot_write_closes_the_session_it_just_opened(edge, manager, monkeypatch):

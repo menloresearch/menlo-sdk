@@ -3,8 +3,8 @@
 Two rules, both load-bearing for callers:
 
 * ``except MenloError`` catches everything that is about the ROBOT or the LINK. Caller
-  bugs stay builtins — a non-finite velocity is a ``ValueError``, an unknown joint name a
-  ``KeyError`` — because those are programming errors, not robot conditions, and the
+  bugs stay builtins (a non-finite velocity is a ``ValueError``, an unknown joint name a
+  ``KeyError``) because those are programming errors, not robot conditions, and the
   standard library already has the right names for them.
 * A command is never refused synchronously. Refusals arrive as outcomes (see
   :mod:`menlo.asimov._outcome`) and only become exceptions when the caller asks
@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from menlo.asimov._outcome import Refused, Unknown
+    from menlo.asimov._preflight import Preflight
     from menlo.asimov._state import State
 
 
@@ -61,10 +62,9 @@ class LinkLostError(MenloError):
     """The robot stopped talking (no state for ``link_timeout`` seconds).
 
     The session is over: every verb and wait on this ``Robot`` raises this error until the
-    caller reconnects with ``close()`` followed by ``open()``, which starts a clean session.
-    There is no automatic reconnect — the SDK sent a zero velocity when it declared the link
-    lost,
-    and whether to try again is the caller's decision.
+    caller reconnects with ``close()`` followed by ``connect()`` (or ``open()``), which starts
+    a clean session. There is no automatic reconnect: the SDK sent a zero velocity when it
+    declared the link lost, and whether to try again is the caller's decision.
     """
 
 
@@ -87,11 +87,21 @@ class StateStaleError(WaitTimeoutError):
 
 class RobotFaultedError(MenloError):
     """The firmware fault-DAMPed (a fall, a critical alert) while a wait was in progress.
-    Fault authority outranks every client; retrying the same command will not help."""
+    The latch holds until the firmware restarts; retrying the same command will not help."""
 
     def __init__(self, message: str, *, state: State) -> None:
         super().__init__(message)
         self.state = state
+
+
+class NotReadyError(MenloError):
+    """``robot.wait_ready(action)`` gave up: the timeout passed, or a blocking problem that
+    waiting cannot clear (``faulted``, ``not_connected``) was reported. ``preflight`` is the
+    last check, with every problem it found."""
+
+    def __init__(self, message: str, *, preflight: Preflight) -> None:
+        super().__init__(message)
+        self.preflight = preflight
 
 
 # ── outcomes, when the caller asks for exceptions ────────────────────────────

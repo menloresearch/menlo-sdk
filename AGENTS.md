@@ -1,4 +1,4 @@
-# AGENTS.md — how to work in menlo-sdk
+# AGENTS.md: how to work in menlo-sdk
 
 Read this before changing anything. It is short on purpose.
 
@@ -12,7 +12,7 @@ robot: everything that speaks the Asimov wire lives in `menlo.asimov`; the top l
 
 ## Rules
 
-- **Verbs are the wire's verbs.** `set_velocity`, `stand`, `damp`, `stop`, `trajectory` —
+- **Verbs are the wire's verbs.** `set_velocity`, `stand`, `damp`, `stop`, `trajectory`:
   the names the edge, the protocol and the robot's other controllers already use. Do not
   invent synonyms.
 - **No synchronous refusal.** A command returns a `Sent`; the verdict arrives as an
@@ -35,12 +35,13 @@ robot: everything that speaks the Asimov wire lives in `menlo.asimov`; the top l
 
 ## Dependencies
 
-Runtime core: `asimov-protocol` and `protobuf` only — `pip install menlo-sdk` with no extra
-must drive a robot (the UDP lane). The media lane adds one extra, `[livekit]`, and every
-`livekit` import in the SDK is lazy and lives in `transport/_livekit_client.py`; nothing
-else may import it, and `robot.connect("udp")` must never reach it. Optional at call time,
-never at import time: numpy, Pillow and OpenCV are named in an error, never depended on.
+Runtime: `asimov-protocol`, `protobuf`, `livekit`, `questionary`, `rich`; there are no
+extras, so `pip install menlo-sdk` drives every connection mode and runs the `menlo`
+command line. Imports stay lazy: every `livekit` import lives in
+`transport/_livekit_client.py` and nothing else may import it; `questionary` and `rich`
+are imported only by `menlo.cli`; `import menlo.asimov` and `robot.connect("udp")` load
+none of the three (`tests/unit/test_imports.py`). Optional at call time, never at import
+time: numpy, Pillow and OpenCV are named in an error, never depended on.
 
-Dev: ruff, mypy (strict), pytest. Simulator for live tests:
-`menlo-studio up --container --sdk`. A LiveKit server for `make livekit`:
-`livekit-server --dev`.
+Dev: ruff, mypy (strict), pytest. Live tests need a robot (`MENLO_SDK_LIVE_HOST`). A LiveKit
+server for `make livekit`: `livekit-server --dev`.

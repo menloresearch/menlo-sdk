@@ -68,7 +68,7 @@ def test_connect_refuses_when_nobody_answers():
     """A UDP socket that hears nothing is talking to nobody. Say so, and say the fix."""
     with pytest.raises(ConnectError) as exc:
         connect_udp("127.0.0.1", command_port=1, state_bind=("127.0.0.1", 0), timeout=0.3)
-    assert "--udp-control" in str(exc.value)
+    assert "udp-control" in str(exc.value)
 
 
 def test_connect_refuses_a_protocol_version_it_was_not_built_for(edge):
@@ -118,9 +118,9 @@ def test_set_velocity_is_held_at_the_keepalive_rate(edge, robot):
 def test_velocity_is_clamped_and_the_clamp_is_visible(edge, robot):
     sent = robot.set_velocity(vx=20.0, vyaw=-99.0)
     assert sent.clamped is True
-    assert sent.command == Velocity(0.6, 0.0, -1.5)
+    assert sent.command == Velocity(0.4, 0.0, -0.8)
     assert edge.wait_for(lambda r: any(c.HasField("policy") for c in r))
-    assert edge.velocities()[-1] == (0.6, 0.0, -1.5)
+    assert edge.velocities()[-1] == (0.4, 0.0, -0.8)
     assert robot.set_velocity(vx=0.1).clamped is False
 
 

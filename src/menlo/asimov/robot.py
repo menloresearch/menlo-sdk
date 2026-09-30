@@ -2,36 +2,42 @@
 
 ::
 
-    from menlo.asimov import ConnectionConfig, Mode, Robot, UdpConfig
+    from menlo.asimov import Mode, Robot
 
-    cfg = ConnectionConfig(udp=UdpConfig("asimov.local"))
-    with Robot(cfg).connect("udp") as robot:
+    with Robot().connect() as robot:               # the saved default robot
         if robot.state.mode is Mode.DAMP:          # STAND is the wake-up verb only
+            robot.wait_ready("stand")              # fresh state, no fault, battery ok
             robot.stand()
-            robot.wait_for(Mode.STAND, timeout=8.0)
-        robot.set_velocity(vx=0.25, duration=4.0)   # held for 4 s, then zero
-        robot.wait_for(Mode.MOVE)
-        # Leaving the block zeroes the velocity, as the hold ending would. Either way the
-        # robot stays in MOVE at zero velocity, where the walking policy keeps balancing
-        # it — that IS how a free-standing biped stands still. Do not ask for STAND here:
-        # STAND stiffens to a fixed pose with no balance loop, and a robot nothing is
-        # holding tips over.
+            robot.wait_for(Mode.STAND)
+        robot.wait_ready("move")                   # STAND held upright for 0.5 s: armed
+        robot.set_velocity(vx=0.25, duration=4.0, wait=True)
+        robot.stop()
+        # The robot stays in MOVE at zero velocity, where the walking policy keeps
+        # balancing it: that is how a free-standing biped stands still. Do not ask for
+        # STAND here: STAND stiffens to a fixed pose with no balance loop, and a robot
+        # nothing is holding tips over.
 
-The verbs are the wire's verbs — ``set_velocity``, ``stand``, ``damp``, ``stop``,
-``trajectory`` — and every one returns immediately with a :class:`~menlo.asimov.Sent`.
+The verbs are the wire's verbs (``set_velocity``, ``stand``, ``damp``, ``stop``,
+``trajectory``) and every one returns immediately with a :class:`~menlo.asimov.Sent`.
 Two questions are kept apart on purpose:
 
-* **Was it admitted?** ``sent.wait_outcome()`` — the arbiter's verdict, when the edge
-  reports one (today: ``Unknown``; see :mod:`menlo.asimov._outcome`).
-* **Did it take effect?** ``robot.wait_for(Mode.STAND)`` / ``robot.wait_until(pred)`` —
-  read from the robot's own state stream, never inferred from what we sent.
+* **Was it admitted?** ``sent.wait_outcome()``. Asimov Edge reports no per-command verdict
+  on any connection mode, so this is ``Unknown`` (see :mod:`menlo.asimov._outcome`).
+* **Did it take effect?** ``robot.wait_for(Mode.STAND)`` / ``robot.wait_until(pred)``,
+  read from the robot's own state stream, never inferred from what was sent.
 
 Behaviours worth knowing before the first script:
 
+* **Check before you move.** ``robot.preflight(action)`` reads the latest state for a
+  stand, a walk or a trajectory and lists every problem; ``robot.wait_ready(action)``
+  blocks until there is none. The firmware reports STAND at once, but accepts MOVE only
+  once STAND has been held upright for 0.5 s (armed); a velocity sent before that is held
+  in STAND, neither refused nor reported, while a ``duration`` clock runs.
 * **A velocity is held.** ``set_velocity`` latches and a background thread re-sends it
   at 10 Hz, so you can spend most of a second on vision between calls and the robot keeps
-  walking. That thread feeds nothing on the robot; it holds off the edge's own two-second
-  velocity watchdog, which is the real safety net. Pass ``duration=`` to bound the hold.
+  walking. On ``udp`` and ``hybrid``, Asimov Edge zeroes a velocity 2 s after the last
+  one it received; on ``livekit`` it stops a held velocity when the SDK sends zero or
+  leaves the room. Pass ``duration=`` to bound the hold.
 * **``set_velocity`` returns at once, ``duration`` or not.** The hold runs in the
   background; a script that calls the next verb, or reaches the end of its ``with`` block,
   cuts it short. Sleep for the duration, or pass ``wait=True`` to block until the hold
@@ -39,25 +45,23 @@ Behaviours worth knowing before the first script:
 * **Mode commands are one-shot.** STAND and DAMP are events the firmware latches itself;
   repeating them would let a script out-shout an operator's DAMP.
 * **Zero velocity is not STAND, and it is usually what you want.** After ``stop()`` (or a
-  ``duration`` ending) the firmware stays in MOVE with zero velocity — the walking policy,
+  ``duration`` ending) the firmware stays in MOVE with zero velocity: the walking policy,
   balancing in place. STAND is a different thing: it stiffens every joint to a fixed
   pose and runs **no balance loop**, so a free-standing biped asked to stiffen after
   walking tips over. ``stand()`` is for waking a robot up (DAMP -> STAND -> MOVE), or for
-  one that is held, craned or on its stand — never for finishing a walk.
+  one that is held, craned or on its stand, never for finishing a walk.
 * **Your own setpoint loop owns the robot; ``goto()`` does not.** The firmware obeys
-  whichever command arrived last. A ``goto()`` is fenced: any verb from any thread —
-  ``damp()``, ``stand()``, a velocity — bumps the generation and the goto thread stops
+  whichever command arrived last. A ``goto()`` is fenced: any verb from any thread
+  (``damp()``, ``stand()``, a velocity) bumps the generation and the goto thread stops
   before its next setpoint leaves. A loop you clock yourself with ``trajectory()`` is
-  not fenced: a mode verb sent from another thread is overwritten by your next setpoint.
-  Measured: a ``damp()`` fired into a hand-rolled 50 Hz trajectory loop left the robot in
-  MOVE and upright, exactly as if it had never been sent. Stop your loop first, then
-  send the verb. For an emergency, kill the process: the edge DAMPs by itself about two
-  seconds after the last setpoint, and that path does not depend on your loop still
-  working.
+  not fenced: a verb sent from another thread can be overwritten by your next setpoint.
+  Stop your loop first, then send the verb. Asimov Edge DAMPs a trajectory 2 s after the
+  last setpoint, whether or not your loop is still running.
 * **``close()`` zeroes velocity first**, then drops the link, so leaving the ``with``
-  block — including by exception — leaves the robot standing still, not walking.
-* **``damp()`` is the emergency verb.** A standing biped folds. It raises on a dead link
-  like every other verb; ``close()`` is the one that swallows.
+  block, including by exception, leaves the robot standing still, not walking.
+* **Nothing here is an emergency stop.** ``damp()`` makes every actuator compliant and a
+  standing biped folds; it raises on a dead link like every other verb, and ``close()`` is
+  the one that swallows. Use the robot's physical stop in an emergency.
 """
 
 from __future__ import annotations
@@ -80,6 +84,7 @@ from menlo.asimov._errors import (
     LinkLostError,
     MenloError,
     NotConnectedError,
+    NotReadyError,
     ProtocolMismatchError,
     RobotFaultedError,
     StateStaleError,
@@ -88,6 +93,16 @@ from menlo.asimov._errors import (
 )
 from menlo.asimov._media import Camera, Microphone, Speaker
 from menlo.asimov._outcome import Applied, Refused, Sent
+from menlo.asimov._preflight import (
+    ARM_GRAVITY_Z,
+    ARM_HOLD_S,
+    ARM_MAX_GAP_S,
+    PERMANENT,
+    Action,
+    Preflight,
+    Problem,
+)
+from menlo.asimov._preflight import evaluate as _evaluate_preflight
 from menlo.asimov._state import Alert, Capability, Mode, RobotInfo, State
 from menlo.asimov.connection import ConnectionConfig, ConnectMode, ManagerConfig
 from menlo.asimov.recording import Recording
@@ -115,9 +130,11 @@ def _nonnegative_finite(name: str, value: float) -> float:
     return value
 
 
-#: How often a held velocity is re-sent. The edge zeroes velocity 2 s after the last one it
-#: received (the robot then holds MOVE at rest), so 10 Hz leaves a 20-packet margin.
-#: controllers send.
+#: ``"vx,vy,vyaw"``: the velocity clamp for a Robot constructed without ``limits=``.
+ENV_LIMITS = "MENLO_LIMITS"
+
+#: How often a held velocity is re-sent. Asimov Edge zeroes velocity 2 s after the last one
+#: it received (the robot then holds MOVE at rest), so 10 Hz leaves a 20-packet margin.
 KEEPALIVE_HZ = 10.0
 #: Past this much silence the state stream stops counting as an observation.
 DEFAULT_LINK_TIMEOUT_S = 2.0
@@ -127,8 +144,8 @@ ALERT_HOLD_S = 0.3
 #: A goto() refuses to plan from a reported pose older than this.
 GOTO_MAX_POSE_AGE_S = 0.5
 #: A state sample whose sequence is behind the last accepted one by at most this many is
-#: a reordered datagram and is dropped; behind by more, the counter has restarted — the
-#: firmware rebooted under a live link — and the sample is the new stream.
+#: a reordered datagram and is dropped; behind by more, the counter has restarted (the
+#: firmware rebooted under a live link) and the sample is the new stream.
 STATE_REORDER_WINDOW = 1000
 #: A firmware clock that went back by more than this, sequence aside, is also a restart.
 STATE_CLOCK_RESET_S = 1.0
@@ -144,11 +161,16 @@ class Robot:
         limits: Limits | None = None,
         link_timeout: float = DEFAULT_LINK_TIMEOUT_S,
     ) -> None:
-        """Bind a robot to a :class:`ConnectionConfig` (then :meth:`connect` picks the lane),
-        or to an already-constructed transport (then :meth:`open` attaches it — the seam a
+        """Bind a robot to a :class:`ConnectionConfig` (then :meth:`connect` picks the
+        connection mode),
+        or to an already-constructed transport (then :meth:`open` attaches it: the seam a
         new transport plugs into). With no ``source`` the config comes from the environment
         or the credential store (:meth:`ConnectionConfig.from_environment`), so
-        ``Robot().connect()`` is a whole script's setup. Nothing touches the network here."""
+        ``Robot().connect()`` is a whole script's setup. Nothing touches the network here.
+
+        ``limits`` is the velocity clamp; left ``None`` it is ``MENLO_LIMITS``, else the
+        config's (a saved robot's ``[robots.NAME.limits]``), else the firmware caps
+        (:class:`Limits`)."""
         self._config: ConnectionConfig | None
         self._transport: Transport | None
         if source is None:
@@ -157,7 +179,7 @@ class Robot:
             self._config, self._transport = source, None
         else:
             self._config, self._transport = None, source
-        self.limits = limits if limits is not None else Limits()
+        self.limits = self._choose_limits(limits)
         self.link_timeout = _positive_finite("link_timeout", link_timeout)
         self._lock = threading.RLock()
         # `_state` and `_info` are single reference assignments read from several threads
@@ -167,6 +189,10 @@ class Robot:
         self._last_alerts: tuple[Alert, ...] = ()
         self._last_alerts_at = 0.0
         self._state_seen = threading.Event()
+        # Arming, as observed: whether the firmware accepts MOVE (see `armed`). Written on
+        # the reader thread only.
+        self._armed = False
+        self._upright_since: float | None = None
         self._latched: Velocity | None = None
         self._latch_deadline: float | None = None
         self._hold_done: threading.Event | None = None  # set when a bounded hold has ended
@@ -203,6 +229,21 @@ class Robot:
         self.on_controller_change: Callable[[str | None, str | None, str], None] | None = None
         self.on_link_lost: Callable[[LinkLostError], None] | None = None
 
+    def _choose_limits(self, limits: Limits | None) -> Limits:
+        """The argument, else ``MENLO_LIMITS``, else the config's (a saved robot's), else
+        the firmware caps."""
+        if limits is not None:
+            return limits
+        env = os.environ.get(ENV_LIMITS, "").strip()
+        if env:
+            try:
+                return Limits.parse(env)
+            except ValueError as exc:
+                raise ValueError(f"{ENV_LIMITS}: {exc}") from None
+        if self._config is not None and self._config.limits is not None:
+            return self._config.limits
+        return Limits()
+
     # ── the transport, and choosing it ───────────────────────────────────────
     @property
     def _tx(self) -> Transport:
@@ -235,38 +276,41 @@ class Robot:
         require_state: bool = True,
         persist: bool | None = None,
     ) -> Self:
-        """Attach on ``mode`` — ``"udp"``, ``"hybrid"`` (UDP control + LiveKit media) or
-        ``"livekit"`` — using the lanes described by this Robot's :class:`ConnectionConfig`.
-        ``mode`` may be left out when the config has exactly one lane (a manager URL and
-        a credential is one: ``"livekit"``); with several it is a ``ValueError``.
+        """Attach on connection mode ``mode``: ``"udp"``, ``"hybrid"`` (control and state over
+        UDP, camera and audio over LiveKit) or ``"livekit"``, using the connections described
+        by this Robot's :class:`ConnectionConfig`. Left out, it is the config's ``mode`` (a
+        saved robot's, or ``MENLO_MODE``), else the one mode the config allows; with
+        several and none chosen it is a ``ValueError``.
 
         Returns the robot once the first state sample has arrived and its protocol version
         matches, so ``with robot.connect("hybrid"):`` works. Raises :class:`ConnectError`
-        before touching the network when the config lacks a slot the mode needs, and after
-        ``timeout`` seconds of silence otherwise. ``close()`` and call again with another mode
-        to switch lanes on the same Robot: limits, joint table and hooks are kept.
+        before touching the network when the config lacks what the mode needs (naming the
+        field and the command that sets it), and after ``timeout`` seconds of silence
+        otherwise. ``close()`` and call again with another mode to switch connection modes on
+        the same Robot: limits, joint table and hooks are kept.
 
-        ``require_state=False`` returns as soon as the lane is open, without waiting for the
+        ``require_state=False`` returns as soon as the connection is open, without waiting for the
         robot to report: the camera, microphone and speaker work whether or not the
         firmware is running, so a media-only script does not need it to be. Until the first
         state sample arrives ``robot.state`` and ``robot.info`` raise
         :class:`NotConnectedError` and every motion verb refuses with the same error; a
         wait times out. When state does arrive the handshake completes on its own and the
-        session becomes an ordinary one — including :class:`LinkLostError` should that
+        session becomes an ordinary one, including :class:`LinkLostError` should that
         stream then go quiet. Nothing is sent to the robot before then.
 
-        ``persist=True`` (or ``MENLO_PERSIST=1`` in the environment) records the manager URL
-        and credential in ``~/.menlo/robots.toml`` once the connect has SUCCEEDED, keyed by
-        the robot's serial (from its room) and made the default when the store had none, so
-        the next script can be ``Robot().connect()``. ``ValueError`` before any I/O when the
-        config has no :class:`ManagerConfig` to record. See :mod:`menlo.asimov.store`.
+        ``persist=True`` (or ``MENLO_PERSIST=1`` in the environment) saves the connection in
+        ``~/.menlo/robots.toml`` once the connect has SUCCEEDED: the Asimov Manager URL, the
+        credential, the room, the UDP host and the mode, keyed by the saved robot's name or
+        the robot's serial (from its room), and made the default when the store had none,
+        so the next script can be ``Robot().connect()``. ``ValueError`` before any I/O when
+        the config has no :class:`ManagerConfig`. See :mod:`menlo.asimov.store`.
 
-        ``media_timeout`` is how long a LiveKit lane waits for the robot's tracks before
+        ``media_timeout`` is how long a LiveKit connection waits for the robot's tracks before
         deciding what it carries; ``connect_timeout`` bounds the room join itself.
         """
         config = self.config  # a transport-bound Robot has none: that error comes first
         if mode is None:
-            mode = config.only_mode()
+            mode = config.default_mode()
         if persist is None:
             persist = store.env_flag(store.ENV_PERSIST)
         if persist and not isinstance(config.livekit, ManagerConfig):
@@ -280,7 +324,7 @@ class Robot:
         tx = config.transport_for(
             mode, media_timeout=media_timeout, connect_timeout=connect_timeout
         )
-        with self._lock:  # a second connect() racing this one must not swap the lane twice
+        with self._lock:  # a second connect() racing this one must not swap the transport twice
             if not self._closed:
                 raise RuntimeError("this Robot is already connected; close() it first")
             self._transport = tx
@@ -296,7 +340,7 @@ class Robot:
             # $MENLO_HOME, a name that belongs to another manager) must not leave it open
             # behind an exception the caller's `with` never gets to close.
             try:
-                saved = store.persist(config, getattr(tx, "room", None))
+                saved = store.persist(config, getattr(tx, "room", None), mode=mode)
             except Exception:
                 self.close()
                 raise
@@ -343,7 +387,7 @@ class Robot:
         self._late = not require_state
         self._accepting = True
         self._tx.open()
-        # Verbs stay refused (NotConnectedError) until the handshake has passed — here, or
+        # Verbs stay refused (NotConnectedError) until the handshake has passed: here, or
         # in _on_state when the session did not wait for the robot.
         if require_state:
             if not self._state_seen.wait(timeout):
@@ -367,7 +411,7 @@ class Robot:
         self._closed = False
         # One stop flag per session. close() may run ON the keepalive thread (an on_link_lost
         # handler that reconnects); a shared flag that open() cleared would un-signal that
-        # thread's exit before it woke, leaving two keepalives re-sending into the edge.
+        # thread's exit before it woke, leaving two keepalives re-sending into Asimov Edge.
         stop = threading.Event()
         self._stop = stop
         self._keepalive = threading.Thread(
@@ -439,7 +483,7 @@ class Robot:
     def _only_from[**P](self, tx: Transport, handler: Callable[P, None]) -> Callable[P, None]:
         """Wrap a transport callback so only the transport this Robot is CURRENTLY on may call
         it. A closed transport keeps its subscriber list and its reader thread is joined
-        best-effort, so a late sample from the previous lane must not become this session's
+        best-effort, so a late sample from the previous transport must not become this session's
         state, frame or handshake."""
 
         def guarded(*args: P.args, **kwargs: P.kwargs) -> None:
@@ -450,18 +494,18 @@ class Robot:
 
     def close(self) -> None:
         """Zero velocity if one is held, stop re-sending a held trajectory, then drop the link.
-        Idempotent; never raises. A trajectory that is no longer re-sent is DAMPed by the edge
+        Idempotent; never raises. A trajectory that is no longer re-sent is DAMPed by Asimov Edge
         two seconds later: there is no neutral setpoint the SDK could send instead.
 
         A ``duration`` hold that has not expired is cut short here, zero and all: leaving a
-        ``with`` block ends the walk. A script that wants the whole hold waits for it —
-        ``set_velocity(..., wait=True)`` or a ``time.sleep(duration)`` — before it leaves."""
+        ``with`` block ends the walk. A script that wants the whole hold waits for it, with
+        ``set_velocity(..., wait=True)`` or a ``time.sleep(duration)``, before it leaves."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
             self._accepting = False
-            tx = self._transport  # pinned here: a connect() racing us may swap the lane
+            tx = self._transport  # pinned here: a connect() racing us may swap the transport
             had_velocity = self._latched is not None
             self._end_hold()
             self._generation += 1
@@ -499,9 +543,9 @@ class Robot:
         """Does this robot, over this transport, provide ``capability`` **right now**?
 
         Reads the transport's **live** set rather than ``info.capabilities``, which is a
-        snapshot taken at connect (``RobotInfo`` is frozen). On a room lane a camera goes
-        away mid-session when its track unsubscribes, and a script gating on ``has()`` —
-        the documented safe pattern — should then skip cleanly instead of taking the
+        snapshot taken at connect (``RobotInfo`` is frozen). Through a LiveKit room a camera goes
+        away mid-session when its track unsubscribes, and a script gating on ``has()``
+        (the documented safe pattern) should then skip cleanly instead of taking the
         ``UnsupportedError`` it was trying to avoid.
 
         Capabilities the robot reported about *itself* (``battery``) are not the wire's to
@@ -546,10 +590,71 @@ class Robot:
         """The latest sample the robot pushed. Check ``state.age_s`` before trusting it."""
         s = self._state
         if s is None or self._handshake_error is not None:
-            # A robot this SDK cannot talk to is an error, not a sample — even if something
+            # A robot this SDK cannot talk to is an error, not a sample, even if something
             # was cached before the mismatch was known.
             raise self._no_state()
         return s
+
+    @property
+    def armed(self) -> bool | None:
+        """Whether the firmware accepts MOVE now, as far as the state stream shows.
+
+        ``True`` in MOVE, and in STAND once the robot has been seen upright (tilt under
+        30 degrees) for 0.5 s since STAND began; ``False`` in DAMP and before that; ``None``
+        with no state, in an unknown robot mode, or in STAND when the robot reports no
+        gravity vector or the Robot is closed. A velocity sent before the robot is armed is
+        neither refused nor reported: the firmware holds it in STAND until it arms."""
+        s = self._state
+        if s is None or self._closed or self._handshake_error is not None:
+            return None
+        if s.mode is Mode.MOVE:
+            return True
+        if s.mode is Mode.STAND:
+            if self._armed:
+                return True
+            return None if s.gravity is None else False
+        return False if s.mode is Mode.DAMP else None
+
+    def preflight(self, action: Action = "move") -> Preflight:
+        """Check the robot's latest state for ``action`` (``"stand"``, ``"move"`` for
+        ``set_velocity``, or ``"trajectory"`` for ``trajectory``/``goto``). Sends nothing and
+        never raises for a robot condition: every reason not to go ahead is a
+        :class:`Problem` in the result. See :mod:`menlo.asimov._preflight` for the codes."""
+        no_state: Problem | None = None
+        if self._closed:
+            no_state = Problem("not_connected", "this Robot is not connected", True)
+        elif self._link_lost is not None:
+            no_state = Problem("not_connected", f"the link was lost: {self._link_lost}", True)
+        elif self._handshake_error is not None:
+            no_state = Problem("not_connected", str(self._handshake_error), True)
+        s = self._state if no_state is None else None
+        return _evaluate_preflight(action, s, armed=self.armed, no_state=no_state)
+
+    def wait_ready(
+        self, action: Action = "move", *, timeout: float = 5.0, poll: float = 0.05
+    ) -> Preflight:
+        """Block until ``preflight(action)`` is ok and return it. Call it after ``stand()``
+        and before the first ``set_velocity``: STAND is reported at once, and the firmware
+        accepts MOVE only once STAND has been held upright for 0.5 s.
+
+        Raises :class:`NotReadyError`, carrying the last check, after ``timeout`` seconds,
+        or at once on a problem that waiting cannot clear (``faulted``, ``not_connected``)."""
+        _nonnegative_finite("timeout", timeout)
+        _nonnegative_finite("poll", poll)
+        deadline = time.monotonic() + timeout
+        while True:
+            check = self.preflight(action)
+            if check.ok:
+                return check
+            permanent = [p for p in check.blocking if p.code in PERMANENT]
+            if permanent:
+                raise NotReadyError(f"not ready to {action}: {permanent[0]}", preflight=check)
+            if time.monotonic() >= deadline:
+                reasons = "; ".join(str(p) for p in check.blocking)
+                raise NotReadyError(
+                    f"not ready to {action} after {timeout:.1f} s: {reasons}", preflight=check
+                )
+            time.sleep(poll)
 
     # ── verbs: each returns a Sent immediately ───────────────────────────────
     def set_velocity(
@@ -567,7 +672,11 @@ class Robot:
         is what actually went out and ``Sent.clamped`` says whether it differs from what
         you asked.
 
-        Returns immediately by default — the hold runs in the background, and the next verb
+        From STAND the firmware enters MOVE only once the robot is armed (STAND held upright
+        for 0.5 s); call ``wait_ready("move")`` first, or the velocity is held in STAND while
+        the ``duration`` runs. In DAMP, Asimov Edge drops it.
+
+        Returns immediately by default: the hold runs in the background, and the next verb
         (or ``close()``, so the end of a ``with`` block) cuts it short. ``wait=True`` with a
         ``duration`` blocks until the hold has ended and its zero has gone out, or until
         another verb superseded it; ``ValueError`` without a ``duration``. A zero velocity
@@ -601,8 +710,8 @@ class Robot:
             return self._send(name, v, gen, clamped=(v != asked)), self._hold_done
 
     def _end_hold(self) -> None:
-        """Under the lock: whatever bounded hold was in force is over — superseded, stopped,
-        closed or lost — and anyone blocked in ``wait=True`` may go."""
+        """Under the lock: whatever bounded hold was in force is over (superseded, stopped,
+        closed or lost) and anyone blocked in ``wait=True`` may go."""
         self._latched, self._latch_deadline = None, None
         done, self._hold_done = self._hold_done, None
         if done is not None:
@@ -625,26 +734,29 @@ class Robot:
 
     def stop(self) -> Sent:
         """Zero velocity. The firmware stays in MOVE at zero speed, balancing in place
-        under the walking policy — for a free-standing robot that IS how it stands still,
+        under the walking policy. For a free-standing robot that IS how it stands still,
         so this is usually where a walk should end. ``stand()`` returns it to the STAND
-        posture, but see that verb's warning first. Not an emergency stop — see ``damp``."""
+        posture, but see that verb's warning first. Not an emergency stop."""
         return self._drive("stop", Velocity(), None)[0]
 
     def stand(self) -> Sent:
         """Stiffen to the standing pose. One-shot; follow with ``wait_for(Mode.STAND)``.
 
         STAND blends every joint to a fixed pose and holds it there with position gains.
-        There is **no balance loop** — the robot does not catch itself. It is the wake-up
-        verb (DAMP -> STAND -> MOVE) and is safe on a robot that is held, craned or on its
-        stand. Asking a free-standing biped to stiffen after walking tips it over, and a
-        fall latches a fault-DAMP that lasts until the firmware restarts. To stand still
-        after walking, stay in MOVE at zero velocity (``stop()``), where the policy keeps
-        balancing."""
+        There is **no balance loop**: the robot does not catch itself. It is the wake-up
+        verb (DAMP -> STAND -> MOVE): call it only from DAMP, after ``wait_ready("stand")``.
+        Asking a free-standing biped to stiffen after walking tips it over, and a fall
+        latches a fault-DAMP that lasts until the firmware restarts. To stand still after
+        walking, stay in MOVE at zero velocity (``stop()``), where the policy keeps
+        balancing. Joint control (``goto``, ``trajectory``) ends with ``damp()``, with the
+        robot still supported."""
         return self._once("stand", ModeCommand("stand"))
 
     def damp(self) -> Sent:
-        """Motors go compliant NOW. A standing or walking biped collapses — this is the
-        emergency stop, and the verb you type in full when you mean it."""
+        """Every actuator goes compliant now. A standing or walking biped folds to the
+        ground. A software command, not an emergency stop: use the robot's physical stop
+        for that. A fault latched by the firmware keeps the robot in DAMP until the firmware
+        restarts."""
         return self._once("damp", ModeCommand("damp"))
 
     def trajectory(
@@ -656,11 +768,12 @@ class Robot:
     ) -> Sent:
         """One set of joint targets for every motor (radians, firmware order). Every joint goes
         under position control and the walking policy is off, so a standing biped will not
-        balance itself — see :meth:`goto`. The edge drives a trajectory for two seconds after
+        balance itself (see :meth:`goto`). Asimov Edge drives a trajectory for two seconds after
         the last setpoint and then DAMPs, so clock these yourself or use :meth:`goto`.
-        A ``kp``/``kd`` entry of zero or less means the firmware substitutes its own DAMP
-        gains for that joint (limp). ``ValueError`` unless ``len(positions) == info.dof``, or
-        when only one of ``kp``/``kd`` is given (the edge ignores a lone gain)."""
+        Without ``kp``/``kd``, Asimov Edge applies its own per-joint gain table. A ``kp``/``kd``
+        entry of zero or less means the firmware substitutes its DAMP gains for that joint
+        (limp). ``ValueError`` unless ``len(positions) == info.dof``, or
+        when only one of ``kp``/``kd`` is given (Asimov Edge ignores a lone gain)."""
         pos = tuple(float(p) for p in positions)
         if self._info is not None and len(pos) != self._info.dof:
             raise ValueError(
@@ -694,7 +807,7 @@ class Robot:
 
         Interpolates (minimum-jerk) from the current reported joint positions and clocks
         ``trajectory()`` setpoints at ``hz`` from a background thread, then HOLDS the target
-        by re-sending it at the keepalive rate until another verb takes over — the edge
+        by re-sending it at the keepalive rate until another verb takes over: Asimov Edge
         DAMPs a trajectory two seconds after the last setpoint, so a reached pose is kept
         alive the way a velocity is. ``stand()`` (or any other verb) ends the hold. With
         ``wait``, blocks until every joint is within ``tolerance`` radians of the target, or
@@ -741,9 +854,9 @@ class Robot:
         def run() -> None:
             i = 2
             while True:
-                # Clock the motion at `hz`; once the target is reached keep re-sending it at the
-                # keepalive rate — the edge DAMPs a trajectory two seconds after the last setpoint,
-                # so a reached pose must be held until another verb takes over.
+                # Clock the motion at `hz`; once the target is reached keep re-sending it at
+                # the keepalive rate: Asimov Edge DAMPs a trajectory two seconds after the last
+                # setpoint, so a reached pose must be held until another verb takes over.
                 time.sleep(period if i <= steps else 1.0 / KEEPALIVE_HZ)
                 with self._lock:
                     if self._generation != gen or self._closed:
@@ -779,8 +892,8 @@ class Robot:
         Ends early, with a typed error, when the answer can no longer come: the stream
         went quiet (:class:`StateStaleError`); the firmware fault-DAMPed
         (:class:`RobotFaultedError`, checked before the predicate, so a fault is never read
-        as success); or the ``stand``/``damp``/``trajectory`` still in force — the last verb
-        sent, when it was one of those — was refused (:class:`CommandRefusedError`).
+        as success); or the ``stand``/``damp``/``trajectory`` still in force (the last verb
+        sent, when it was one of those) was refused (:class:`CommandRefusedError`).
         """
         _nonnegative_finite("timeout", timeout)
         _nonnegative_finite("poll", poll)
@@ -963,8 +1076,8 @@ class Robot:
             self._end_hold()
             self._generation += 1
         if had_velocity:
-            # The STATE stream died; the COMMAND path may well still reach the edge. Do not
-            # leave a nonzero velocity as the last word — send the zero, best effort.
+            # The STATE stream died; the COMMAND path may well still reach Asimov Edge. Do not
+            # leave a nonzero velocity as the last word: send the zero, best effort.
             self._send_safety_zero("link lost")
         if self.on_link_lost is not None:
             try:
@@ -998,10 +1111,39 @@ class Robot:
     def _forget_state(self) -> None:
         self._state = None
         self._state_seen.clear()
+        self._armed, self._upright_since = False, None
+
+    def _track_arming(self, prev: State | None, state: State, restarted: bool) -> None:
+        """Follow the firmware's MOVE gate from the state stream. The firmware disarms on
+        every robot mode change except MOVE -> STAND, and arms in STAND once projected
+        gravity z has stayed below ``ARM_GRAVITY_Z`` for ``ARM_HOLD_S``. The first sample
+        of a session counts as a mode entry: the SDK does not know how long the robot has
+        been in STAND, so it counts from the first sample it saw. The hold counts only
+        observed time: a sample without gravity, or a gap between samples longer than
+        ``ARM_MAX_GAP_S``, restarts it, since the robot may have tilted unseen."""
+        mode = state.mode
+        if prev is None or restarted or prev.mode is not mode:
+            kept = mode is Mode.STAND and prev is not None and prev.mode is Mode.MOVE
+            self._armed = mode is Mode.MOVE or (kept and not restarted and self._armed)
+            self._upright_since = None
+        if mode is not Mode.STAND or self._armed:
+            return
+        if state.gravity is None:
+            self._upright_since = None
+            return
+        if prev is not None and state.received_at - prev.received_at > ARM_MAX_GAP_S:
+            self._upright_since = None
+        if state.gravity[2] < ARM_GRAVITY_Z:
+            if self._upright_since is None:
+                self._upright_since = state.received_at
+            elif state.received_at - self._upright_since >= ARM_HOLD_S:
+                self._armed = True
+        else:
+            self._upright_since = None
 
     # transport callbacks (any thread) ──────────────────────────────────────
     def _on_state(self, state: State) -> None:
-        # The lane is plain UDP: anyone on the LAN can hit the state port, and protobuf
+        # UDP is unauthenticated: anyone on the network can hit the state port, and protobuf
         # decodes an empty or foreign datagram as a default RobotState. A sample that does
         # not look like THIS robot (no joints; or, once connected, a different protocol
         # version or joint count) must not refresh liveness or become `robot.state`.
@@ -1019,12 +1161,12 @@ class Robot:
             )
             return
         # UDP reorders and duplicates. An OLDER sample must never overwrite a newer one,
-        # or the caller reads the robot going backwards in time (seen at 20% reorder:
-        # 196 backwards steps in one demo). Half-range compare: a counter that wrapped
-        # to 0 is NEWER (difference > 2**31); an unstamped stream (all zeros) differs by 0.
-        # But a counter that RESTARTED — the firmware rebooted while the edge and this
-        # session stayed up — is behind by thousands, and dropping until it climbed past
-        # the old value froze robot.state for minutes. Behind by more than the reorder
+        # or the caller reads the robot going backwards in time. Half-range compare: a
+        # counter that wrapped to 0 is NEWER (difference > 2**31); an unstamped stream (all
+        # zeros) differs by 0.
+        # But a counter that RESTARTED (the firmware rebooted while Asimov Edge and this
+        # session stayed up) is behind by thousands, and dropping until it climbed past
+        # the old value would freeze robot.state for minutes. Behind by more than the reorder
         # window, or with the firmware clock a second in the past, is a new stream.
         prev = self._state
         restarted = False
@@ -1052,6 +1194,7 @@ class Robot:
         ):
             return  # a robot this SDK cannot talk to: the mismatch is raised on the next read
         prev = self._state
+        self._track_arming(prev, state, restarted)
         self._state = state
         self._state_seen.set()
         # What the robot reports can end a drive too. A rebooted firmware comes up DAMPed
@@ -1066,7 +1209,7 @@ class Robot:
 
     def _release_hold(self, why: str, *, fence: bool) -> None:
         """The ROBOT ended the drive: drop a latched velocity so the keepalive stops
-        re-sending it. Nothing is sent in its place — a MOVE-at-zero would ask a DAMPed or
+        re-sending it. Nothing is sent in its place: a MOVE-at-zero would ask a DAMPed or
         booting robot to change mode, which is a decision for the script, not the SDK.
         ``fence`` also bumps the generation so a running ``goto`` / re-sent trajectory
         stops; a one-shot event (a restart) may do that, a fault that stays reported for

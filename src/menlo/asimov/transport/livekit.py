@@ -1,25 +1,25 @@
-"""The media lane: the robot's LiveKit room, as a transport.
+"""The robot's LiveKit room, as a transport: the ``hybrid`` and ``livekit`` connection modes.
 
 Two transports live here, and with ``UdpTransport`` they are the three ways to reach a
-robot. All three are first-class; nothing above the transport knows which is in use::
+robot. Nothing above the transport knows which is in use::
 
-    A0  udp       commands UDP 8850 / state UDP 8851         no media, no server
-    A   hybrid    commands UDP 8850 / state UDP 8851         video+audio over LiveKit
-    B   livekit   commands and state over LiveKit data       video+audio over LiveKit
+    udp       commands UDP 8850 / state UDP 8851         no camera or audio
+    hybrid    commands UDP 8850 / state UDP 8851         camera and audio over LiveKit
+    livekit   commands and state over LiveKit data       camera and audio over LiveKit
 
-The wire in the room, agreed with the edge team::
+The wire in the room, as Asimov Edge speaks it::
 
     commands  ->  data topic "commands"   one bare asimov.io.RobotCommand, reliable packets
     state     <-  data track "state"      one bare asimov.io.RobotState per frame, ordered,
-                                          user_timestamp = the edge's receive clock
+                                          user_timestamp = Asimov Edge's receive clock
 
-The SAME protobufs the UDP lane sends: no envelope, no framing, no type tag — the topic
-identifies the type, exactly as the port does on the direct lane. Commands land in the
-edge's arbiter beside the robot's other controllers, and pass the same safety layer.
+The same protobufs as over UDP: no envelope, no framing, no type tag; the topic identifies
+the type, as the port does over UDP. Commands land in Asimov Edge's arbiter beside the
+robot's other controllers, at the lowest priority, and pass the same safety layer. On
+``livekit``, Asimov Edge stops a held velocity when the SDK sends zero or leaves the room.
 
-LiveKit is an EXTRA. Every ``livekit`` import lives in ``_livekit_client``, behind a lazy
-function; importing this module, and driving a robot on the UDP lane, works with livekit
-absent. Install it with ``pip install "menlo-sdk[livekit]"``.
+Every ``livekit`` import lives in ``_livekit_client``, behind a lazy function; importing
+this module, and driving a robot on ``udp``, never loads it.
 
 **The SDK never holds a LiveKit API secret.** There is no ``api_key``/``api_secret``
 parameter anywhere: a caller presents a token the robot's manager minted, or a callable
@@ -69,9 +69,9 @@ MEDIA_TIMEOUT_S = 3.0
 class _MediaPlane:
     """The media half of a LiveKit room: frames in, microphone in, speaker out.
 
-    Both transports below own one. It keeps ``capabilities`` honest — ``camera`` and
+    Both transports below own one. It keeps ``capabilities`` honest: ``camera`` and
     ``microphone`` appear only once the matching track is actually subscribed, and go away
-    again when the room does — which is what makes a room with no video track raise
+    again when the room does, which is what makes a room with no video track raise
     ``UnsupportedError`` instead of handing out a stream that never yields.
     """
 
@@ -104,7 +104,7 @@ class _MediaPlane:
         media = set(self._lk.tracks) if self._lk.connected else set()
         if self._lk.connected:
             # The SDK can publish an audio track into the room whenever it is joined;
-            # whether the robot plays it is the edge's business, not a guess made here.
+            # whether the robot plays it is Asimov Edge's business, not a guess made here.
             media.add("speaker")
         self.capabilities = self._base_capabilities | media
 
@@ -137,14 +137,16 @@ class _MediaPlane:
 
 
 class LiveKitTransport(_MediaPlane):
-    """Mode B: commands, state, video and audio all over one LiveKit room.
+    """The ``livekit`` connection mode: commands, state, video and audio all through one
+    LiveKit room.
 
-    The robot's edge joins the same room and answers on the ``state`` data track. Nothing is
-    on the LAN, so this is the lane that reaches a robot you cannot route to.
+    Asimov Edge joins the same room and answers on the ``state`` data track, at 10 Hz.
+    Nothing needs the robot's network, so this reaches a robot wherever its Asimov Manager
+    and LiveKit server are reachable.
 
-    Like the UDP lane, the room carries no per-command verdict today:
-    ``subscribe_outcome`` and ``subscribe_controller_change`` are honoured and never fire,
-    and ``Sent.wait_outcome()`` returns ``Unknown``.
+    The room carries no per-command verdict: ``subscribe_outcome`` and
+    ``subscribe_controller_change`` are honoured and never fire, and
+    ``Sent.wait_outcome()`` returns ``Unknown``.
     """
 
     kind: TransportKind = "livekit"
@@ -168,7 +170,7 @@ class LiveKitTransport(_MediaPlane):
         """``client`` is the seam the unit suite fakes; leave it ``None`` to talk to a real
         room. There is deliberately no ``api_key``/``api_secret`` (bring a token) and no
         ``identity`` (the token claims it; :attr:`identity` reads it back)."""
-        #: The room this transport joins — the robot's, named by its serial.
+        #: The room this transport joins: the robot's, named by its serial.
         self.room, self._url = room, url
         self._lk_open = False
         self._seq = 0
@@ -195,7 +197,7 @@ class LiveKitTransport(_MediaPlane):
         self._await_media()
 
     def _describe(self) -> str:
-        """The address, plus who we are in the room once we know — two SDK sessions in one
+        """The address, plus who we are in the room once we know: two SDK sessions in one
         room differ only by identity, and an error naming the room alone would not say
         which of them went quiet."""
         who = self.identity
@@ -244,12 +246,13 @@ class LiveKitTransport(_MediaPlane):
 
 
 class HybridTransport(_MediaPlane):
-    """Mode A: the UDP lane for control, the LiveKit room for video and audio.
+    """The ``hybrid`` connection mode: control and state over UDP, camera and audio through
+    the LiveKit room.
 
-    The lane to pick on a LAN: commands keep the direct lane's latency and its
-    independence from any server, while the camera and microphone ride the SFU that is
-    already carrying them to the operator. Control and media fail independently — a room
-    that drops takes the frames with it and leaves the robot driveable.
+    The mode to pick on the robot's network: commands keep UDP's latency and its
+    independence from any server, while the camera and microphone ride the LiveKit server
+    that already carries them. Control and media fail independently: a room that drops
+    takes the frames with it and leaves the robot driveable.
     """
 
     kind: TransportKind = "hybrid"
@@ -272,7 +275,7 @@ class HybridTransport(_MediaPlane):
         client: LiveKitClient | None = None,
     ) -> None:
         """``client`` is the seam the unit suite fakes. No ``api_key``/``api_secret``, and
-        no ``identity`` — the token claims it; :attr:`identity` reads it back."""
+        no ``identity``: the token claims it; :attr:`identity` reads it back."""
         self._udp = UdpTransport(
             host, command_port=command_port, state_bind=state_bind, state_source=state_source
         )
@@ -305,7 +308,7 @@ class HybridTransport(_MediaPlane):
         self._refresh_capabilities()
         self._udp.close()
 
-    # ── control: the direct lane, unchanged ──────────────────────────────────
+    # ── control: UDP, unchanged ─────────────────────────────────────────────
     def send(self, command: Command) -> int:
         return self._udp.send(command)
 

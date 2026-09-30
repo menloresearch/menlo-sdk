@@ -1,13 +1,12 @@
-"""menlo-sdk — Menlo's robots from Python. One subpackage per robot.
+"""menlo-sdk: Menlo's robots from Python. One subpackage per robot.
 
-    from menlo.asimov import Mode, Robot          # the Asimov biped
+    from menlo.asimov import Robot                # the Asimov biped
 
-    with Robot().connect() as robot:
-        robot.stand()
-        robot.wait_for(Mode.STAND)
+    with Robot().connect() as robot:              # the saved default robot
+        print(robot.preflight("move"))
 
-``menlo.asimov`` is the whole SDK today; the ``menlo`` console script (``menlo login``)
-keeps the credentials scripts connect with. ``__version__`` is the distribution's.
+``menlo.asimov`` drives the Asimov robot. The ``menlo`` command (``menlo setup``) saves the
+robots scripts connect to. ``__version__`` is the distribution's.
 """
 
 __version__ = "0.1.0rc5"

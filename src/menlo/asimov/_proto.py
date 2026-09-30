@@ -1,7 +1,7 @@
 """The generated ``asimov.io`` bindings, from the ``asimov-protocol`` package.
 
 One source. ``asimov-protocol`` is a declared dependency (see ``pyproject.toml`` for the
-specifier); the edge, its tools and this SDK all import the same installed tree,
+specifier); Asimov Edge, its tools and this SDK all import the same installed tree,
 which keeps protobuf's process-global descriptor pool to exactly one copy of each ``.proto``.
 The upper bound follows the protocol's MAJOR, which tracks the wire directory (``v1/``).
 """

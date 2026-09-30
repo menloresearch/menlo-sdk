@@ -6,7 +6,7 @@ security@menlo.ai rather than in a public issue; include the version and a way t
 reproduce. You will get an acknowledgement within a few days.
 
 What the SDK does to limit damage on its own: speeds are clamped client-side and the clamp
-is visible; a held velocity expires on the robot two seconds after the last packet; a lost
-link sends a zero velocity and stops re-sending any held trajectory (the edge DAMPs it two
-seconds later); state datagrams that do not look like the robot are dropped,
+is visible; a held velocity expires on the robot 2 s after the last packet; a lost
+link sends a zero velocity and stops re-sending any held trajectory (Asimov Edge puts the
+robot in DAMP 2 s later); state datagrams that do not look like the robot are dropped,
 and `state_source=` restricts which address may send state.

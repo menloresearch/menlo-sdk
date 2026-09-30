@@ -66,7 +66,7 @@ def test_unknown_control_mode_is_UNKNOWN_not_a_crash():
 
 
 def test_velocity_clamps_symmetrically_and_reports_zero():
-    assert Velocity(2, -2, 9).clamped(Limits()) == Velocity(0.6, -0.6, 1.5)
+    assert Velocity(2, -2, 9).clamped(Limits()) == Velocity(0.4, -0.4, 0.8)
     assert Velocity().is_zero and not Velocity(vx=0.1).is_zero
     with pytest.raises(ValueError):
         Velocity(vx=True)  # a bool is not a speed

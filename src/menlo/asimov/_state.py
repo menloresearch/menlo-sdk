@@ -1,10 +1,10 @@
 """What the robot reports, typed.
 
 A :class:`State` is one telemetry sample, normalised so every transport produces the same
-object: the UDP lane carries ``asimov.io.RobotState``; no wire name leaks above the transport.
+object from ``asimov.io.RobotState``; no wire name leaks above the transport.
 
 Fields the robot cannot report are ``None``, never a plausible default. There is
-deliberately no ``pose``: the firmware has no odometry and neither lane carries one.
+deliberately no ``pose``: the firmware has no odometry and no connection mode carries one.
 """
 
 from __future__ import annotations
@@ -83,6 +83,7 @@ ALERT_NAMES: dict[int, str] = {
     11: "JOINT_OUT_OF_RANGE",
     12: "BMS_COMM_LOSS",
     13: "BMS_PROTECTION",
+    14: "INFERENCE_FAILURE",
     16: "MOTOR_DRV_FAULT",
     17: "MOTOR_TEMP_HIGH",
     18: "IMU_DEGRADED",
@@ -170,8 +171,9 @@ class State:
     protocol_version: int
     battery: Battery | None = None  # None when the robot has no BMS or did not report one
     received_at: float = field(default_factory=time.monotonic)
-    # The edge's wall clock (µs since the epoch) when this sample arrived from the firmware.
-    # Only the LiveKit lane carries it (as the data-track frame's user_timestamp); 0 on UDP.
+    # Asimov Edge's wall clock (µs since the epoch) when this sample arrived from the firmware.
+    # Only the livekit connection mode carries it (as the data-track frame's user_timestamp);
+    # 0 on udp and hybrid.
     edge_timestamp_us: int = 0
 
     @property
@@ -200,16 +202,19 @@ class State:
 
     @property
     def upright(self) -> bool | None:
-        """On its feet, by measured gravity. ``None`` when the robot did not report it."""
+        """Roughly on its feet: projected gravity z below -0.8. ``None`` when the robot did
+        not report gravity. Not the firmware's arming test (below -0.87 for 0.5 s in STAND;
+        see ``Robot.armed``), nor its fall trip (above -0.5)."""
         if self.gravity is None:
             return None
         return self.gravity[2] < -0.8
 
     @property
     def faulted(self) -> bool:
-        """An error flag or any critical alert. The firmware never writes ``error_flags``, so
-        the alerts are what matters — and they clear about 2.5 s after the condition ends,
-        while the firmware's own fault latch keeps the robot DAMPed until it restarts."""
+        """An error flag or any critical alert. The firmware sets ``error_flags`` when a
+        critical alert latches DAMP (bit 0 = latched, bit 1+n = critical alert n) and keeps
+        them set until it restarts; the robot stays in DAMP until then. The alert itself
+        clears about 2.5 s after its condition ends, so ``error_flags`` is what stays."""
         return bool(self.error_flags) or any(a.critical for a in self.alerts)
 
     @property
@@ -217,7 +222,7 @@ class State:
         return tuple(j.pos for j in self.joints)
 
     def joint(self, name: str) -> Joint:
-        """Look a joint up by firmware name. Raises ``KeyError`` on a typo — silently
+        """Look a joint up by firmware name. Raises ``KeyError`` on a typo: silently
         indexing the wrong joint is the failure this exists to prevent."""
         for j in self.joints:
             if j.name == name:

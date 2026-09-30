@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import threading
@@ -33,9 +34,24 @@ class FakeEdge:
     Deliberately shaped like ``asimov-edge``'s ``UdpConnector`` — sender address ignored,
     state to ONE destination — so a test that passes here says something about the robot.
     Records every decoded command; the state it pushes is whatever the test sets.
+
+    ``firmware=True`` makes the robot mode follow the commands the way the Motion Control
+    Board firmware does: STAND and DAMP take effect at once; MOVE (a velocity or a
+    trajectory) is entered only from STAND once the robot has been upright (gravity z below
+    -0.87) for ``arm_hold_s``, and until then the robot stays in STAND; MOVE -> STAND stays
+    armed; a velocity or trajectory while DAMPed is dropped (the edge's DAMP gate); a
+    trajectory in MOVE sets the reported joint positions to its targets; and a latched
+    fault (``fault()``) holds DAMP and ignores STAND and MOVE.
     """
 
-    def __init__(self, *, state_hz: float = 100.0, alerts_every: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        state_hz: float = 100.0,
+        alerts_every: int = 1,
+        firmware: bool = False,
+        arm_hold_s: float = 0.5,
+    ) -> None:
         from menlo.asimov._proto import load
 
         pb = load()  # same bindings the SDK uses, whichever source it resolved to
@@ -43,6 +59,7 @@ class FakeEdge:
         self.command_port = _free_port()
         self.state_port = _free_port()
         self.received: list = []  # decoded RobotCommand protos, in arrival order
+        self.arrived: list[float] = []  # monotonic receipt time of each entry in received
         self.state = self._st_pb.RobotState(
             current_mode=self._common_pb.CONTROL_MODE_DAMP, protocol_version=1
         )
@@ -50,6 +67,14 @@ class FakeEdge:
         self.state.projected_gravity.extend([0.0, 0.0, -1.0])
         self.pushing = True
         self.alerts_every = alerts_every  # firmware ships the alert block every 20th frame
+        self.firmware = firmware
+        self.arm_hold_s = arm_hold_s
+        self.armed = False
+        self.armed_at: float | None = None  # monotonic time the fake firmware armed
+        self.move_entered_at: float | None = None
+        self.first_velocity_at: float | None = None  # monotonic receipt of the first velocity
+        self._upright_since: float | None = None
+        self._fw_lock = threading.Lock()
         self._hz = state_hz
         self._stop = threading.Event()
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -70,13 +95,80 @@ class FakeEdge:
                 return
             c = self._cmd_pb.RobotCommand()
             c.ParseFromString(data)
+            if c.HasField("policy") and self.first_velocity_at is None:
+                self.first_velocity_at = time.monotonic()
+            self.arrived.append(time.monotonic())
             self.received.append(c)
+            if self.firmware:
+                self._follow(c)
+
+    # ── the firmware's mode machine (firmware=True) ──────────────────────────
+    def _mode(self) -> int:
+        return int(self.state.current_mode)
+
+    def _enter(self, mode: int) -> None:
+        stand, move = self._common_pb.CONTROL_MODE_STAND, self._common_pb.CONTROL_MODE_MOVE
+        old = self._mode()
+        if old == mode:
+            return
+        if not (old == move and mode == stand):
+            self.armed = False
+            self._upright_since = None
+        if mode == move:
+            self.move_entered_at = time.monotonic()
+        self.state.current_mode = mode
+
+    def _follow(self, c) -> None:
+        pb = self._common_pb
+        with self._fw_lock:
+            drive = c.HasField("policy") or c.HasField("all_trajectory")
+            if self.state.error_flags:
+                return  # latched: DAMP until the firmware restarts
+            if drive:
+                mode = self._mode()
+                if mode == pb.CONTROL_MODE_DAMP:
+                    return  # the edge drops a velocity or trajectory while DAMPed
+                if mode == pb.CONTROL_MODE_STAND and self.armed:
+                    self._enter(pb.CONTROL_MODE_MOVE)
+                if c.HasField("all_trajectory") and self._mode() == pb.CONTROL_MODE_MOVE:
+                    # The joints reach a trajectory's targets at once: tracking is perfect.
+                    del self.state.joint_pos[:]
+                    self.state.joint_pos.extend(c.all_trajectory.positions)
+            elif c.mode == pb.CONTROL_MODE_STAND:
+                self._enter(pb.CONTROL_MODE_STAND)
+            elif c.mode == pb.CONTROL_MODE_DAMP:
+                self._enter(pb.CONTROL_MODE_DAMP)
+
+    def _arm_tick(self) -> None:
+        with self._fw_lock:
+            g = list(self.state.projected_gravity)
+            now = time.monotonic()
+            if g and g[2] < -0.87:
+                if self._upright_since is None:
+                    self._upright_since = now
+                elif (
+                    not self.armed
+                    and self._mode() == self._common_pb.CONTROL_MODE_STAND
+                    and now - self._upright_since >= self.arm_hold_s
+                ):
+                    self.armed = True
+                    self.armed_at = now
+            else:
+                self._upright_since = None
+
+    def fault(self, alert_id: int = 7) -> None:
+        """Latch a critical alert (default FALL_DETECTED): DAMP, error_flags set."""
+        with self._fw_lock:
+            self.state.error_flags |= 1 | (1 << (1 + alert_id))
+            self._enter(self._common_pb.CONTROL_MODE_DAMP)
 
     def _push(self) -> None:
         out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         period = 1.0 / self._hz
         seq = 0
         while not self._stop.is_set():
+            if self.firmware:
+                self._arm_tick()
             if self.pushing:
                 seq += 1
                 self.state.sequence = seq
@@ -100,6 +192,16 @@ class FakeEdge:
             (round(c.policy.vx, 4), round(c.policy.vy, 4), round(c.policy.vyaw, 4))
             for c in self.received
             if c.HasField("policy")
+        ]
+
+    def velocities_between(
+        self, start: float, end: float = math.inf
+    ) -> list[tuple[float, float, float]]:
+        """The velocities received from monotonic time ``start`` until ``end``."""
+        return [
+            (round(c.policy.vx, 4), round(c.policy.vy, 4), round(c.policy.vyaw, 4))
+            for c, at in zip(tuple(self.received), tuple(self.arrived), strict=False)
+            if start <= at < end and c.HasField("policy")
         ]
 
     def modes(self) -> list[str]:
@@ -450,13 +552,14 @@ def route_manager_rooms_to(edge: FakeEdge, monkeypatch) -> list[str]:
 def _own_environment(monkeypatch, tmp_path):
     """No test reads the developer's ~/.menlo or environment, and none writes there."""
     monkeypatch.setenv("MENLO_HOME", str(tmp_path / "asimov-home"))
-    for name in ("MENLO_PERSIST", "MENLO_MANAGER_URL", "MENLO_CREDENTIAL", "MENLO_ROBOT"):
-        monkeypatch.delenv(name, raising=False)
+    for name in tuple(os.environ):
+        if name.startswith("MENLO_") and name not in ("MENLO_HOME",) and "SDK_" not in name:
+            monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
 def live_host() -> str:
-    """A real robot or studio rig, named by MENLO_SDK_LIVE_HOST. Skips LOUDLY otherwise."""
+    """A real robot, named by MENLO_SDK_LIVE_HOST. Skips LOUDLY otherwise."""
     host = os.environ.get("MENLO_SDK_LIVE_HOST")
     if not host:
         pytest.skip("MENLO_SDK_LIVE_HOST not set — no live robot to drive")

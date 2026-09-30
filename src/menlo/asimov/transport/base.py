@@ -1,13 +1,14 @@
 """The seam between the robot API and a wire.
 
 A :class:`Transport` moves neutral :data:`~menlo.asimov._command.Command` objects to the
-robot and neutral :class:`~menlo.asimov._state.State` samples (and, when the edge grows
+robot and neutral :class:`~menlo.asimov._state.State` samples (and, on a wire that carries
 them, :class:`~menlo.asimov._outcome.Outcome` verdicts) back. It owns encoding, sockets
-and threads. It knows nothing about latching, clamping, waits or the error model — those
+and threads. It knows nothing about latching, clamping, waits or the error model; those
 live in :class:`~menlo.asimov.robot.Robot`, once, for every transport.
 
-Three transports ship: ``UdpTransport`` (the robot's LAN lane), ``LiveKitTransport``
-(commands and media over a room) and ``HybridTransport`` (UDP commands, room media). Any
+Three transports ship, one per connection mode: ``UdpTransport`` (``udp``),
+``HybridTransport`` (``hybrid``: UDP commands and state, room media) and
+``LiveKitTransport`` (``livekit``: everything through the room). Any
 other wire implements this protocol; ``Robot`` does not know which it is on.
 """
 
@@ -61,8 +62,8 @@ class Transport(Protocol):
         called before ``open()``."""
 
     def subscribe_outcome(self, callback: OutcomeCallback) -> None:
-        """Per-command verdicts, when the edge sends them. A transport whose wire has no
-        outcome channel never calls this."""
+        """Per-command verdicts, on a wire that carries them. Asimov Edge sends none on any
+        connection mode, so the shipped transports never call this."""
 
     def subscribe_controller_change(self, callback: ControllerCallback) -> None:
         """Who holds the body now. Same caveat as outcomes."""

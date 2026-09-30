@@ -54,6 +54,9 @@ def test_alert_carries_first_set_us_and_a_name(edge, robot):
     time.sleep(0.05)
     alert = robot.state.alerts[0]
     assert alert.name == "BMS_LOW_SOC" and alert.first_set_us == 123456 and not alert.critical
+    from menlo.asimov import Alert
+
+    assert Alert(14, 0, 0.0, 0.0, 0).name == "INFERENCE_FAILURE"
 
 
 def test_frame_and_audio_to_numpy():

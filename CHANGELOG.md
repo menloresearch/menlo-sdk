@@ -3,6 +3,60 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+- `robot.preflight(action)` checks the latest state before a stand, a walk (`"move"`) or a
+  trajectory and returns a `Preflight`: `ok`, and `Problem`s with stable codes
+  (`stale_state`, `faulted`, `battery_low`, `joint_hot`, `wrong_mode`, `not_armed`, ...).
+  A field the robot does not report is a warning, never a guess. It sends nothing.
+- `robot.wait_ready(action, timeout=5.0)` blocks until the check passes, and raises
+  `NotReadyError` (carrying the `Preflight`) on timeout or at once on a latched fault.
+- `robot.armed`: whether the firmware accepts MOVE now. From STAND it does only once the
+  robot has been upright for 0.5 s; a velocity sent earlier leaves the robot in STAND.
+  Call `wait_ready("move")` between `stand()` and the first `set_velocity`.
+- Saved robots hold the whole connection: `mode`, `udp_host`, `manager_url`, `credential`,
+  `room` and an optional `[robots.NAME.limits]` table. `connect()` with no argument uses the
+  saved connection mode. A mode whose fields are missing fails at `connect()`, before any
+  network I/O, with the `menlo robots add` command that fixes it.
+- Environment variables `MENLO_UDP_HOST`, `MENLO_MODE` and `MENLO_LIMITS`, beside
+  `MENLO_MANAGER_URL`, `MENLO_CREDENTIAL`, `MENLO_ROBOT`, `MENLO_HOME` and `MENLO_PERSIST`.
+- `ManagerConfig.check()` tests an SDK credential with one token request and returns a
+  `ManagerGrant` (room, identity, role).
+- The `menlo` command: `setup` (a wizard with live checks), `robots` (list, `add`, `remove`,
+  `use`), `status` (READY, NOT READY or FAULTED; `--watch`, `--json`; sends nothing), and
+  `stand`, `walk --duration`, `stop`, `damp`. `--robot` and `--mode` work with every command.
+- `menlo stand`, `walk` and `damp` print a one-line plan (the robot, its connection mode and
+  address, its state, and what will happen, with any clamped speed) and ask
+  `Proceed? [y/N]`. `-y`/`--yes` goes ahead without asking; with no terminal and no `--yes`
+  they exit 2 and send nothing. When `preflight()` refuses, `stand` and `walk` print
+  `Not feasible:` with the robot mode, the reason and the fix, and exit 3 without asking;
+  `walk` checks again after the answer; a fault that ends a walk early is named and exits 3.
+  `stop` never asks, and repeats its zero only while the robot is still reported in MOVE.
+  Exit codes: 0 done, 1 error, 2 usage, 3 not feasible, 4 cancelled, 130 interrupted.
+- Examples `01_connect_udp.py` to `11_raw_livekit.py` and `apps/`, indexed in
+  `examples/README.md` and run by the test suite.
+
+### Changed
+- `Limits()` defaults to the firmware's velocity caps, 0.4 m/s, 0.4 m/s and 0.8 rad/s, so
+  `Sent.clamped` is true exactly when the robot would not walk at the speed asked for.
+  Values above the caps are sent as asked and the firmware clamps them.
+- `pip install menlo-sdk` installs `livekit`, `questionary` and `rich` and drives every
+  connection mode; the `[livekit]` extra is gone. `import menlo.asimov` and
+  `connect("udp")` still load none of them.
+- Docstrings, `docs/REFERENCE.md` and `docs/SKILL.md` state what Asimov Edge and the
+  firmware do: `Sent.wait_outcome()` is `Unknown` on every connection mode, no command
+  timestamp is checked, UDP commands are not authenticated, a latched fault keeps
+  `error_flags` set until the firmware restarts, and nothing in the SDK is an emergency stop.
+
+### Removed
+- `menlo login`, `menlo logout` and `menlo use`: use `menlo setup`, `menlo robots add`,
+  `menlo robots remove` and `menlo robots use`.
+- The old examples, `examples/demos/` and `examples/checkout.py`.
+
+### Fixed
+- `ALERT_NAMES` names alert 14, `INFERENCE_FAILURE`.
+
 ## 0.1.0rc5 — 2026-09-29
 
 No change to the SDK itself: this release exercises the new release preparation.
@@ -51,7 +105,7 @@ same SDK, released with the workflow fixed.
   it, and a firmware restart (sequence counter reset) drops it and fences off a running
   `goto` / trajectory re-send. Nothing is sent in its place; a `MOVE` at zero would ask a
   DAMPed or booting robot to change mode.
-- `close()` from inside a state callback on the `livekit` lane no longer stalls 5 s on the
+- `close()` from inside a state callback in the `livekit` connection mode no longer stalls 5 s on the
   client's own event loop and then drops the queued zero-velocity packet and the room
   leave; the client now leaves asynchronously and stops its loop once that is done.
 - `connect(require_state=False)`: state that arrives while the transport is still opening
@@ -70,13 +124,13 @@ same SDK, released with the workflow fixed.
 - Zero-config connect: `Robot()` with no config resolves one from `MENLO_MANAGER_URL` +
   `MENLO_CREDENTIAL`, else from `~/.menlo/robots.toml` (`$MENLO_HOME`; `MENLO_ROBOT`
   picks a named entry), else raises `ConnectError` naming both; `connect()` with no mode
-  takes the config's one lane. `menlo.asimov.store`: `RobotStore`, `StoredRobot`; the file is
+  takes the config's one connection mode. `menlo.asimov.store`: `RobotStore`, `StoredRobot`; the file is
   0600 in a 0700 directory. `connect(persist=True)` / `MENLO_PERSIST=1` save a working URL
   and credential after a successful connect, keyed by the serial in the robot's room.
 - The `menlo` console script: `menlo login <manager-url> [--credential]` validates a
   credential by minting a token exactly as `connect()` does, then saves it; `menlo robots`,
   `menlo use <name>`, `menlo logout <name>`.
-- `connect(require_state=False)`: the media lane without waiting for the firmware.
+- `connect(require_state=False)`: media without waiting for the firmware.
   `robot.state`, `robot.info` and the motion verbs raise `NotConnectedError` until the robot
   reports, then the handshake completes on its own; a late protocol mismatch is raised
   where it is read.
@@ -94,22 +148,22 @@ same SDK, released with the workflow fixed.
   `LiveKitTransport.room` / `HybridTransport.room`.
 - `docs/SKILL.md`: the agent-facing reference for writing a script against the SDK.
 - `ConnectionConfig(udp=UdpConfig(...), livekit=LiveKitConfig(...) | ManagerConfig(...))`
-  describes a robot's lanes, one typed class each; `Robot(cfg)` binds without touching the
+  describes a robot's connection modes, one typed class each; `Robot(cfg)` binds without touching the
   network; `robot.connect("udp" | "hybrid" | "livekit", timeout=, media_timeout=,
   connect_timeout=)` attaches and returns the robot; `close()` then `connect()` again switches
-  lanes on the same `Robot`. `cfg.available_modes()` says what a config can reach; a mode
+  connection modes on the same `Robot`. `cfg.available_modes()` says what a config can reach; a mode
   the config cannot carry is a `ConnectError` naming the missing slot, before any I/O.
 - `ManagerConfig(url, credential, label=)`: the SDK asks the robot's manager
   (`POST /api/livekit/token`) for the LiveKit URL, the room and a fresh join token on every
   connect, so a user or agent never holds a LiveKit token. `LiveKitConfig(url, room, token)`
   is for people running their own SFU.
-- The UDP lane: `UdpTransport` (`RobotCommand` → udp/8850, `RobotState` ← udp/8851);
+- The `udp` connection mode: `UdpTransport` (`RobotCommand` → udp/8850, `RobotState` ← udp/8851);
   `Robot(transport)` + `open()` for any `Transport`.
 - Verbs `set_velocity(vx, vy, vyaw, duration=)`, `stop()`, `stand()`, `damp()`,
   `trajectory(positions, kp=, kd=)`, `goto(positions, duration=, hz=, wait=)`; each returns a
   `Sent` with the encoded command, the clamp flag and an outcome handle.
 - Outcomes `Applied | Refused(reason: Refusal) | Unknown`; `Sent.wait_outcome()`,
-  `Sent.require()`. The UDP lane carries no verdicts; every outcome there is `Unknown`.
+  `Sent.require()`. The `udp` connection mode carries no verdicts; every outcome there is `Unknown`.
 - Typed `State`: mode, joints by firmware name, gravity, gyro, quaternion and euler angles,
   alerts with names and timestamps, battery (`Battery`, `BatteryProtection`), `faulted`,
   `age_s`; `RobotInfo` with `capabilities`; `robot.has()` / `robot.require()`.
@@ -117,31 +171,31 @@ same SDK, released with the workflow fixed.
   `WaitTimeoutError`, `StateStaleError`, `RobotFaultedError`, `CommandRefusedError`.
 - Media API `robot.camera`, `robot.microphone`, `robot.speaker` (`Frame`, `AudioChunk`)
   through the `Transport` seam; `UnsupportedError` on a transport that does not carry them.
-- Two more lanes, both first-class: `"hybrid"` (UDP control + LiveKit media) and
+- Two more connection modes, both first-class: `"hybrid"` (UDP control + LiveKit media) and
   `"livekit"` (commands and
   state as bare `RobotCommand`/`RobotState`: reliable data packets on the `commands` topic in,
   frames of a data track named `state` out (ordered; `State.edge_timestamp_us` is the frame's
-  `user_timestamp`, the edge's receive clock) —
-  the same protobufs the UDP lane sends, no envelope, no type tag). `HybridTransport` and
+  `user_timestamp`, the edge's receive clock):
+  the same protobufs the `udp` connection mode sends, no envelope, no type tag). `HybridTransport` and
   `LiveKitTransport` underneath; `robot.py` does not know which wire it is on.
 - LiveKit is an EXTRA (`pip install "menlo-sdk[livekit]"`): the core still depends on
   protobuf alone, every `livekit` import is lazy inside `transport/_livekit_client.py`, and
   `connect("udp")` never reaches it.
 - `Camera.photo(timeout=)` returns ONE fresh `Frame`; `Camera.capture_clip(seconds,
   audio=True)` returns a `Clip` with `save_wav()` (stdlib `wave`), `frames_as_numpy()`,
-  `save_frames()` (Pillow) and `save_mp4()` (OpenCV) — the last three raise `ImportError`
+  `save_frames()` (Pillow) and `save_mp4()` (OpenCV); the last three raise `ImportError`
   naming the package rather than adding a dependency. LiveKit video is converted from I420
   to `rgb8`, so `Frame.to_numpy()` works.
 - `Transport.silence_hint`: the transport, not `Robot`, says what to check when a connect
   hears nothing on its wire.
-- No `identity` parameter on the LiveKit lanes: a participant's identity is a claim inside
+- No `identity` parameter in the LiveKit connection modes: a participant's identity is a claim inside
   the access token and the server ignores what a client says about it, so the SDK reads it
   back (`transport.identity`, and `endpoint` reads `room@url as <identity>`) instead of
   accepting an argument it could not honour.
 - Callbacks `on_state`, `on_alert`, `on_mode_change`, `on_refused`, `on_link_lost`,
   `on_controller_change`.
 - `robot.record(path)` JSON-lines recording and `menlo.asimov.recording.load()`.
-- Capability honesty on the room lanes: `camera`/`microphone` are claimed only once the
+- Capability honesty in the LiveKit connection modes: `camera`/`microphone` are claimed only once the
   matching track is actually subscribed, and dropped when the room goes; a room with no
   video raises `UnsupportedError` instead of yielding nothing.
 - Liveness: 10 Hz hold with a generation fence and bounded `duration`; `LinkLostError`

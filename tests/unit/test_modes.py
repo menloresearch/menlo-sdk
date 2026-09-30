@@ -58,8 +58,8 @@ def test_a_velocity_is_held_at_the_keepalive_rate_on_every_lane(edge, any_robot)
 def test_the_clamp_is_applied_and_visible_on_every_lane(edge, any_robot):
     _mode, robot = any_robot
     sent = robot.set_velocity(vx=9.0)
-    assert sent.clamped and sent.command.vx == pytest.approx(0.6)
-    assert edge.wait_for(lambda rx: (0.6, 0.0, 0.0) in edge.velocities())
+    assert sent.clamped and sent.command.vx == pytest.approx(0.4)
+    assert edge.wait_for(lambda rx: (0.4, 0.0, 0.0) in edge.velocities())
 
 
 def test_stop_ends_the_hold_on_every_lane(edge, any_robot):

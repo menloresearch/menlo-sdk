@@ -1,8 +1,8 @@
 """Transports: the wires a :class:`~menlo.asimov.robot.Robot` can drive a body over.
 
-``UdpTransport`` is the LAN lane and needs nothing but protobuf. ``LiveKitTransport`` and
-``HybridTransport`` reach a robot through its LiveKit room; importing them is free, but
-opening one needs the livekit extra (``pip install "menlo-sdk[livekit]"``).
+``UdpTransport`` is the ``udp`` connection mode and needs nothing but protobuf.
+``HybridTransport`` and ``LiveKitTransport`` reach the robot's LiveKit room; importing them
+does not import ``livekit``, opening one does.
 """
 
 from menlo.asimov.transport.base import Transport

@@ -1,7 +1,7 @@
 """What the SDK sends, in the robot's own vocabulary.
 
-The verbs on :class:`~menlo.asimov.robot.Robot` are the wire's verbs — ``set_velocity``,
-``stand``, ``damp``, ``stop``, ``trajectory`` — because that is what the edge, the
+The verbs on :class:`~menlo.asimov.robot.Robot` are the wire's verbs (``set_velocity``,
+``stand``, ``damp``, ``stop``, ``trajectory``) because that is what Asimov Edge, the
 protocol and the robot's other controllers already call them. These dataclasses are
 their payloads, transport-neutral: the UDP transport encodes them as
 ``asimov.io.RobotCommand``; another transport encodes the same objects for its own wire.
@@ -14,27 +14,53 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
+#: The Motion Control Board firmware clamps every velocity it receives to these magnitudes.
+FIRMWARE_MAX_VX = 0.4  # m/s
+FIRMWARE_MAX_VY = 0.4  # m/s
+FIRMWARE_MAX_VYAW = 0.8  # rad/s
+
 
 @dataclass(frozen=True, slots=True)
 class Limits:
-    """The clamp the SDK applies before anything reaches the robot.
+    """The clamp the SDK applies to a velocity before it is sent.
 
-    The edge and firmware clamp too; this one exists so a typo'd ``vx=20`` in a notebook is
-    a visibly clamped command rather than a lunge. Strafe shares the forward ceiling: it is
-    the same walking gait, not a separate faster mode.
+    The defaults are the firmware's own caps (0.4 m/s forward and sideways, 0.8 rad/s
+    turning), so ``Sent.clamped`` is true exactly when the robot would not walk at the
+    speed asked for. Lower values make a script slower than the robot allows. Higher values
+    are accepted and sent as asked; the firmware then clamps them to its caps.
+
+    Set per robot with ``Robot(limits=Limits(...))``, ``MENLO_LIMITS="vx,vy,vyaw"``, or a
+    ``[robots.NAME.limits]`` table in the saved robots file.
     """
 
-    vx: float = 0.6  # m/s
-    vy: float = 0.6  # m/s
-    vyaw: float = 1.5  # rad/s
+    vx: float = FIRMWARE_MAX_VX  # m/s
+    vy: float = FIRMWARE_MAX_VY  # m/s
+    vyaw: float = FIRMWARE_MAX_VYAW  # rad/s
 
     def __post_init__(self) -> None:
         for name in ("vx", "vy", "vyaw"):
             value = getattr(self, name)
-            if not math.isfinite(value) or value < 0:
+            if (
+                not isinstance(value, int | float)
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+            ):
                 # A negative limit would turn a requested stop into motion (clamp of 0
                 # into [-l, l] with l < 0 is -l). A limit is a magnitude, or nothing.
                 raise ValueError(f"Limits.{name} must be finite and >= 0, got {value!r}")
+
+    @classmethod
+    def parse(cls, text: str) -> Limits:
+        """``"vx,vy,vyaw"`` (the ``MENLO_LIMITS`` form), e.g. ``"0.3,0.2,0.6"``."""
+        parts = [p.strip() for p in text.split(",")]
+        if len(parts) != 3:
+            raise ValueError(f"limits must be 'vx,vy,vyaw' (three numbers), got {text!r}")
+        try:
+            vx, vy, vyaw = (float(p) for p in parts)
+        except ValueError:
+            raise ValueError(f"limits must be 'vx,vy,vyaw' (three numbers), got {text!r}") from None
+        return cls(vx, vy, vyaw)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +94,7 @@ ModeName = Literal["stand", "damp"]
 
 @dataclass(frozen=True, slots=True)
 class ModeCommand:
-    """A posture: STAND or DAMP. An event, not a setpoint — sent once, never latched."""
+    """A posture: STAND or DAMP. An event, not a setpoint: sent once, never latched."""
 
     mode: ModeName
 
@@ -82,8 +108,8 @@ class Trajectory:
     """Direct joint targets for EVERY motor, in firmware order, radians.
 
     A setpoint, not a queue: the robot holds the latest one. Length must equal the
-    robot's DOF; the edge refuses anything else, so we refuse first. ``kp``/``kd`` are
-    optional per-joint gains; ``None`` means the firmware's defaults.
+    robot's DOF; Asimov Edge refuses anything else, so we refuse first. ``kp``/``kd`` are
+    optional per-joint gains; with ``None`` Asimov Edge applies its own per-joint gain table.
     """
 
     positions: tuple[float, ...]
@@ -92,7 +118,7 @@ class Trajectory:
 
     def __post_init__(self) -> None:
         if (self.kp is None) != (self.kd is None):
-            # The edge uses firmware defaults for BOTH unless both are given; sending one
+            # Asimov Edge uses its own gain table for BOTH unless both are given; sending one
             # would be silently ignored, so refuse it here.
             raise ValueError("give both kp and kd, or neither (exactly one of kp/kd was given)")
         if not self.positions:

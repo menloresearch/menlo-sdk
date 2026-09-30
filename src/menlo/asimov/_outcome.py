@@ -4,11 +4,11 @@ Every verb returns a :class:`Sent` immediately: the transport took the command, 
 is its sequence number, what was actually encoded (after clamping), and a place for the
 robot's verdict to land. The verdict is one of three, and the third is the honest one:
 
-* :class:`Applied` — the arbiter admitted it and forwarded it to the firmware.
-* :class:`Refused` — the arbiter dropped it, with a typed :class:`Refusal`.
-* :class:`Unknown` — no outcome arrived. UDP drops datagrams, rooms stall, and today's
-  edge does not report outcomes at all. Unknown is never treated as refused, and never
-  as success.
+* :class:`Applied`: the arbiter admitted it and forwarded it to the firmware.
+* :class:`Refused`: the arbiter dropped it, with a typed :class:`Refusal`.
+* :class:`Unknown`: no outcome arrived. Asimov Edge reports no per-command verdict on any
+  connection mode, so every command's outcome is Unknown. Unknown is never treated as
+  refused, and never as success.
 
 "Admitted" is a different question from "took effect". A STAND can be admitted and take
 four seconds to come true; that second question is answered from state, by
@@ -30,8 +30,8 @@ from menlo.asimov._errors import CommandRefusedError, OutcomeUnknownError
 class Refusal(enum.IntEnum):
     """Why the robot refused a command.
 
-    Values follow ``menlo.edge.RefusalReason``; the UDP lane delivers none of them, so an
-    outcome from any transport maps 1:1. ``UNRECOGNIZED`` is a value this SDK build does not know:
+    A transport that delivers verdicts maps them onto these values. Asimov Edge delivers
+    none on any connection mode. ``UNRECOGNIZED`` is a value this SDK build does not know:
     the robot is newer than the client. It is still a refusal.
     """
 
@@ -49,7 +49,7 @@ class Refusal(enum.IntEnum):
     SHUTTING_DOWN = 11
     NO_CAMERA = 12
     #: The arbiter dropped the command because another controller holds the body
-    #: (the edge's arbiter reason ``not_active``).
+    #: (Asimov Edge's arbiter reason ``not_active``).
     NOT_ACTIVE = 100
     UNRECOGNIZED = -1
 
@@ -171,8 +171,8 @@ class Sent:
     def require(self, timeout: float | None = None, *, unknown_ok: bool = True) -> Outcome:
         """Like ``wait_outcome`` but raise on refusal.
 
-        ``unknown_ok=False`` also raises when nothing arrived. Keep the default while the
-        UDP lane reports no outcomes — otherwise every call raises for the wrong reason.
+        ``unknown_ok=False`` also raises when nothing arrived. Asimov Edge reports no
+        outcomes, so with ``unknown_ok=False`` every call raises.
         """
         outcome = self.wait_outcome(timeout)
         if isinstance(outcome, Refused):

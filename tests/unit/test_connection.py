@@ -160,7 +160,9 @@ def test_a_manager_that_refuses_is_a_connect_error_carrying_its_reason(manager):
 
 
 def test_an_unreachable_manager_is_a_connect_error_naming_the_url():
-    with pytest.raises(ConnectError, match=r"could not reach the manager at http://127\.0\.0\.1:9"):
+    with pytest.raises(
+        ConnectError, match=r"could not reach Asimov Manager at http://127\.0\.0\.1:9"
+    ):
         ManagerConfig(url="http://127.0.0.1:9", credential="c", timeout=0.5).resolve()
 
 

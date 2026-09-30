@@ -1,25 +1,23 @@
-"""The direct lane: bare ``asimov.io`` protobufs over UDP to the edge's ``UdpConnector``.
+"""The ``udp`` connection mode: bare ``asimov.io`` protobufs over UDP to Asimov Edge.
 
-This is the edge's own external-client protocol (asimov-edge ``connectors/udp_connector.py``,
-opt-in with ``--udp-control``). Speaking it makes the SDK the fifth connector beside BLE,
-the robot's other controllers: the same ``RobotCommand``, the same arbiter, the same safety
-layer. Datagrams are unsigned; a robot whose edge enforces signed commands drops them.
+This is Asimov Edge's own external-client protocol, opt-in with ``udp-control``. Commands
+enter the same arbiter and safety layer as the robot's other controllers, below Asimov
+Manager's cockpit and a paired gamepad in priority. Datagrams are not authenticated: any
+host on the robot's network can send them.
 
 The wire::
 
     commands  ->  UDP <host>:8850    one serialized asimov.io.RobotCommand per datagram
     state     <-  UDP :8851          one serialized asimov.io.RobotState per datagram,
-                                     pushed by the edge at the firmware's telemetry rate
+                                     pushed by Asimov Edge at the firmware's telemetry rate
 
 No framing, no acks. Two facts about the connector decide the shape of this class:
 
-* It discards the sender address (``data, _ = recvfrom``) and pushes state to ONE
-  configured destination (``--udp-state-host``). So the machine running this code has to
-  be named when the edge starts, and this class binds that port and listens. One socket
-  does both jobs, the way asimov-manager's own edge bridge does it.
-* It answers nothing per command. Verdicts are an edge addition still to come; until
-  then ``subscribe_outcome`` is honoured and never fires, and every ``Sent.wait_outcome``
-  on this lane returns ``Unknown``.
+* It discards the sender address and pushes state to ONE configured destination
+  (``udp-state-host``). So the machine running this code has to be named when Asimov Edge
+  starts, and this class binds that port and listens. One socket does both jobs.
+* It answers nothing per command: ``subscribe_outcome`` is honoured and never fires, and
+  every ``Sent.wait_outcome`` returns ``Unknown``.
 """
 
 from __future__ import annotations
@@ -44,9 +42,9 @@ from menlo.asimov.transport.base import (
 
 log = logging.getLogger("menlo.asimov.transport.udp")
 
-#: ``--udp-control-port`` default on the edge.
+#: ``--udp-control-port`` default on Asimov Edge.
 COMMAND_PORT = 8850
-#: ``--udp-state-port`` default on the edge.
+#: ``--udp-state-port`` default on Asimov Edge.
 STATE_PORT = 8851
 
 __all__ = ["COMMAND_PORT", "STATE_PORT", "UdpTransport", "state_from_robot_state"]
@@ -58,10 +56,9 @@ class UdpTransport:
     kind: TransportKind = "udp"
     default_outcome_timeout: float = 0.5
     silence_hint: str = (
-        "Is the edge running with --udp-control, and is its --udp-state-host pointing at "
-        "this machine?"
+        "Is Asimov Edge running with udp-control on, and is its udp-state-host this machine?"
     )
-    #: The UDP lane carries commands and state only. Battery rides inside RobotState and is
+    #: UDP carries commands and state only. Battery rides inside RobotState and is
     #: reported per robot (see RobotInfo.capabilities); media is not on this wire.
     capabilities: frozenset[str] = frozenset({"drive", "state"})
 
@@ -94,7 +91,7 @@ class UdpTransport:
             raise ConnectError("this UdpTransport is already open")  # never leak a socket+thread
         _pb()  # fail here, with the install hint, not in the reader thread
         # Resolve the robot's name ONCE. sendto() with a hostname re-resolves on every
-        # datagram — ten mDNS lookups a second under the keepalive, each able to stall
+        # datagram: ten mDNS lookups a second under the keepalive, each able to stall
         # damp()/stop() behind a slow resolver.
         resolving = self._host
         try:
@@ -112,7 +109,7 @@ class UdpTransport:
             raise ConnectError(
                 f"could not bind the state port {self._bind[0]}:{self._bind[1]}: {exc}. "
                 "Another SDK process on this machine is already listening, or a stale one "
-                "is still running. Pass a different state_bind and start the edge with the "
+                "is still running. Pass a different state_bind and start Asimov Edge with the "
                 "matching --udp-state-port."
             ) from exc
         sock.settimeout(0.2)

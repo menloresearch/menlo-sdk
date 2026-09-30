@@ -1,82 +1,189 @@
 # menlo-sdk reference
 
-The long form of the [README](../README.md): every lane, every verb, the safety model, the errors, and how to develop the SDK itself. Writing an agent that drives the robot? Start from [SKILL.md](SKILL.md) instead.
+The long form of the [README](../README.md): every connection mode, every verb, the safety model, the errors, and how to develop the SDK itself. An agent writing scripts against the SDK starts from [SKILL.md](SKILL.md). Runnable scripts are in [examples/](../examples/README.md).
 
 ## Connection
 
-Or say where the robot is, lane by lane:
+Save a robot once with `menlo setup` (or `menlo robots add`), then `Robot().connect()` finds it. Or say where the robot is:
 
 ```python
 from menlo.asimov import ConnectionConfig, ManagerConfig, Robot, UdpConfig
 
 cfg = ConnectionConfig(
-    udp=UdpConfig(host="asimov.local"),  # the LAN lane
-    livekit=ManagerConfig(url="http://asimov.local", credential=CRED),  # the robot's manager
+    udp=UdpConfig(host="192.168.22.32"),  # the robot's address, for udp and hybrid
+    livekit=ManagerConfig(url="http://192.168.22.32", credential=CRED),  # Asimov Manager
 )
-with Robot(cfg).connect("hybrid") as robot:  # or "udp" / "livekit" — same Robot, pick per session
+with Robot(cfg).connect("hybrid") as robot:  # or "udp" / "livekit": same Robot, pick per session
     ...
 ```
 
-One `Robot`, one API, and the lane is chosen last. Describe the robot's wires once in a
-`ConnectionConfig` — one typed class per lane, nothing mixed — bind a `Robot` to it, then
-`connect(mode)`; `close()` and `connect()` again to switch lanes on the same `Robot`.
-`connect()` with no mode takes the config's one lane (a manager alone is `"livekit"`).
-Commands land in the edge's arbiter beside the robot's other controllers and pass the same
-safety layer, whichever lane they arrive on.
+The connection mode is chosen last. Describe how to reach the robot once in a `ConnectionConfig` (one typed class per connection, nothing mixed), bind a
+`Robot` to it, then `connect(mode)`; `close()` and `connect()` again to switch connection
+modes on the same `Robot`. `connect()` with no mode uses the config's `mode` (a saved
+robot's, or `MENLO_MODE`), else the one mode its fields allow; a config that allows several
+and names none is a `ValueError`. A mode whose fields are missing raises `ConnectError`
+before any network I/O, naming the field and the command that sets it. Commands land in
+Asimov Edge's arbiter beside the robot's other controllers and pass the same safety layer,
+whichever connection mode they arrive on.
 
-## Three ways to reach a robot
+Examples: [01_connect_udp.py](../examples/01_connect_udp.py),
+[02_connect_hybrid.py](../examples/02_connect_hybrid.py),
+[03_connect_livekit.py](../examples/03_connect_livekit.py).
 
-| `connect(mode)` | control + state | video + audio | needs a LiveKit server | config slots |
+## Connection modes
+
+| `connect(mode)` | control + state | camera + audio | needs a LiveKit server | config slots |
 |---|---|---|---|---|
-| `"udp"` | UDP 8850 / 8851 | — | no | `udp=UdpConfig(host)` |
-| `"hybrid"` | UDP 8850 / 8851 | LiveKit | yes | `udp=…` and `livekit=…` |
-| `"livekit"` | LiveKit data packets / data track | LiveKit | yes | `livekit=…` |
+| `"udp"` | UDP 8850 / 8851 | none | no | `udp=UdpConfig(host)` |
+| `"hybrid"` | UDP 8850 / 8851 | LiveKit | yes | `udp=...` and `livekit=...` |
+| `"livekit"` | LiveKit data packets / data track | LiveKit | yes | `livekit=...` |
 
-The `livekit` slot is either `ManagerConfig(url, credential)` — the SDK asks the robot's
-manager for the room and a fresh join token on every connect, so you never hold a LiveKit
-token — or `LiveKitConfig(url, room, token)` when you run your own SFU.
-`cfg.available_modes()` says which modes a config can reach. The manager URL is whatever
-the robot's web UI answers on — `http://192.168.22.32` (port 80), `http://asimov.local:8080`,
-or a bare host (`http://` assumed); no port is assumed. A manager whose SFU runs beside the
-edge reports `ws://localhost:7880`; the SDK substitutes the manager's host so the room is
-reachable from your machine.
+The `livekit` slot is either `ManagerConfig(url, credential)` (the SDK asks Asimov Manager
+for the room and a fresh join token on every connect, so you never hold a LiveKit token) or
+`LiveKitConfig(url, room, token)` when you run your own LiveKit server.
+`cfg.available_modes()` says which modes a config can reach. The Asimov Manager URL is
+whatever the robot's web console answers on: `http://192.168.22.32` (port 80),
+`http://asimov.local:8080`, or a bare host (`http://` is added); no port is assumed. Asimov
+Manager reports the LiveKit URL as the robot sees it, often `ws://localhost:7880`; the SDK
+substitutes the manager's host so the room is reachable from your machine.
 
-Same verbs, same waits, same error model on all three: `robot.py` does not know which wire
-it is on. Pick **udp** on the LAN when you need no camera, **hybrid** on the LAN when you
-do, and **livekit** when the robot is not routable from your machine.
+The verbs, the waits and the errors are the same on all three. Pick `udp` on the robot's network when you need no camera, `hybrid` on the
+robot's network when you do, and `livekit` wherever the robot's Asimov Manager is
+reachable. State arrives at the firmware's rate (200 Hz) on udp and hybrid, and at 10 Hz on
+livekit.
 
-**LiveKit is optional.** `pip install menlo-sdk` with no extra drives a robot over UDP;
-every `livekit` import in the SDK is lazy and confined to one module. Add the media lane
-with `pip install "menlo-sdk[livekit]"`.
+`pip install menlo-sdk` drives every connection mode. `livekit` is imported lazily, in one
+module, so `import menlo.asimov` and `connect("udp")` never load it.
 
-### The wire
+### The protocol
 
 ```
 udp / hybrid      commands -> udp/8850            one bare asimov.io.RobotCommand per datagram
                   state    <- udp/8851            one bare asimov.io.RobotState per datagram
 livekit           commands -> data topic "commands"   the SAME RobotCommand bytes, reliable packets
                   state    <- data track "state"      the SAME RobotState bytes, one per frame,
-                                                      ordered; user_timestamp = edge receive clock
-                  camera   <- a video track, decoded to rgb8 Frames
+                                                      ordered; user_timestamp = Asimov Edge's clock
+hybrid, livekit   camera   <- a video track, decoded to rgb8 Frames
                   mic      <- an audio track, as pcm_s16le AudioChunks
                   speaker  -> an audio track the SDK publishes
 ```
 
-No envelope, no framing, no type tag: the port, or the topic, says what the bytes are.
+There is no envelope, framing or type tag: the port, or the topic, says what the bytes are. Each
+command carries `protocol_version = 1`, a sequence number and the sender's clock in
+`timestamp_us`; neither Asimov Edge nor the firmware checks that clock, and there is no
+timestamp window. [11_raw_livekit.py](../examples/11_raw_livekit.py) speaks this protocol with
+`livekit` and `asimov-protocol` only.
 
-**The SDK never holds a LiveKit API secret.** There is no `api_key`/`api_secret` parameter
-anywhere in it — a caller brings a join token minted by the robot's manager, or a callable
-that mints a fresh one per join (`token=lambda: fetch()`).
+The SDK never holds a LiveKit API secret. There is no `api_key`/`api_secret` parameter
+anywhere in it: a caller brings a join token minted by Asimov Manager, or a callable that
+mints a fresh one per join (`token=lambda: fetch()`).
 
-**And no `identity` parameter.** A participant's identity is a claim inside the token
-(`sub`), and the LiveKit server ignores whatever a client says about it — an argument for
-it would be a lie. The SDK reads it back instead: `transport.identity`, and
-`robot.info.endpoint` reads `room@url as <identity>` once joined. One token is one
-participant: two participants in a room need two tokens, or the server disconnects the
-earlier duplicate. With `ManagerConfig` every session gets its own identity,
-`sdk-<credential id>-<host>-<6 random hex>`, so two scripts on one credential coexist;
-`ManagerConfig(label="agent")` fixes the suffix when you want a recognisable name — and two
-sessions with the same label then evict each other.
+There is no `identity` parameter either. A participant's identity is a claim inside the token
+(`sub`), and the LiveKit server ignores whatever a client says about it. The SDK reads it
+back instead: `transport.identity`, and `robot.info.endpoint` reads `room@url as <identity>`
+once joined. One token is one participant: two participants in a room need two tokens, or
+the server disconnects the earlier duplicate. With `ManagerConfig` every session gets its
+own identity, `sdk-<credential id>-<host>-<6 random hex>`, so two scripts on one credential
+coexist; `ManagerConfig(label="agent")` fixes the suffix when you want a recognisable name,
+and two sessions with the same label then evict each other.
+
+## Saved robots and the environment
+
+`Robot()` with no argument (and `ConnectionConfig.from_environment()`) looks, in order:
+
+1. The environment: `MENLO_UDP_HOST` and/or `MENLO_MANAGER_URL` + `MENLO_CREDENTIAL` (one of
+   the manager pair without the other is a `ConnectError`). Not merged with a saved robot.
+2. A saved robot in `$MENLO_HOME/robots.toml` (default `~/.menlo/robots.toml`): the one named
+   by `MENLO_ROBOT` (the CLI's `--robot`), else the file's `default`, else the only one.
+3. Otherwise `ConnectError`, naming `menlo setup`, `Robot(cfg)` and the variables.
+
+`MENLO_MODE` then sets the connection mode `connect()` uses with no argument, and
+`MENLO_LIMITS` the velocity clamp, whichever source supplied the connection.
+
+```toml
+default = "lab"
+
+[robots.lab]
+mode = "hybrid"                       # udp | hybrid | livekit
+udp_host = "192.168.22.32"            # udp, hybrid
+manager_url = "http://192.168.22.32"  # hybrid, livekit
+credential = "..."                    # hybrid, livekit
+room = "robot-menlo-0001"             # written from Asimov Manager's answer
+
+[robots.lab.limits]                   # optional; missing keys take the firmware caps
+vx = 0.3
+```
+
+udp needs `udp_host`; hybrid needs `udp_host`, `manager_url` and `credential`; livekit needs
+`manager_url` and `credential`. The directory is 0700 and the file 0600: it holds SDK
+credentials. `menlo setup`, `menlo robots add`, `connect(persist=True)` and `MENLO_PERSIST=1`
+write it; the last two only after a connect that succeeded, and only with a `ManagerConfig`.
+
+| variable | meaning |
+|---|---|
+| `MENLO_ROBOT` | saved robot name |
+| `MENLO_MODE` | `udp`, `hybrid` or `livekit` for `connect()` with no mode |
+| `MENLO_UDP_HOST` | the robot's address for udp and hybrid |
+| `MENLO_MANAGER_URL` | Asimov Manager URL |
+| `MENLO_CREDENTIAL` | SDK credential |
+| `MENLO_LIMITS` | `"vx,vy,vyaw"` |
+| `MENLO_HOME` | directory of `robots.toml` (default `~/.menlo`) |
+| `MENLO_PERSIST` | `1`, `true`, `yes` or `on`: `connect(persist=True)` |
+
+## The command line
+
+```bash
+menlo setup                                  # ask, check, save a robot
+menlo robots [--json]                        # saved robots, default first
+menlo robots add NAME [--mode MODE] [--udp HOST] [--manager URL] [--credential C]
+                      [--limits VX,VY,VYAW] [--default] [--no-check] [--no-input]
+menlo robots remove NAME | menlo robots use NAME
+menlo status [--watch] [--json]              # READY / NOT READY / FAULTED; sends nothing
+menlo stand [-y]                             # DAMP -> STAND, then waits until armed
+menlo walk --vx 0.2 --duration 3 [-y]        # 0 < duration <= 10 s, then stop()
+menlo stop                                   # zero velocity, only in MOVE; never asks
+menlo damp [-y]                              # every actuator compliant; not an emergency stop
+```
+
+`--robot NAME` and `--mode udp|hybrid|livekit` work with every command.
+
+`stand`, `walk` and `damp` print a plan on one line and ask `Proceed? [y/N]` before they
+send anything:
+
+```text
+lab (udp, 192.168.22.32) · DAMP · battery 82 % → stand, then wait until armed
+lab (hybrid, 192.168.22.32) · STAND, armed · battery 82 % → walk vx 0.20 m/s, vy 0.00 m/s, vyaw 0.00 rad/s for 3.0 s, then stop
+lab (udp, 192.168.22.32) · MOVE · battery 82 % → damp: every actuator goes limp and a standing robot folds. Not an emergency stop; use the robot's physical stop for that.
+```
+
+A speed above the limits shows the value that is sent, then the one asked for:
+`vx 0.40 m/s (asked 0.60)`. Only `y` or `yes` goes ahead; Enter or anything else cancels
+(exit `4`, nothing sent). `-y`/`--yes` prints the plan and goes ahead without asking. With no
+terminal and no `--yes`, the command sends nothing and exits `2`. `stop` never asks.
+
+Before the plan, `stand` runs `preflight("stand")` and `walk` runs `preflight("move")`
+(waiting up to 5 s for a robot in STAND to be seen armed). A blocking problem prints
+`Not feasible:`, the robot mode, the reason and the fix, on stderr, and exits `3` without
+asking:
+
+```text
+Not feasible: lab is in DAMP, not balancing. Run `menlo stand` first.
+Not feasible: lab is in STAND, not armed. STAND has not been held upright for 0.5 s; the firmware accepts MOVE after that. Run the command again once `menlo status` shows it armed.
+Not feasible: lab is in MOVE, balancing. `stand` only runs from DAMP; end a walk with `menlo stop`.
+Not feasible: lab is in DAMP, faulted. The firmware latched DAMP (FALL_DETECTED); it stays latched until the firmware restarts.
+Not feasible: no fresh state from lab: the latest state is 1.2 s old (limit 0.5 s). Check the link with `menlo status`.
+```
+
+`walk` runs `preflight("move")` again after the answer; if the robot changed, it prints
+`Not feasible:` and sends nothing. `damp` is not gated by preflight. `stand` on a robot
+already in STAND sends nothing and exits `0`.
+
+A fault during a walk ends it: `walk` names the alert, says it latches until the firmware
+restarts, and exits `3`.
+
+Exit codes: `0` done, `1` error, `2` usage, `3` not feasible (or the robot did not become
+ready, or a fault ended a walk), `4` cancelled, `130` interrupted. An agent runs `menlo status --json` first, then
+`menlo walk ... --yes`, and branches on the exit code.
 
 ## Install
 
@@ -84,7 +191,6 @@ Python 3.12 or newer.
 
 ```bash
 uv add menlo-sdk                    # from PyPI; the robot is `menlo.asimov`
-uv add "menlo-sdk[livekit]"         # + the media lane (hybrid and livekit modes)
 
 # an unreleased commit, straight from git:
 uv add "menlo-sdk @ git+https://github.com/menloresearch/menlo-sdk.git"
@@ -93,81 +199,88 @@ uv add "menlo-sdk @ git+https://github.com/menloresearch/menlo-sdk.git"
 Releases are the `v*` tags of this repo, each with a GitHub Release carrying the files that were
 uploaded to PyPI; how versions are chosen and cut is in [RELEASING.md](../RELEASING.md).
 
-Two runtime dependencies, `asimov-protocol` (the generated `asimov.io` bindings, from PyPI;
-`>=1.2.1rc1,<2`, the bound following the wire directory `v1/`) and `protobuf`; `[livekit]` is the
-one extra — a robot drives without it. The edge, its tools and this SDK import the same
-installed `asimov_protocol`, so one process holds one set of descriptors.
+Runtime dependencies: `asimov-protocol` (the generated `asimov.io` bindings;
+`>=1.2.1rc1,<2`, the bound following the protocol directory `v1/`), `protobuf`, `livekit` (the
+hybrid and livekit connection modes), and `questionary` and `rich` (the `menlo` command
+line). There are no extras. numpy, Pillow and OpenCV are
+optional: the calls that need one name it in the error.
 
 ## The robot side
 
-For **udp** and **hybrid**, the edge must run with `--udp-control` and push state to
-your machine (`--udp-state-host <your ip>`). To run against a simulated robot instead of
-hardware: `menlo-studio up --container --sdk`, then `Robot(ConnectionConfig(udp=UdpConfig("127.0.0.1"))).connect("udp")`.
+For `udp` and `hybrid`, Asimov Edge must have `udp-control` on and send state to your
+machine (`udp-state-host` set to your IP); both are Asimov Edge parameters in Asimov
+Manager. Asimov Edge sends UDP state to one address, so one machine at a time receives it.
 
-For **hybrid** and **livekit**, the robot's edge joins a LiveKit room — one per robot,
-named by its id — publishes its camera and microphone as ordinary tracks, and (in livekit
-mode) answers on the `state` data track. With `ManagerConfig` the SDK gets the room name
-and a token from the robot's manager itself. `examples/agent_room.py` documents the
-room/identity/topic convention and shows a
-LiveKit *agent* joining the same room: `livekit-plugins-google`'s
-`RealtimeModel(video_input=True)` already turns the robot's video track into what Gemini
-Live wants (about 1 fps of JPEG plus 16 kHz PCM), so this SDK adds no model glue.
+For `hybrid` and `livekit`, Asimov Edge joins a LiveKit room (one per robot, named by
+its serial), publishes the camera and microphone as ordinary tracks, and (on livekit)
+answers on the `state` data track. With `ManagerConfig` the SDK gets the room name and a
+token from Asimov Manager itself. The SDK credential comes from the Developer page of Asimov Manager;
+its role is `control` (may drive over livekit and use the speaker) or `observe` (may watch).
+The role applies to the room only: hybrid sends commands over UDP, which has no sign-in. An
+agent framework can join the same room and subscribe the robot's tracks itself;
+[apps/agent_room.py](../examples/apps/agent_room.py)
+shows the SDK half.
+
+**Control priority.** Asimov Edge executes one source at a time: the Asimov Manager Cockpit,
+then a paired gamepad, then udp, then livekit. A paired gamepad holds control even when
+idle. The state stream does not show who holds control, so a velocity that another source
+outranks has no effect and nothing reports it.
 
 ## API in one screen
 
 ```python
-robot = Robot()  # MENLO_MANAGER_URL + MENLO_CREDENTIAL, else ~/.menlo/robots.toml
+robot = Robot()  # the environment, else the saved robot (see above)
 cfg = ConnectionConfig(
     udp=UdpConfig(host, command_port=8850, state_bind=("0.0.0.0", 8851), state_source=None),
     livekit=ManagerConfig(url="http://host", credential=CRED, label=None),
     # or: livekit=LiveKitConfig(url="ws://host:7880", room="robot-<serial>", token=str_or_callable)
+    limits=None,  # used when Robot(limits=) is not given
+    mode=None,  # what connect() uses with no argument
 )
 cfg.available_modes()  # ("udp", "hybrid", "livekit")
-robot = Robot(cfg, limits=None, link_timeout=2.0)  # bound, no network yet
+ConnectionConfig.from_environment(robot="lab")  # a saved robot by name
+robot = Robot(cfg, limits=None, link_timeout=2.0)  # bound; nothing touches the network
 robot.connect("hybrid", timeout=5.0, media_timeout=3.0, connect_timeout=10.0)  # returns robot
-robot.connect()  # the config's one lane; ValueError when it has several
-robot.connect(
-    "livekit", require_state=False
-)  # media now; state/verbs unlock when the firmware reports
-robot.connect("livekit", persist=True)  # save URL + credential to the store after success
+robot.connect()  # the config's mode, else its one mode; ValueError when it allows several
+robot.connect("livekit", require_state=False)  # media now; state and verbs once the robot reports
+robot.connect("livekit", persist=True)  # save the connection after it succeeds
 robot.close()
-robot.connect("udp")  # switch lanes on the same Robot
+robot.connect("udp")  # switch connection modes on the same Robot
 robot = Robot(transport, limits=None, link_timeout=2.0)
 robot.open()  # any Transport
 
-# verbs — each returns a Sent immediately; the wire's own vocabulary
-robot.set_velocity(
-    vx, vy, vyaw, duration=None, wait=False
-)  # held at 10 Hz until superseded/stop/duration
-robot.set_velocity(
-    vx=0.25, duration=1.0, wait=True
-)  # blocks until the hold ended and its zero left
-robot.stop()  # zero velocity; stays in MOVE at rest, still balancing — how it stands still
-robot.stand()  # one-shot; STIFFEN to a pose, no balance loop — see the warning below
-robot.damp()  # one-shot; motors compliant NOW — the emergency verb
-robot.trajectory(
-    positions, kp=None, kd=None
-)  # one setpoint, radians, firmware order; kp/kd <= 0 -> firmware DAMP gains
-robot.goto(positions, duration=2.0, hz=50, wait=True)  # clocked, interpolated from the current pose
+# readiness: sends nothing
+robot.preflight("move")  # Preflight(ok, problems, ...); "stand" | "move" | "trajectory"
+robot.wait_ready("move", timeout=5.0)  # blocks until ok; NotReadyError otherwise
+robot.armed  # True / False / None: does the firmware accept MOVE now?
 
-# waits — the robot's own report, never a sleep
+# verbs: each returns a Sent immediately; the protocol's own vocabulary
+robot.set_velocity(vx, vy, vyaw, duration=None, wait=False)  # held at 10 Hz until superseded
+robot.set_velocity(vx=0.25, duration=1.0, wait=True)  # blocks until the hold ends and zero is sent
+robot.stop()  # zero velocity; stays in MOVE, balancing: how a walk ends
+robot.stand()  # one-shot; stiffen to a pose, no balance loop; see the safety model
+robot.damp()  # one-shot; every actuator compliant now; not an emergency stop
+robot.trajectory(positions, kp=None, kd=None)  # one setpoint, radians, firmware order
+robot.goto(positions, duration=2.0, hz=50, wait=True, tolerance=0.05)  # from the current pose
+
+# waits: the robot's own report, never a sleep
 robot.wait_for(Mode.STAND, timeout=10, stale_after=None)
 robot.wait_until(lambda s: s.upright and s.mode is Mode.MOVE, timeout=10, stale_after=None)
 
 # state
 s = robot.state  # latest sample: mode, joints, gravity, gyro, quat, euler, alerts, battery
 s.age_s
-s.upright
-s.faulted
+s.upright  # gravity z below -0.8; not the arming test (use robot.armed)
+s.faulted  # error_flags set or a critical alert; stays True until the firmware restarts
 s.yaw  # heading, rad, counter-clockwise; a turn is math.remainder(after - before, math.tau)
 s.joint("L_Knee").pos
-s.battery.soc_percent
+s.battery.soc_percent  # s.battery is None when the robot reports none
 robot.info  # transport, endpoint, dof, joint_names, protocol_version, limits, capabilities
 robot.has("camera")
 robot.require("drive", "battery")
 
-# media — UnsupportedError when this robot/transport does not carry it
-robot.camera.photo(timeout=5)  # ONE fresh rgb8 Frame; WaitTimeoutError if the camera is quiet
+# media: UnsupportedError when this robot, over this connection, does not carry it
+robot.camera.photo(timeout=5)  # one fresh rgb8 Frame; WaitTimeoutError if the camera is quiet
 robot.camera.photo().to_jpeg(quality=85)  # bytes; needs Pillow, else ImportError naming it
 robot.camera.latest()
 robot.camera.frames(timeout=5)  # latest-wins iterator
@@ -184,111 +297,162 @@ robot.speaker.play_pcm(pcm_s16le, sample_rate_hz=16000)
 robot.on_state = ...
 robot.on_alert = ...
 robot.on_mode_change = ...
-robot.on_refused = ...
 robot.on_link_lost = ...
 
 # recording
 with robot.record("run.jsonl"):
-    ...  # every state sample and every command, JSON lines
+    ...  # every state sample and every command, JSON lines; menlo.asimov.recording.load() reads it
 
-# outcomes — was the command admitted? separate from "did it take effect"
-sent = robot.stand()
-sent.wait_outcome()  # Applied | Refused | Unknown
-sent.require()  # raises CommandRefusedError on Refused
+# outcomes: was the command admitted? separate from "did it take effect"
+sent = robot.stop()
+sent.wait_outcome()  # Unknown on every connection mode: Asimov Edge reports no verdict
 ```
+
+## Check before you move
+
+`robot.preflight(action)` reads the latest state and returns a `Preflight`: `ok` when no
+problem is blocking, `problems` (blocking first, then warnings), `has(code)`, and a readable
+`str()`. It sends nothing and never raises for a robot condition. `action` is `"stand"`,
+`"move"` (`set_velocity`) or `"trajectory"` (`trajectory` and `goto`). `stand` is ok from
+DAMP or STAND; `move` and `trajectory` are ok in MOVE or in an armed STAND.
+
+| code | blocking | when |
+|---|---|---|
+| `not_connected` | yes | the Robot is closed, its link was lost, or the protocol version differs |
+| `no_state` | yes | the session is open and the robot has not reported state |
+| `stale_state` | yes | the latest state is older than 0.5 s |
+| `faulted` | yes | the firmware latched DAMP; it stays so until the firmware restarts |
+| `battery_protecting` | yes | the battery management system is protecting the pack |
+| `battery_low` | yes | state of charge below 20 % |
+| `unknown_battery` | no | the robot reports no battery |
+| `joint_hot` | yes | an actuator at or above 60 C |
+| `unknown_joint_temp` | no | the robot reports no actuator temperatures |
+| `wrong_mode` | yes | stand from MOVE; move or trajectory from DAMP |
+| `not_armed` | yes | STAND has not been held upright for 0.5 s |
+| `unknown_gravity` | no | no gravity vector, so tilt and arming cannot be checked; `move` and `trajectory` then pass in STAND unverified |
+
+`robot.wait_ready(action, timeout=5.0)` polls until the check is ok and returns it. It
+raises `NotReadyError` (carrying `.preflight`) after `timeout`, or at once on `faulted` or
+`not_connected`, which waiting cannot clear.
+
+**Armed.** The firmware reports STAND at once but accepts MOVE only once STAND has been held
+upright (gravity z below -0.87) for 0.5 s. A velocity sent before that is neither refused
+nor reported: the robot stays in STAND while a `duration` runs. Call `wait_ready("move")`
+after `stand()` and before the first `set_velocity`. See
+[04_preflight.py](../examples/04_preflight.py) and
+[05_stand_and_walk.py](../examples/05_stand_and_walk.py).
 
 ## Safety model
 
-- A held velocity is re-sent at 10 Hz. The edge zeroes velocity two seconds after the last
-  one it received; the robot then stands in place in MOVE.
-- `duration=` bounds a hold on the client; the SDK sends the zero itself when time is up.
-  `set_velocity` returns at once either way — the next verb, or `close()` at the end of a
-  `with` block, cuts an unexpired hold short. `wait=True` blocks until the hold has ended
-  and its zero has gone out.
+- **Nothing in the SDK is an emergency stop.** Use the robot's physical stop.
+- **Velocity limits.** The Motion Control Board firmware caps velocity at 0.4 m/s forward
+  and sideways and 0.8 rad/s turning. `Limits()` defaults to those caps, so `Sent.clamped`
+  is true exactly when the robot would not walk at the speed asked for. Set lower limits
+  with `Robot(limits=Limits(...))`, `[robots.NAME.limits]` or `MENLO_LIMITS="vx,vy,vyaw"`;
+  higher values are sent as asked and the firmware clamps them. `Limits` rejects negative
+  or non-finite values.
+- **A held velocity is re-sent at 10 Hz.** On udp and hybrid, Asimov Edge zeroes velocity
+  2 s after the last one it received; the robot then stays in MOVE, balancing. On livekit,
+  Asimov Edge stops a held velocity when the SDK sends zero or leaves the room.
+- **The SDK sends zero** on `stop()`, and on `close()`, the end of a `with` block or a lost
+  link while it holds a velocity.
+  When the robot latches a fault or its firmware restarts, the SDK releases the hold and
+  sends nothing more. `duration=` bounds a hold on the client; the SDK sends the zero itself when time
+  is up. `set_velocity` returns at once either way: the next verb, or `close()` at the end
+  of a `with` block, cuts an unexpired hold short. `wait=True` blocks until the hold has
+  ended and its zero has gone out.
 - `close()` sends a zero if a velocity was held and stops re-sending a held trajectory.
   `LinkLostError` (no state for `link_timeout` seconds) does the same, then every verb raises
-  until you `close()` and `connect()` again. A trajectory that is no longer re-sent is DAMPed by
-  the edge two seconds later; there is no neutral setpoint the SDK could send instead.
+  until you `close()` and `connect()` again. Asimov Edge puts the robot in DAMP 2 s after
+  the last trajectory setpoint; there is no neutral setpoint the SDK could send instead.
 - A verb is never dropped as superseded; only the keepalive's re-sends are. A new verb ends
   any running `goto()`.
+- **MOVE from STAND only once armed** (see Check before you move). In DAMP, Asimov Edge drops
+  velocities and trajectories; nothing raises.
 - `trajectory()` and `goto()` put every joint under position control with the walking
   policy off: the robot does not balance itself while one is in force. On a standing biped
-  use them with the robot supported, or with gains known to hold the legs. The edge DAMPs a
-  trajectory two seconds after the last setpoint; `goto()` holds its target until another
-  verb, `trajectory()` is one setpoint you clock yourself.
-- **`stand()` is a stiffen, not a balance.** It blends every joint to a fixed pose and
-  holds it with position gains, with no balance loop. It is the wake-up verb
-  (DAMP → STAND → MOVE) and is safe on a robot that is held, craned or on its stand.
+  use them with the robot supported, or with gains known to hold the legs. Without `kp`/`kd`,
+  Asimov Edge applies its own per-joint gain table. `goto()` holds its target until another
+  verb; `trajectory()` is one setpoint you clock yourself. Joint control ends with `damp()`,
+  with the robot still supported; [08_move_joints.py](../examples/08_move_joints.py) does this.
+- **`stand()` holds a pose without a balance loop.** It blends every joint to a fixed pose and
+  holds it with position gains, with no balance loop. It is the verb that wakes the robot
+  (DAMP, then STAND, then MOVE): call it only from DAMP, after `wait_ready("stand")`.
   Asking a free-standing biped to stiffen after walking tips it over. To stand still
-  after a walk, stay in MOVE at zero velocity, where the policy keeps balancing.
-- **Your own setpoint loop owns the robot; `goto()` does not.** The firmware obeys
+  after a walk, call `stop()` and stay in MOVE at zero velocity, where the policy keeps
+  balancing. [06_stop_and_shutdown.py](../examples/06_stop_and_shutdown.py) ends a walk.
+- **The last command in effect wins; `goto()` yields to any other verb.** The firmware obeys
   whichever command arrived last. A `goto()` is fenced by the SDK: any verb from any
-  thread — `damp()`, `stand()`, a velocity — ends it before its next setpoint leaves.
-  A loop you clock yourself with `trajectory()` is not: a mode verb sent from another
-  thread is overwritten by your next setpoint. Measured: a `damp()` fired into a
-  hand-rolled 50 Hz trajectory loop left the robot in MOVE and upright, as if never
-  sent. Stop your loop, then send the verb. In an emergency kill the process — the edge
-  DAMPs by itself about two seconds after the last setpoint, and that does not depend
-  on your loop still working.
-- `damp()` folds a standing biped. It is deliberate and never implied by anything else.
-- Speeds are clamped client-side (`Limits`, default 0.6 m/s / 1.5 rad/s), the clamp is
-  visible on `Sent.clamped`, and `Limits` rejects negative or non-finite values.
-- A capability is claimed from a track that ARRIVED. A LiveKit room publishing no video
+  thread (`damp()`, `stand()`, a velocity) ends it before its next setpoint leaves.
+  A loop you clock yourself with `trajectory()` is not: a verb sent from another thread
+  can be overwritten by your next setpoint. Stop your loop, then send the verb.
+- `damp()` makes every actuator compliant and a standing biped folds. The SDK sends it only
+  when you call it.
+- **Faults latch.** A critical alert (a fall, actuator over-temperature, battery protection,
+  a joint past its limit, lost actuator communication, a watchdog) makes the firmware latch
+  DAMP until it restarts. `error_flags` stay set and `state.faulted` stays True until then;
+  `preflight()` reports `faulted`, `wait_ready()` raises `NotReadyError` with the code
+  `faulted`, and `wait_for()` and `wait_until()` raise `RobotFaultedError`. Nothing a script
+  sends clears it.
+- **Outcomes are Unknown.** Asimov Edge reports no per-command verdict, so
+  `sent.wait_outcome()` is `Unknown` on every connection mode and `on_refused` never fires.
+  Read the effect from `robot.state`.
+- A capability is claimed from a track that arrived. A LiveKit room publishing no video
   makes `robot.has("camera")` False and `robot.camera` raise `UnsupportedError`, rather
   than hand out a stream that never yields. `media_timeout=` bounds the wait and returns as
   soon as the video track is up, so a robot with a camera and no microphone does not pay
   the whole budget. A track that lands after the connect still attaches and still works; it
-  simply misses `robot.info.capabilities`, which is a snapshot — raise `media_timeout` when
-  a late track must be reflected there.
+  misses `robot.info.capabilities`, which is a snapshot; raise `media_timeout` when a late
+  track must be reflected there.
 - The state port is plain UDP: samples that do not look like this robot are dropped, an
   older datagram never overwrites a newer sample, and `state_source=` pins the one address
   state may arrive from.
-- Datagrams on the UDP lane are **unsigned**; a robot whose edge enforces signed commands
-  drops them. The edge's signed-command grants are its own namespace, separate from the
-  SDK's `has()`/`require()` capabilities: a `trajectory` needs `control.skills`, a
-  `set_velocity` needs `control.drive`, and `stand()`/`damp()` need `control.mode` — a
-  client cleared to drive is not automatically cleared to send joint targets.
-- The robot's fault latch outlives the alert that raised it: after a fall the robot stays
-  DAMPed and refuses STAND until its firmware restarts, while `state.faulted` clears after
-  about 2.5 s. A `wait_for(Mode.STAND)` in that condition ends in `WaitTimeoutError`.
+- UDP commands are not authenticated: any host on the robot's network can send them.
+  Keep udp and hybrid on a network you trust.
 
 ## Errors
 
 | Exception | When |
 |---|---|
-| `ConnectError` / `ProtocolMismatchError` | no state within `timeout`; protocol version differs |
+| `ConnectError` / `ProtocolMismatchError` | a missing field for the mode; no state within `timeout`; protocol version differs |
 | `NotConnectedError` | a call before `connect()` or after `close()`; `state`/verbs in a `require_state=False` session before the robot reported |
+| `NotReadyError` | `wait_ready()` timed out, or the robot is faulted or not connected; `.preflight` has the problems |
 | `LinkLostError` | no state for `link_timeout` s; the session is over |
 | `WaitTimeoutError` (also `TimeoutError`) | a wait's condition was not met in time; `.last` is the last state |
 | `StateStaleError` | the stream went quiet during a wait |
-| `RobotFaultedError` | the firmware fault-DAMPed; `.state` carries the alerts |
+| `RobotFaultedError` | the firmware latched DAMP; `.state` carries the alerts |
 | `CommandRefusedError` / `OutcomeUnknownError` | from `Sent.require()` |
-| `UnsupportedError` | this robot, over this transport, does not provide the capability |
+| `UnsupportedError` | this robot, over this connection, does not provide the capability |
 
 Caller mistakes stay builtins: `ValueError` for a non-finite velocity, a bad limit or
-duration, or a trajectory of the wrong length; `KeyError` for an unknown joint name.
+duration, a trajectory of the wrong length, or an unknown `MENLO_MODE`; `KeyError` for an
+unknown joint name.
 
 ## Development
 
+To run the checks on your machine, install [uv](https://docs.astral.sh/uv/) and run, from
+the repository root:
+
 ```bash
-make sync          # uv sync
-make check         # ruff, mypy --strict, unit tests (fake edge on the real wire)
-make integration   # the real asimov-edge UdpConnector in-process; ASIMOV_EDGE_SRC=<edge>/src
-make live          # a robot or simulator; MENLO_SDK_LIVE_HOST=<host>
-make livekit       # real livekit.rtc vs `livekit-server --dev`; needs MENLO_SDK_LIVEKIT_URL
-                   # plus TWO tokens for one room (_TOKEN and _EDGE_TOKEN)
+make sync          # install the SDK and the development tools
+make check         # ruff, mypy --strict (the SDK and the examples) and the unit tests
+make live          # against a robot or the simulator; MENLO_SDK_LIVE_HOST=<host>
+make livekit       # against `livekit-server --dev`; needs MENLO_SDK_LIVEKIT_URL
+                   # plus two tokens for one room (_TOKEN and _EDGE_TOKEN)
 ```
 
-CI runs the checks on Python 3.12 and 3.13 and builds the wheel. One job needs read access
-to another menloresearch repository and skips with a warning when the repository secret is
-absent: the real-edge integration job.
+`make check` needs no robot: the unit tests run the SDK against a simulated Asimov Edge in
+the test process that speaks the same protocol as the robot. They run every example this
+way except [11_raw_livekit.py](../examples/11_raw_livekit.py), which needs a LiveKit
+server. CI runs the same checks on Python 3.12 and 3.13 and builds the wheel.
 
 ```
 src/menlo/
   __init__.py       __version__; one subpackage per robot
-  cli.py            the `menlo` console script: login / robots / use / logout
+  cli/              the `menlo` console script: setup, robots, status, stand, walk, stop, damp
 src/menlo/asimov/   the Asimov biped
-  robot.py          Robot: verbs, waits, keepalive, callbacks, goto
+  robot.py          Robot: verbs, waits, preflight, keepalive, callbacks, goto
+  _preflight.py     Preflight, Problem, the problem codes and thresholds
   connection.py     ConnectionConfig, UdpConfig, LiveKitConfig, ManagerConfig
   store.py          ~/.menlo/robots.toml, the zero-config lookup, persist
   _state.py         State, Joint, Alert, Battery, RobotInfo, Mode
@@ -299,10 +463,8 @@ src/menlo/asimov/   the Asimov biped
   _errors.py        the exception taxonomy
   robots.py         per-robot tables: joint names, protocol version
   transport/        Transport protocol, UdpTransport, LiveKitTransport, HybridTransport,
-                    _wire.py (the protobufs both lanes share) and _livekit_client.py
-                    (the ONE module that imports livekit, lazily)
-examples/           runnable scripts; examples/demos/ are the three walkthroughs,
-                    examples/agent_room.py is the LiveKit-agent room convention
+                    _wire.py (the protobufs every connection mode shares) and
+                    _livekit_client.py (the one module that imports livekit, lazily)
+examples/           runnable scripts, 01 to 11, and apps/; indexed in examples/README.md
 docs/SKILL.md       the two-page reference for an agent writing a script against this SDK
 ```
-

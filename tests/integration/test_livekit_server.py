@@ -11,7 +11,7 @@ stand-in for the robot's edge in the same room, so:
 Run with ``make livekit`` after starting a server::
 
     livekit-server --dev            # api key devkey / secret secret, ws://127.0.0.1:7880
-    uv sync --extra livekit
+    uv sync --all-groups
     lk token create --api-key devkey --api-secret secret --join \\
         --room menlo-sdk-it --identity sdk       --valid-for 24h
     lk token create --api-key devkey --api-secret secret --join \\
@@ -20,7 +20,7 @@ Run with ``make livekit`` after starting a server::
     MENLO_SDK_LIVEKIT_TOKEN=<the sdk one> \\
     MENLO_SDK_LIVEKIT_EDGE_TOKEN=<the fake-edge one> uv run pytest -m livekit
 
-These tests skip LOUDLY and cleanly when the extra is not installed, or no server or token
+These tests skip LOUDLY and cleanly when livekit is not installed, or no server or token
 is named. The SDK mints no token — it has no API secret — so the tokens come from the
 environment exactly as they come from the robot's manager in production.
 """
@@ -49,7 +49,7 @@ ROOM = os.environ.get("MENLO_SDK_LIVEKIT_ROOM", "menlo-sdk-it")
 
 @pytest.fixture
 def livekit_url() -> str:
-    pytest.importorskip("livekit.rtc", reason="the livekit extra is not installed")
+    pytest.importorskip("livekit.rtc", reason="livekit is not installed")
     url = os.environ.get("MENLO_SDK_LIVEKIT_URL")
     if not url:
         pytest.skip("MENLO_SDK_LIVEKIT_URL not set — no LiveKit server to join")

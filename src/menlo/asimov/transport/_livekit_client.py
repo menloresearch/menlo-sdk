@@ -2,16 +2,16 @@
 
 ``livekit.rtc`` is asyncio; this SDK is threaded. This module owns that mismatch and
 nothing else: a dedicated event-loop thread, ``run_coroutine_threadsafe`` in, plain
-callbacks out. Everything above it — :class:`~menlo.asimov.transport.livekit.LiveKitTransport`,
-:class:`~menlo.asimov.transport.livekit.HybridTransport`, ``Robot`` — sees the
+callbacks out. Everything above it (:class:`~menlo.asimov.transport.livekit.LiveKitTransport`,
+:class:`~menlo.asimov.transport.livekit.HybridTransport`, ``Robot``) sees the
 :class:`LiveKitClient` protocol and never an ``rtc`` object, which is why the unit suite
 fakes this seam in forty lines and never needs livekit installed.
 
-LiveKit is an EXTRA (``pip install "menlo-sdk[livekit]"``). The import happens inside
-:func:`_rtc`, when a room is actually joined — importing the SDK, and
-``robot.connect("udp")``, must work with livekit absent.
+``livekit`` is a dependency of the SDK, imported lazily: the import happens inside
+:func:`_rtc`, when a room is actually joined, so importing the SDK and
+``robot.connect("udp")`` never load it.
 
-The room convention, agreed with the edge team:
+The room convention Asimov Edge speaks:
 
 * data topic ``commands``  -> one bare serialized ``asimov.io.RobotCommand`` per packet
 * data track ``state``     <- one bare serialized ``asimov.io.RobotState`` per frame
@@ -52,15 +52,15 @@ TracksCallback = Callable[[frozenset[str]], None]
 
 
 def _rtc() -> Any:
-    """``livekit.rtc``, imported lazily. The LiveKit lane is an extra; this is the only
-    import of it in the SDK, and the error names the fix (the ``_pb()`` precedent)."""
+    """``livekit.rtc``, imported lazily. This is the only import of it in the SDK, and the
+    error names the fix (the ``_pb()`` precedent)."""
     try:
         from livekit import rtc
     except ImportError as exc:  # pragma: no cover - environment, not logic
         raise ConnectError(
-            "the LiveKit lane needs the livekit extra, which is not part of the core SDK "
-            '(`pip install "menlo-sdk[livekit]"`, or `pip install "livekit>=1.1,<2"`). '
-            "The UDP lane (connect('udp')) needs none of it."
+            "the hybrid and livekit connection modes need the livekit package, which "
+            'menlo-sdk depends on but is missing here (`pip install "livekit>=1.1.4,<2"`). '
+            "The udp connection mode needs none of it."
         ) from exc
     return rtc
 
@@ -70,7 +70,7 @@ def identity_from_token(token: str) -> str | None:
 
     The identity of a participant is a claim INSIDE the JWT (``sub``); a client cannot
     choose it, and a client-side "identity" argument would be silently ignored by the
-    server. So the SDK does not take one — it reads back what the token says, and reports
+    server. So the SDK does not take one: it reads back what the token says, and reports
     that. Decoded, never verified: this is the SDK telling the truth about the token it
     was handed, not a security check. The server is the authority.
     """
@@ -114,8 +114,8 @@ class LiveKitClient(Protocol):
         own), or ``timeout`` passes. Returns whatever is subscribed by then."""
 
     def publish_data(self, payload: bytes, *, topic: str) -> None:
-        """One reliable data packet. Returns as soon as the packet is queued on the loop —
-        never blocks the caller on the network. ``LinkLostError`` when the room is gone."""
+        """One reliable data packet. Returns as soon as the packet is queued on the loop;
+        it never blocks the caller on the network. ``LinkLostError`` when the room is gone."""
 
     def publish_audio(self, chunk: AudioChunk) -> None:
         """One block of PCM onto the SDK's own audio track, publishing the track on first
@@ -220,7 +220,7 @@ class _LiveKitClient:
     def connect(self) -> None:
         if self._loop is not None:
             raise ConnectError("this LiveKit client is already connected")
-        rtc = _rtc()  # fail here, with the extras hint, not on the loop thread
+        rtc = _rtc()  # fail here, with the install hint, not on the loop thread
         token = self._resolve_token()
         self._identity = identity_from_token(token)
         self._start_loop()
@@ -270,7 +270,7 @@ class _LiveKitClient:
 
     def wait_for_tracks(self, timeout: float) -> frozenset[str]:
         # Returns the moment the VIDEO track is up. A robot that publishes a camera is the
-        # common shape, and a mic-less robot is a real configuration — making every one of
+        # common shape, and a mic-less robot is a real configuration; making every one of
         # those pay the whole budget at connect would be a tax on the normal case. An audio
         # track that lands after this still attaches and still works; it simply misses the
         # RobotInfo snapshot, which is what `media_timeout` is the knob for.
@@ -303,9 +303,7 @@ class _LiveKitClient:
 
     def publish_audio(self, chunk: AudioChunk) -> None:
         if chunk.encoding != "pcm_s16le":
-            raise ValueError(
-                f"the LiveKit lane carries pcm_s16le to the speaker, not {chunk.encoding!r}"
-            )
+            raise ValueError(f"LiveKit carries pcm_s16le to the speaker, not {chunk.encoding!r}")
         if self._room is None or not self._connected:
             raise LinkLostError(f"the LiveKit room {self.endpoint} is not joined")
         # Awaited on purpose: LiveKit's AudioSource applies the backpressure that keeps

@@ -43,7 +43,7 @@ AudioEncoding = Literal["pcm_s16le", "pcm_f32le", "opus", "unknown"]
 
 @dataclass(frozen=True, slots=True)
 class Frame:
-    """One complete camera frame. ``data`` is the raw or encoded bytes as the edge sent them;
+    """One complete camera frame. ``data`` is the raw or encoded bytes as Asimov Edge sent them;
     ``stride_bytes`` is 0 for encoded frames. :meth:`to_numpy` for pixels, :meth:`to_jpeg`
     for bytes to hand on; anything else, decode with your imaging library of choice."""
 
@@ -83,8 +83,8 @@ class Frame:
         return arr.reshape(self.height, self.width, channels) if channels > 1 else arr
 
     def to_jpeg(self, quality: int = 85) -> bytes:
-        """This frame as JPEG bytes — what a vision model or an HTTP upload wants. A frame
-        the edge already sent as JPEG is returned as it came; ``rgb8``, ``bgr8`` and
+        """This frame as JPEG bytes, what a vision model or an HTTP upload wants. A frame
+        Asimov Edge already sent as JPEG is returned as it came; ``rgb8``, ``bgr8`` and
         ``gray8`` are encoded with Pillow, which the SDK does not depend on (``ImportError``
         naming it when absent). ``ValueError`` for an encoding that is not pixels (h264)."""
         if not 1 <= quality <= 100:
@@ -167,7 +167,7 @@ class _Stream[T]:
 
     def _sink(self, tx: Transport) -> Callable[[T], None]:
         """The callback handed to ``tx``: it delivers only while ``tx`` is still the Robot's
-        transport, so a lane this stream has left cannot feed the next session."""
+        transport, so a transport this stream has left cannot feed the next session."""
 
         def deliver(item: T) -> None:
             if self._get_tx() is tx:
@@ -211,11 +211,11 @@ class _Stream[T]:
 
     def stream(self, *, timeout: float = 5.0) -> Iterator[T]:
         """Yield items as they arrive. Raises :class:`WaitTimeoutError` when ``timeout`` seconds
-        pass without one — a stream that has gone quiet is a fact, not an idle loop."""
+        pass without one: a stream that has gone quiet is a fact, not an idle loop."""
         self._ensure()
         seen = self._count
         while True:
-            self._ensure()  # a generator held across a reconnect attaches to the new lane
+            self._ensure()  # a generator held across a reconnect attaches to the new transport
             item = self._wait_past(seen, timeout)
             if item is None:
                 raise WaitTimeoutError(f"no {self._capability} data for {timeout:.1f}s", last=None)
@@ -247,7 +247,7 @@ class Camera(_Stream[Frame]):
         return self.stream(timeout=timeout)
 
     def photo(self, *, timeout: float = 5.0) -> Frame:
-        """ONE fresh frame — the next one to arrive, never a cached sample from before the
+        """ONE fresh frame: the next one to arrive, never a cached sample from before the
         call. Raises :class:`WaitTimeoutError` when the camera says nothing for ``timeout``
         seconds, and :class:`UnsupportedError` when this transport carries no video."""
         self._ensure()
@@ -263,7 +263,7 @@ class Camera(_Stream[Frame]):
         Blocks for ``seconds``. With ``audio=True`` on a transport that carries no
         microphone this raises :class:`UnsupportedError` rather than return a silent clip;
         pass ``audio=False`` when a video-only room is expected. Raises
-        :class:`WaitTimeoutError` when not one frame arrived in that time — an empty clip
+        :class:`WaitTimeoutError` when not one frame arrived in that time: an empty clip
         is a dead camera, not a short recording.
         """
         if not (math.isfinite(seconds) and seconds > 0):
@@ -328,7 +328,7 @@ class Microphone(_Stream[AudioChunk]):
         without audio."""
         self._ensure()
         while True:
-            self._ensure()  # a generator held across a reconnect attaches to the new lane
+            self._ensure()  # a generator held across a reconnect attaches to the new transport
             with self._cv:
                 if not self._cv.wait_for(lambda: bool(self._queue), timeout):
                     raise WaitTimeoutError(f"no microphone audio for {timeout:.1f}s", last=None)
@@ -378,7 +378,7 @@ class Clip:
     """What :meth:`Camera.capture_clip` recorded: the frames and the audio blocks, in
     arrival order, plus the wall clock the recording started at.
 
-    Everything here is in memory and lossless — the frames are the pixels the transport
+    Everything here is in memory and lossless: the frames are the pixels the transport
     delivered. Exporting to JPEG or MP4 needs an imaging library the SDK does not depend
     on (``Pillow``, ``opencv-python``); :meth:`save_wav` and :meth:`frames_as_numpy` are
     the exports that need nothing beyond the standard library and numpy.
@@ -409,7 +409,7 @@ class Clip:
 
     def save_wav(self, path: str | os.PathLike[str]) -> Path:
         """Write the audio to a RIFF/WAVE file (stdlib ``wave``). Raises ``ValueError``
-        when the clip has no audio, or carries anything but ``pcm_s16le`` — a WAV file of
+        when the clip has no audio, or carries anything but ``pcm_s16le``: a WAV file of
         opus frames would be silence-shaped noise."""
         if not self.audio:
             raise ValueError("this clip has no audio; capture it with audio=True")
@@ -455,7 +455,7 @@ class Clip:
 
     def save_mp4(self, path: str | os.PathLike[str], *, fps: float | None = None) -> Path:
         """Write the video to an MP4. Needs ``opencv-python`` and ``numpy``; raises
-        ``ImportError`` naming them when either is absent. Audio is not muxed in — pair it
+        ``ImportError`` naming them when either is absent. Audio is not muxed in; pair it
         with :meth:`save_wav`."""
         cv2 = _cv2()
         np = _numpy()
@@ -480,7 +480,7 @@ class Clip:
 
 def _rgb_bytes(frame: Frame) -> bytes:
     """A frame's pixels as tightly packed RGB. Raises ``ValueError`` for an encoding that
-    is not a raw RGB array — an encoded frame has to be decoded first."""
+    is not a raw RGB array: an encoded frame has to be decoded first."""
     if frame.encoding not in ("rgb8", "bgr8"):
         raise ValueError(
             f"{frame.encoding} frames are not raw RGB; decode them with your imaging library"

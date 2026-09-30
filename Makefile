@@ -1,4 +1,4 @@
-# menlo-sdk — developer entry points. `uv` is the only tool assumed.
+# menlo-sdk: developer entry points. `uv` is the only tool assumed.
 .PHONY: sync lint fmt typecheck test integration live livekit check
 
 sync:            ## create/refresh .venv from uv.lock
@@ -19,14 +19,14 @@ test:            ## unit tests only (no robot, no edge checkout, no livekit)
 integration:     ## the real asimov-edge UdpConnector in-process; needs ASIMOV_EDGE_SRC=<edge>/src
 	uv run pytest -m integration
 
-live:            ## a robot or `menlo-studio up --container --sdk`; needs MENLO_SDK_LIVE_HOST
+live:            ## a robot; needs MENLO_SDK_LIVE_HOST
 	uv run pytest -m live -s
 
 livekit:         ## real livekit.rtc vs `livekit-server --dev`. Needs MENLO_SDK_LIVEKIT_URL and
                  ## TWO tokens for one room (an identity is a claim inside the JWT, so one
                  ## token is one participant): MENLO_SDK_LIVEKIT_TOKEN (identity `sdk`) and
                  ## MENLO_SDK_LIVEKIT_EDGE_TOKEN (identity `fake-edge`). See the test module.
-	uv run --extra livekit pytest -m livekit -s
+	uv run pytest -m livekit -s
 
 
 

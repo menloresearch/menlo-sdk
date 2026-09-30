@@ -1,4 +1,4 @@
-"""Against a real robot or a menlo-studio rig (`menlo-studio up --container --sdk`).
+"""Against a real robot.
 
 Set ``MENLO_SDK_LIVE_HOST`` (e.g. ``127.0.0.1``) to run. These are the only tests that
 prove the SDK moves a body; the unit suite proves it speaks the wire. Kept short and

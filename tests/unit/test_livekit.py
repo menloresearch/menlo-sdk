@@ -3,7 +3,7 @@ honesty, the media API — and the promise that none of it is needed to drive a 
 
 Nothing here imports livekit. That is the point: every ``livekit`` import in the SDK sits
 behind ``transport/_livekit_client.py``, so the suite fakes that seam and the tests run on
-a machine that has never installed the extra.
+a machine where livekit is not installed.
 """
 
 from __future__ import annotations

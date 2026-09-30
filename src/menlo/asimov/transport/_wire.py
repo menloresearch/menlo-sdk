@@ -1,10 +1,11 @@
-"""The bytes every lane shares: ``asimov.io.RobotCommand`` out, ``asimov.io.RobotState`` in.
+"""The bytes every connection mode shares: ``asimov.io.RobotCommand`` out,
+``asimov.io.RobotState`` in.
 
-The UDP lane puts one bare message per datagram; the LiveKit lane puts the same bare
-command in a reliable data packet on the ``commands`` topic and the same bare state in
-each frame of a data track named ``state``. There is no envelope and no type tag on either
-wire — the port, the topic or the track name says what the bytes are. So the encoder and
-the decoder live here and neither transport owns them.
+Over UDP each datagram is one bare message; through LiveKit the same bare command goes in
+a reliable data packet on the ``commands`` topic and the same bare state in each frame of
+a data track named ``state``. There is no envelope and no type tag on either wire: the
+port, the topic or the track name says what the bytes are. So the encoder and the decoder
+live here and neither transport owns them.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ from menlo.asimov._state import Alert, Battery, BatteryProtection, Joint, Mode, 
 #: LiveKit data topic carrying one serialized ``asimov.io.RobotCommand`` per packet.
 COMMAND_TOPIC = "commands"
 #: Name of the robot's LiveKit data track; each frame is one serialized
-#: ``asimov.io.RobotState`` — the same bytes the UDP lane echoes on :8851 — and the frame's
-#: ``user_timestamp`` is the edge's clock (µs since the epoch) when the sample arrived from
+#: ``asimov.io.RobotState`` (the same bytes Asimov Edge sends over UDP to :8851), and the frame's
+#: ``user_timestamp`` is Asimov Edge's clock (µs since the epoch) when the sample arrived from
 #: the firmware.
 STATE_TRACK = "state"
 
@@ -44,13 +45,13 @@ def encode_command(command: Command, sequence: int) -> bytes:
     """One neutral :data:`~menlo.asimov._command.Command` -> one serialized
     ``asimov.io.RobotCommand``, stamped with ``sequence`` and the sender's wall clock.
 
-    The same bytes go in a UDP datagram and in a LiveKit data packet: the edge parses one
+    The same bytes go in a UDP datagram and in a LiveKit data packet: Asimov Edge parses one
     message either way, and the arbiter sees the SDK as one more connector.
     """
     cmd, common, _ = _pb()
     msg = cmd.RobotCommand(protocol_version=robots.PROTOCOL_VERSION)
     if isinstance(command, Velocity):
-        # mode=MOVE + policy: the shape the edge's own BLE connector and asimov-manager
+        # mode=MOVE + policy: the shape Asimov Edge's own BLE connector and Asimov Manager
         # send. The arbiter routes on HasField("policy").
         msg.mode = common.CONTROL_MODE_MOVE
         msg.command_control = common.COMMAND_CONTROL_POLICY
@@ -72,7 +73,7 @@ def encode_command(command: Command, sequence: int) -> bytes:
     else:  # pragma: no cover - the Command union is closed
         raise TypeError(f"unsupported command {command!r}")
     msg.sequence = sequence & 0xFFFFFFFF
-    # The edge rejects commands stamped more than 5 s in the past or 2 s in the future.
+    # Informational: neither Asimov Edge nor the firmware checks the sender's clock.
     msg.timestamp_us = int(time.time() * 1_000_000)
     return bytes(msg.SerializeToString())
 
@@ -130,7 +131,7 @@ def decode_state(
 ) -> State:
     """Raw wire bytes -> :class:`State`. Raises whatever protobuf raises on garbage; the
     callers treat that as a dropped packet, never as a dead link. ``edge_timestamp_us`` is
-    the data-track frame's ``user_timestamp`` when the lane carries one."""
+    the data-track frame's ``user_timestamp`` when the connection carries one."""
     _, _, st = _pb()
     msg = st.RobotState()
     msg.ParseFromString(payload)
