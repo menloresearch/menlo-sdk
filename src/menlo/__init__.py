@@ -9,6 +9,6 @@
 robots scripts connect to. ``__version__`` is the distribution's.
 """
 
-__version__ = "0.1.0rc5"
+__version__ = "0.1.0rc6"
 
 __all__ = ["__version__"]
