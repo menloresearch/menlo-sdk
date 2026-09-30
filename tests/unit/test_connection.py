@@ -256,7 +256,7 @@ def test_a_bound_robot_touches_nothing_until_connect(edge):
     robot = Robot(_FakeLanes(edge))
     assert not robot.connected
     with pytest.raises(NotConnectedError):
-        _ = robot.state
+        _ = robot.get_state()
     with pytest.raises(NotConnectedError, match=r"call connect\(mode\)"):
         robot.camera.latest()  # media resolves the transport lazily: none so far
     with pytest.raises(NotConnectedError, match=r"call connect\(mode\) instead of open"):
@@ -275,7 +275,7 @@ def test_the_same_robot_switches_lanes_and_keeps_its_identity(edge):
         assert r is robot
         assert robot.info.transport == "udp"
         assert not robot.has("camera")
-        robot.stand()
+        robot.stand(wait=False)
     assert not robot.connected
 
     robot.connect("livekit", timeout=3.0)
@@ -394,7 +394,7 @@ def test_connect_without_requiring_state_returns_before_the_robot_reports(edge):
         frame = cfg.clients[-1].push_frame(1)
         assert robot.camera.latest() is frame
         with pytest.raises(NotConnectedError, match="has not reported state"):
-            robot.set_velocity(vx=0.1)
+            robot.set_velocity(vx=0.1, wait=False)
     finally:
         robot.close()
 

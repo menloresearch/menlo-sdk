@@ -11,8 +11,8 @@ robot's verdict to land. The verdict is one of three, and the third is the hones
   refused, and never as success.
 
 "Admitted" is a different question from "took effect". A STAND can be admitted and take
-four seconds to come true; that second question is answered from state, by
-``Robot.wait_for`` and ``Robot.wait_until``.
+four seconds to come true; that second question is answered from state, by the wait inside
+``Robot.stand`` and by ``Robot.wait_until``.
 """
 
 from __future__ import annotations
@@ -138,8 +138,8 @@ class Sent:
 
     @property
     def name(self) -> str:
-        """The verb that produced this: ``set_velocity``, ``stand``, ``damp``, ``stop``,
-        ``trajectory``."""
+        """The verb that produced this: ``stand``, ``balance``, ``set_velocity``,
+        ``damp``, ``trajectory``."""
         return self._name
 
     # ── written by the Robot when the transport reports back ─────────────────

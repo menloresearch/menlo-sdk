@@ -4,10 +4,12 @@
   space   balance in place      t       stand (from DAMP)   b       damp (asks first)
   x       quit (Ctrl-C also quits)
 
-Each movement key sends a short bounded hold (HOLD_S), so the robot stops when you release
-the key. Holding a key down repeats it. Every movement is checked with preflight first. The
-robot must be on its feet, hanging from its gantry hook, with clear floor around it. On exit
-the script sends zero velocity and closes the connection.
+t then space brings the robot from DAMP to STAND, then to MOVE. Each movement key sends a
+short bounded hold (HOLD_S), so the robot stops when you release the key. Holding a key down
+repeats it. The SDK checks the robot before each movement and sends nothing when it is not
+ready; the status line says why. The robot must be on its feet, hanging from its gantry
+hook, with clear floor around it. On exit the script sends zero velocity and closes the
+connection.
 Run in a terminal: python examples/keyboard.py
 """
 
@@ -16,8 +18,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 
-from check import require_ready
-from menlo.asimov import Mode, Robot
+from menlo.asimov import Mode, NotReadyError, Robot, WaitTimeoutError
 
 VX = 0.3  # m/s forward and back; the firmware caps it at 0.4 m/s
 VY = 0.3  # m/s left and right; the firmware caps it at 0.4 m/s
@@ -90,23 +91,27 @@ def terminal_keys() -> Iterator[NextKey]:
 
 def show(robot: Robot, last: str) -> None:
     """One status line, rewritten in place."""
-    s = robot.state
+    s = robot.get_state()
     battery = f"{s.battery.soc_percent:.0f} %" if s.battery else "n/a"
     line = f"{s.mode.name:5}  armed {robot.armed!s:5}  battery {battery:5}  last: {last}"
     print("\r" + line.ljust(100)[:100], end="", flush=True)
 
 
 def stop_if_moving(robot: Robot) -> None:
-    """Zero velocity, only in MOVE: in an armed STAND a velocity, even zero, starts MOVE."""
-    if robot.connected and robot.state.mode is Mode.MOVE:
-        robot.stop()
+    """Balance in place, only in MOVE: from STAND, balance() would put the robot in MOVE."""
+    if robot.connected and robot.get_state().mode is Mode.MOVE:
+        robot.balance()
 
 
 def balance(robot: Robot) -> str:
-    """Zero velocity: in MOVE the robot stands still and keeps balancing."""
-    if robot.state.mode is not Mode.MOVE:
-        return f"balance works in MOVE; the robot is in {robot.state.mode.name}"
-    robot.stop()
+    """In MOVE, zero velocity; from STAND, into MOVE. The robot balances in place."""
+    try:
+        robot.balance()  # from STAND, returns once the robot reports MOVE
+    except NotReadyError as exc:  # nothing was sent: DAMP, a fault, a low battery
+        hint = ", press t to stand" if robot.get_state().mode is Mode.DAMP else ""
+        return f"not ready to balance: {exc.problems[0].code}{hint}"
+    except WaitTimeoutError:
+        return "sent balance, but the robot did not report MOVE in time"
     return "balance in place"
 
 
@@ -114,7 +119,8 @@ def confirm_and_damp(robot: Robot, next_key: NextKey) -> str:
     """Ask on the terminal, and damp only on y."""
     stop_if_moving(robot)
     print(
-        "\nDamp: every actuator goes limp and a standing robot folds. The robot must be "
+        "\nDamp: every actuator stops holding its position and a standing robot falls. "
+        "The robot must be "
         "hanging from its gantry hook or seated on a bench. Damp now? [y/N] ",
         end="",
         flush=True,
@@ -123,38 +129,36 @@ def confirm_and_damp(robot: Robot, next_key: NextKey) -> str:
     print(answer if answer and answer.isprintable() else "")
     if answer not in ("y", "Y"):
         return "damp cancelled"
-    robot.damp()
-    robot.wait_for(Mode.DAMP)
+    robot.damp()  # returns once the robot reports DAMP
     return "damped"
 
 
 def stand(robot: Robot) -> str:
-    """STAND, only from DAMP and only when preflight allows it."""
-    if robot.state.mode is not Mode.DAMP:
-        return f"stand works only from DAMP; the robot is in {robot.state.mode.name}"
-    check = robot.preflight("stand")
-    if not check.ok:
-        return f"not ready to stand: {check.blocking[0]}"
-    robot.stand()
-    robot.wait_for(Mode.STAND)
-    return "stand (arms after 0.5 s upright)"
+    """STAND, when the robot is ready for it. Returns once the robot is armed."""
+    try:
+        robot.stand()
+    except NotReadyError as exc:  # nothing was sent: from MOVE, a fault, a low battery
+        return f"not ready to stand: {exc.problems[0].code}"
+    except WaitTimeoutError:
+        return "stood, but not armed in time"
+    return "standing, armed"
 
 
 def move(robot: Robot, key: str) -> str:
-    """One bounded hold for a movement key, when preflight allows it."""
-    check = robot.preflight("move")
-    if not check.ok:
-        problem = check.blocking[0]
-        hint = ", press t to stand" if robot.state.mode is Mode.DAMP else ""
-        return f"not ready to move: {problem.code}{hint}"
+    """One bounded hold for a movement key, when the robot is ready for it."""
     vx, vy, vyaw = MOVES[key]
-    robot.set_velocity(vx=vx, vy=vy, vyaw=vyaw, duration=HOLD_S)
+    try:
+        # wait=False: the loop goes on reading keys while the hold runs out.
+        robot.set_velocity(vx=vx, vy=vy, vyaw=vyaw, duration=HOLD_S, wait=False)
+    except NotReadyError as exc:  # nothing was sent
+        hints = {Mode.DAMP: ", press t to stand", Mode.STAND: ", press space to balance"}
+        hint = hints.get(robot.get_state().mode, "")
+        return f"not ready to move: {exc.problems[0].code}{hint}"
     return f"{key}: vx {vx:+.2f} vy {vy:+.2f} vyaw {vyaw:+.2f}"
 
 
 def main(next_key: NextKey) -> None:
     with Robot().connect() as robot:
-        require_ready(robot, "stand" if robot.state.mode is Mode.DAMP else "move")
         print(HELP)
         last = "ready"
         try:

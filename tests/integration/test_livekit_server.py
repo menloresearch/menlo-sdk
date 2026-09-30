@@ -80,7 +80,7 @@ def edge_token() -> str:
 def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token, edge_token):
     """Two clients in one room: the SDK's transport, and a stand-in for the robot's edge.
     What the edge receives on ``commands`` must be exactly what the SDK encoded, and a
-    frame on the edge's ``state`` data track must reach ``robot.state`` with its clock."""
+    frame on the edge's ``state`` data track must reach ``robot.get_state()`` with its clock."""
     edge = _LiveKitClient(livekit_url, ROOM, token=edge_token)
     received: list[bytes] = []
     edge.connect()

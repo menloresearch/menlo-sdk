@@ -35,14 +35,14 @@ from menlo.asimov.transport._livekit_client import (
 )
 from menlo.asimov.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
 from menlo.asimov.transport.livekit import LiveKitTransport
-from tests.conftest import FakeLiveKitClient, make_livekit_robot
+from tests.conftest import FakeLiveKitClient, make_livekit_robot, put_in
 
 # ── the wire contract ─────────────────────────────────────────────────────────
 
 
 def test_a_command_is_one_bare_RobotCommand_on_the_commands_topic(edge, livekit_robot):
     client, robot = livekit_robot
-    sent = robot.stand()
+    sent = robot.stand(wait=False)
     assert edge.wait_for(lambda rx: any(c.mode == 1 for c in rx))
     topic, payload = next(p for p in client.published if p[0] == COMMAND_TOPIC)
     assert topic == "commands", "the topic identifies the type; there is no envelope"
@@ -58,7 +58,8 @@ def test_the_livekit_payload_is_byte_identical_to_the_udp_one(edge, livekit_robo
     """The edge parses ONE message either way. A packet that differed by so much as a
     field would make the room a second protocol to maintain."""
     client, robot = livekit_robot
-    sent = robot.set_velocity(vx=0.2)
+    put_in(robot, edge, "move")
+    sent = robot.set_velocity(vx=0.2, wait=False)
     _topic, payload = client.published[-1]
     mirror = encode_command(Velocity(0.2, 0.0, 0.0), sent.sequence)
     from menlo.asimov._proto import load
@@ -75,16 +76,16 @@ def test_state_is_the_same_bytes_the_udp_lane_echoes(livekit_robot):
     assert robot.info.dof == 25
     assert robot.info.transport == "livekit"
     assert robot.info.joint_names is not None and robot.info.joint_names[3] == "L_Knee"
-    assert robot.state.upright is True
+    assert robot.get_state().upright is True
 
 
 def test_an_undecodable_state_packet_is_dropped_not_fatal(livekit_robot):
     client, robot = livekit_robot
-    before = robot.state.sequence
+    before = robot.get_state().sequence
     for cb in client._data_track_cbs[STATE_TRACK]:
         cb(b"\xff\xff\xff\xff not a protobuf", None)
     time.sleep(0.05)
-    assert robot.state.sequence >= before and robot.connected
+    assert robot.get_state().sequence >= before and robot.connected
 
 
 # ── capability honesty ────────────────────────────────────────────────────────
@@ -249,20 +250,20 @@ def test_a_media_only_session_opens_without_state_and_refuses_to_drive(edge):
         robot.speaker.play_pcm(bytes(320))
         assert len(client.played) == 1
         with pytest.raises(NotConnectedError, match="has not reported state"):
-            _ = robot.state
+            _ = robot.get_state()
         with pytest.raises(NotConnectedError, match="has not reported state"):
             _ = robot.info
         for verb in (
             robot.stand,
             robot.damp,
-            robot.stop,
-            lambda: robot.set_velocity(vx=0.1),
+            robot.balance,
+            lambda: robot.set_velocity(vx=0.1, wait=False),
             lambda: robot.trajectory([0.0] * 25),
         ):
             with pytest.raises(NotConnectedError, match="has not reported state"):
                 verb()
         with pytest.raises(WaitTimeoutError):
-            robot.wait_for(Mode.STAND, timeout=0.2)
+            robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=0.2)
         time.sleep(0.8)  # well past link_timeout
         assert robot.connected, "a stream that never started is not one that went quiet"
         assert [t for t in client.published if t[0] == COMMAND_TOPIC] == [], "nothing went out"
@@ -280,8 +281,8 @@ def test_state_arriving_later_completes_the_handshake_and_unlocks_the_verbs(edge
         edge.pushing = True  # and comes up mid-session
         assert robot.wait_until(lambda s: s.mode is Mode.DAMP, timeout=3.0).mode is Mode.DAMP
         assert robot.info.dof == 25 and robot.info.joint_names is not None
-        assert robot.state.upright is True
-        robot.stand()
+        assert robot.get_state().upright is True
+        robot.stand(wait=False)
         assert edge.wait_for(lambda rx: edge.modes().count("stand") == 1)
     finally:
         robot.close()
@@ -298,12 +299,12 @@ def test_a_late_protocol_mismatch_is_raised_where_it_is_read_not_lost_in_a_log(e
         while time.monotonic() < deadline and robot._handshake_error is None:
             time.sleep(0.02)
         with pytest.raises(ProtocolMismatchError) as info:
-            _ = robot.state
+            _ = robot.get_state()
         assert info.value.observed == 99
         with pytest.raises(ProtocolMismatchError):
             robot.stand()
         with pytest.raises(ProtocolMismatchError):
-            robot.wait_for(Mode.STAND, timeout=1.0)
+            robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=1.0)
         assert robot.connected, "the room is fine; it is the robot this SDK cannot talk to"
     finally:
         robot.close()
@@ -335,11 +336,11 @@ def test_close_never_raises_and_the_transport_reopens(edge):
     tx.close()  # never opened
     robot = Robot(tx)
     robot.open(timeout=3.0)
-    first = robot.state.sequence
+    first = robot.get_state().sequence
     robot.close()
     robot.open(timeout=3.0)  # the same transport, a second session
     try:
-        assert robot.state.sequence >= first
+        assert robot.get_state().sequence >= first
         assert len(client._data_track_cbs[STATE_TRACK]) == 1, "the state track was wired twice"
     finally:
         robot.close()

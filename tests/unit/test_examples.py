@@ -6,11 +6,12 @@ of the file (``settings=``). Two seams point the scripts at the fake edge: the `
 they build (or the one ``Robot()`` builds from ``MENLO_UDP_HOST``) gets the fake edge's
 ports, and a LiveKit room is the fake client from ``conftest``. The fake edge runs with
 ``firmware=True``, so stand, arming and MOVE behave as on the robot. The interactive
-scripts (keyboard.py and the apps) take their key source as the argument of ``main()``;
-here it is a scripted one.
+script (keyboard.py) takes its key source as the argument of ``main()``; here it is a
+scripted one.
 
 Several tests remove nothing and add nothing to an example: they fail when a safety check
-in it is removed (a preflight before a walk, a bounded hold per key press, a start key).
+in it, or in the SDK command it calls, is removed (the check before a walk, a bounded hold
+per key press, a start key).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import sys
 import threading
 import time
 import urllib.error
+import wave
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -175,7 +177,6 @@ def run(fw_edge, monkeypatch, tmp_path, capsys) -> Run:
             assert n == 1, f"{name} has no setting {key}"
         for key, value in ({"MENLO_UDP_HOST": "127.0.0.1"} if env is None else env).items():
             monkeypatch.setenv(key, value)
-        monkeypatch.syspath_prepend(str(EXAMPLES))  # check.py and keyboard.py
         monkeypatch.syspath_prepend(str(path.parent))  # as `python <path>` puts it first
         monkeypatch.setattr(sys, "argv", [str(path)])
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
@@ -199,9 +200,16 @@ def _drives(edge: FakeEdge) -> list:
 
 
 def _armed(run: Run, fw_edge: FakeEdge) -> None:
-    """Stand the fake robot with stand.py, as a user would before walking."""
+    """Stand the fake robot with stand.py, as a user would before balancing."""
     run("stand.py")
     assert fw_edge.armed
+
+
+def _balancing(run: Run, fw_edge: FakeEdge) -> None:
+    """stand.py, then balance.py, as a user would before walking."""
+    _armed(run, fw_edge)
+    run("balance.py")
+    assert fw_edge.state.current_mode == 2  # MOVE
 
 
 # ── check ────────────────────────────────────────────────────────────────────
@@ -211,14 +219,13 @@ def test_check_lists_problems_and_sends_nothing(run, fw_edge):
     out = run("check.py")
     assert "robot mode DAMP, armed False" in out
     assert "ready to stand" in out
-    assert "not ready to move:" in out and "wrong_mode" in out
-    assert "Stand the robot first: python examples/stand.py" in out
+    assert "not ready to move:" in out and "wrong_mode" in out and "stand() it first" in out
     assert fw_edge.received == []
 
 
 def test_check_sees_a_standing_robot_armed_as_walk_py_does(run, fw_edge):
     # The SDK counts the 0.5 s upright hold from its own samples. A snapshot taken at connect
-    # says not_armed on a robot that has stood for minutes; check.py waits as walk.py does.
+    # says not_armed on a robot that has stood for minutes; check.py waits for it.
     fw_edge.set_mode("stand")
     out = run("check.py")
     assert "robot mode STAND, armed True" in out
@@ -281,10 +288,10 @@ def test_stand_refuses_a_robot_in_move(run, fw_edge):
 
 
 def test_walk_refuses_in_damp_and_points_at_stand(run, fw_edge):
-    # Without the preflight in walk.py a velocity goes out to a robot in DAMP.
+    # Without the check in set_velocity a velocity goes out to a robot in DAMP.
     out = run("walk.py", code=1)
     assert "not ready to move" in out
-    assert "python examples/stand.py" in out
+    assert "stand() it first" in out
     assert fw_edge.received == []
 
 
@@ -296,15 +303,89 @@ def test_walk_refuses_a_latched_fault(run, fw_edge):
     assert fw_edge.received == []
 
 
-def test_walk_after_stand_walks_then_stops_and_never_stands(run, fw_edge):
+def test_balance_enters_move_from_stand_and_waits_for_it(run, fw_edge):
     _armed(run, fw_edge)
+    out = run("balance.py")
+    assert fw_edge.velocities() == [ZERO], "balance() is one zero velocity"
+    assert fw_edge.first_velocity_at is not None and fw_edge.armed_at is not None
+    assert fw_edge.first_velocity_at >= fw_edge.armed_at
+    assert "robot mode MOVE, balancing in place" in out
+    assert fw_edge.modes() == ["stand"]
+
+
+def test_balance_refuses_in_damp_and_points_at_stand(run, fw_edge):
+    out = run("balance.py", code=1)
+    assert "not ready to move" in out and "stand() it first" in out
+    assert fw_edge.received == []
+
+
+def test_balance_in_move_sends_zero(run, fw_edge):
+    fw_edge.set_mode("move")
+    out = run("balance.py")
+    assert fw_edge.velocities() == [ZERO] and "robot mode MOVE" in out
+
+
+def test_walk_refuses_in_stand_and_points_at_balance(run, fw_edge):
+    # Without the MOVE-only check a velocity from STAND puts the robot in MOVE and walks.
+    _armed(run, fw_edge)
+    out = run("walk.py", code=1)
+    assert "the robot is in STAND; balance() it first" in out
+    assert fw_edge.velocities() == [] and fw_edge.state.current_mode == 1  # STAND
+
+
+def test_walk_after_balance_walks_then_balances_and_never_changes_mode(run, fw_edge):
+    _balancing(run, fw_edge)
+    fw_edge.received.clear()
     out = run("walk.py", settings={"DURATION_S": 1.0})
     vs = fw_edge.velocities()
     assert (0.3, 0.0, 0.0) in vs and vs[-1] == ZERO
-    assert fw_edge.first_velocity_at is not None and fw_edge.armed_at is not None
-    assert fw_edge.first_velocity_at >= fw_edge.armed_at
-    assert fw_edge.modes() == ["stand"], "walk.py sent a posture change"
+    assert fw_edge.modes() == [], "walk.py sent a posture change"
+    assert "robot mode MOVE, balancing in place" in out
+
+
+def test_wait_until_needs_the_robot_supported(run, fw_edge):
+    run("wait_until.py", code=1)
+    assert fw_edge.received == []
+
+
+def test_wait_until_acts_mid_move_once_the_joint_passes_the_angle(run, fw_edge):
+    _armed(run, fw_edge)
+    elbow = 15  # L_Elbow
+    started = time.monotonic()
+    out = run("wait_until.py", settings={"ROBOT_SUPPORTED": True, "DURATION_S": 1.0})
+    m = re.search(r"L_Elbow at (\d\.\d\d) rad after (\d\.\d) s of 1\.0 s", out)
+    assert m, out
+    assert 0.3 <= float(m.group(1)) < 0.45, "it acted when the elbow passed, not at the end"
+    assert float(m.group(2)) < 1.0, "it acted mid-move"
+    targets = [round(c.all_trajectory.positions[elbow], 3) for c in _drives(fw_edge)]
+    # The move back ends the first move where it is: the elbow never reached TURN_RAD.
+    assert 0.3 <= max(targets) < 0.55 and targets[-1] <= 0.05, targets
+    assert "L_Elbow back at 0.0" in out
+    assert time.monotonic() - started < 10.0
+
+
+def test_wait_until_refuses_in_damp(run, fw_edge):
+    out = run("wait_until.py", settings={"ROBOT_SUPPORTED": True}, code=1)
+    assert "not ready to run a trajectory" in out and "stand() it first" in out
+    assert fw_edge.received == []
+
+
+def test_stream_velocity_sends_one_packet_per_tick_then_balances(run, fw_edge):
+    fw_edge.set_mode("move")
+    out = run("stream_velocity.py", settings={"DURATION_S": 1.0})
+    packets = int(re.search(r"sent (\d+) packets", out).group(1))  # type: ignore[union-attr]
+    assert 40 <= packets <= 51, packets
+    vs = fw_edge.velocities()
+    # One packet per tick and the zero from balance(): nothing re-sent in the background.
+    assert len(vs) == packets + 1 and vs[-1] == ZERO
+    assert max(vx for vx, _, _ in vs) > 0.19
     assert "robot mode MOVE" in out
+
+
+def test_stream_velocity_refuses_in_stand(run, fw_edge):
+    _armed(run, fw_edge)
+    out = run("stream_velocity.py", code=1)
+    assert "balance() it first" in out and fw_edge.velocities() == []
 
 
 def test_damp_asks_and_sends_nothing_on_no(run, fw_edge):
@@ -331,10 +412,12 @@ def test_damp_without_asking_only_when_yes_is_set(run, fw_edge):
 
 
 def test_keyboard_moves_only_when_ready_and_each_press_is_a_bounded_hold(run, fw_edge):
-    keys = Keys(["w", "t", *idle(0.8), "w", *idle(1.2)])
+    keys = Keys(["w", "t", "w", " ", "w", *idle(1.2)])
     out = run("keyboard.py", keys=keys)
-    # w in DAMP: preflight refuses, nothing is sent; t stands; w walks once armed.
+    # w in DAMP and in STAND: set_velocity refuses, nothing is sent; t stands; space
+    # balances (MOVE); w then walks.
     assert "not ready to move: wrong_mode, press t to stand" in out
+    assert "not ready to move: wrong_mode, press space to balance" in out
     assert fw_edge.modes()[0] == "stand"
     assert fw_edge.first_velocity_at is not None and fw_edge.armed_at is not None
     assert fw_edge.first_velocity_at >= fw_edge.armed_at
@@ -355,10 +438,10 @@ def test_keyboard_keys_map_to_small_velocities(run, fw_edge):
     assert fw_edge.velocities()[-1] == ZERO
 
 
-def test_keyboard_stands_only_from_damp(run, fw_edge):
+def test_keyboard_refuses_to_stand_in_move(run, fw_edge):
     fw_edge.set_mode("move")
     out = run("keyboard.py", keys=Keys(["t"]))
-    assert "stand works only from DAMP" in out
+    assert "not ready to stand: wrong_mode" in out
     assert "stand" not in fw_edge.modes()
 
 
@@ -376,6 +459,12 @@ def test_keyboard_quit_sends_zero_in_move(run, fw_edge):
     assert fw_edge.velocities()[-1] == ZERO
 
 
+def test_keyboard_space_in_damp_says_to_stand(run, fw_edge):
+    out = run("keyboard.py", keys=Keys([" "]))
+    assert "not ready to balance: wrong_mode, press t to stand" in out
+    assert fw_edge.received == []
+
+
 # ── joints ───────────────────────────────────────────────────────────────────
 
 
@@ -386,7 +475,7 @@ def test_move_joints_needs_the_robot_supported(run, fw_edge):
 
 def test_move_joints_refuses_in_damp_and_points_at_stand(run, fw_edge):
     out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True}, code=1)
-    assert "not ready to run a trajectory" in out and "python examples/stand.py" in out
+    assert "not ready to run a trajectory" in out and "stand() it first" in out
     assert fw_edge.received == []
 
 
@@ -395,11 +484,24 @@ def test_move_joints_bends_the_elbow_and_back(run, fw_edge):
     out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True})
     elbow = 15  # L_Elbow
     targets = [round(c.all_trajectory.positions[elbow], 3) for c in _drives(fw_edge)]
-    # goto() returns once every joint is within its default 0.05 rad of the target.
+    # set_joints() returns once every joint is within its default 0.05 rad of the target.
     assert 0.25 <= max(targets) <= 0.3 and 0.0 <= targets[-1] <= 0.05
     assert re.search(r"L_Elbow moved from 0\.00 to 0\.(2[5-9]|30) rad", out)
     modes = [m for m in fw_edge.modes() if m != "move"]  # a trajectory carries mode MOVE
     assert modes == ["stand"], "move_joints.py changes no posture itself"
+
+
+def test_move_joints_reports_joints_that_do_not_follow(run, fw_edge, monkeypatch):
+    """set_joints() sent the trajectory but the reported pose never reached it: the script says
+    so and exits 1 instead of dying with a traceback."""
+    import tests.conftest as conftest
+
+    _armed(run, fw_edge)
+    held = list(fw_edge.state.joint_pos)  # the joints stay where they are, whatever is sent
+    monkeypatch.setattr(conftest, "ankle_coupling", lambda _p: held)
+    out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True, "DURATION_S": 0.1}, code=1)
+    assert "did not come within" in out
+    assert _drives(fw_edge), "the trajectory was sent; the wait for its effect timed out"
 
 
 # ── media and recording ──────────────────────────────────────────────────────
@@ -425,225 +527,60 @@ def test_camera_and_audio_saves_a_photo_and_a_clip_and_plays_a_tone(
     assert fw_edge.received == []
 
 
+MEDIA_ENV = {
+    "MENLO_UDP_HOST": "127.0.0.1",
+    "MENLO_CREDENTIAL": CREDENTIAL,
+    "MENLO_MODE": "hybrid",
+}
+
+
+def test_record_audio_saves_the_microphone_as_a_wav_file(run, fw_edge, rooms, camera, manager):
+    env = {**MEDIA_ENV, "MENLO_MANAGER_URL": manager.url}
+    out = run("record_audio.py", env=env, settings={"SECONDS": 0.5})
+    with wave.open("microphone.wav", "rb") as wav:
+        assert (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) == (1, 2, 16_000)
+        assert wav.getnframes() >= 8_000, "at least SECONDS of audio"
+    assert re.search(r"saved microphone\.wav, 0\.[5-9] s at 16000 Hz", out)
+    assert fw_edge.received == []
+
+
+def test_record_audio_says_when_the_connection_carries_no_microphone(run, fw_edge):
+    out = run("record_audio.py", code=1)  # udp
+    assert "carries no microphone" in out
+    assert not Path("microphone.wav").exists()
+
+
+def _write_wav(path: str, *, frames: int, rate: int = 8_000, width: int = 2) -> None:
+    with wave.open(path, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(width)
+        wav.setframerate(rate)
+        wav.writeframes(bytes(frames * width))
+
+
+def test_play_audio_sends_the_file_to_the_speaker_in_order(run, fw_edge, rooms, manager):
+    _write_wav("hello.wav", frames=12_000)  # 1.5 s at 8 kHz
+    out = run("play_audio.py", env={**MEDIA_ENV, "MENLO_MANAGER_URL": manager.url})
+    played = rooms[0].played
+    assert [c.samples_per_channel for c in played] == [8_000, 4_000], "CHUNK_S pieces, in order"
+    assert {(c.sample_rate_hz, c.channels, c.encoding) for c in played} == {(8_000, 1, "pcm_s16le")}
+    assert "played hello.wav, 1.5 s at 8000 Hz" in out
+    assert fw_edge.received == []
+
+
+def test_play_audio_refuses_a_file_that_is_not_16_bit_pcm(run, fw_edge, rooms, manager):
+    _write_wav("hello.wav", frames=800, width=1)
+    out = run("play_audio.py", env={**MEDIA_ENV, "MENLO_MANAGER_URL": manager.url}, code=1)
+    assert "hello.wav is not 16-bit PCM" in out
+    assert rooms[0].played == []
+
+
 def test_record_and_replay_records_and_reads_back(run, fw_edge, tmp_path):
     out = run("record_and_replay.py", settings={"SECONDS": 1.0})
     assert (tmp_path / "run.jsonl").stat().st_size > 0
     assert "and 0 commands" in out
     assert "robot modes seen: {'DAMP':" in out
     assert fw_edge.received == []
-
-
-# ── apps ─────────────────────────────────────────────────────────────────────
-
-
-def _hybrid_env(manager: FakeManager) -> dict[str, str]:
-    return {
-        "MENLO_UDP_HOST": "127.0.0.1",
-        "MENLO_MANAGER_URL": manager.url,
-        "MENLO_CREDENTIAL": CREDENTIAL,
-        "MENLO_MODE": "hybrid",
-    }
-
-
-def _show_the_ball(camera: Callable[[Frame | None], None]) -> None:
-    """A frame filled with magenta, the ball a little left of centre."""
-    magenta = bytes([255, 0, 255]) * (20 * 10)
-    camera(Frame(width=20, height=10, encoding="rgb8", data=magenta, stride_bytes=60))
-
-
-def test_agent_room_moves_nothing_until_the_start_key(run, fw_edge, rooms, camera, manager):
-    fw_edge.set_mode("move")
-    env = {"MENLO_MANAGER_URL": manager.url, "MENLO_CREDENTIAL": CREDENTIAL}
-    out = run("apps/agent_room.py", env=env, keys=Keys(idle(0.5)))
-    assert "view.jpg" not in out
-    # Only the zero velocity quitting sends in MOVE; nothing else went out.
-    assert set(fw_edge.velocities()) == {ZERO}, "the agent moved the robot before g"
-    assert fw_edge.modes() == []
-
-
-def test_agent_room_looks_and_walks_after_the_start_key(run, fw_edge, rooms, camera, manager):
-    pytest.importorskip("PIL")
-    fw_edge.set_mode("move")
-    env = {"MENLO_MANAGER_URL": manager.url, "MENLO_CREDENTIAL": CREDENTIAL}
-    out = run("apps/agent_room.py", env=env, keys=Keys(["g", *idle(2.5)]))
-    assert "view.jpg" in out and "walking for 2.0 s" in out
-    vs = fw_edge.velocities()
-    assert (0.3, 0.0, 0.0) in vs and vs[-1] == ZERO
-    assert fw_edge.modes() == []
-
-
-def _first_motion(edge: FakeEdge) -> float:
-    """When the first nonzero velocity arrived."""
-    return next(
-        at
-        for c, at in zip(tuple(edge.received), tuple(edge.arrived), strict=False)
-        if c.HasField("policy") and (c.policy.vx, c.policy.vy, c.policy.vyaw) != ZERO
-    )
-
-
-def _assert_the_walk_ended_by_itself(edge: FakeEdge, keys: Keys, seconds: float) -> None:
-    """The walk sent motion, then its zero by ``seconds`` after it began, before quit sent
-    one: an unbounded hold would keep re-sending the velocity until quit."""
-    start, quit_at = _first_motion(edge), keys.last("x")
-    late = edge.velocities_between(start + seconds + 0.25, quit_at)
-    assert all(v == ZERO for v in late), late
-    assert ZERO in edge.velocities_between(start, quit_at), "only quitting stopped the walk"
-
-
-def test_agent_room_walks_for_the_seconds_asked_then_stops_before_quit(
-    run, fw_edge, rooms, camera, manager
-):
-    pytest.importorskip("PIL")
-    fw_edge.set_mode("move")
-    env = {"MENLO_MANAGER_URL": manager.url, "MENLO_CREDENTIAL": CREDENTIAL}
-    keys = Keys(["g", *idle(3.5)])
-    run("apps/agent_room.py", env=env, keys=keys)
-    _assert_the_walk_ended_by_itself(fw_edge, keys, 2.0)
-
-
-def test_agent_room_caps_a_walk_at_max_walk_s(run, fw_edge, rooms, camera, manager):
-    pytest.importorskip("PIL")
-    fw_edge.set_mode("move")
-    env = {"MENLO_MANAGER_URL": manager.url, "MENLO_CREDENTIAL": CREDENTIAL}
-    keys = Keys(["g", *idle(3.0)])
-    out = run("apps/agent_room.py", env=env, keys=keys, settings={"MAX_WALK_S": 1.0})
-    assert "walking for 1.0 s" in out  # the plan asks for 2.0 s
-    _assert_the_walk_ended_by_itself(fw_edge, keys, 1.0)
-
-
-class _HotOnStart(Keys):
-    """Presses g, but an actuator overheats just before: the robot was ready at connect."""
-
-    def __init__(self, edge: FakeEdge, script: Iterable[str | None]) -> None:
-        super().__init__(script)
-        self.edge = edge
-
-    def __call__(self, timeout: float) -> str | None:
-        if self.script and self.script[0] == "g":
-            self.edge.state.joint_temp[3] = 75.0  # L_Knee, past the joint_hot threshold
-            time.sleep(0.2)  # the SDK has seen the new state
-        return super().__call__(timeout)
-
-
-def test_agent_room_walk_tool_runs_the_preflight_on_every_call(
-    run, fw_edge, rooms, camera, manager
-):
-    pytest.importorskip("PIL")
-    fw_edge.set_mode("move")
-    env = {"MENLO_MANAGER_URL": manager.url, "MENLO_CREDENTIAL": CREDENTIAL}
-    out = run("apps/agent_room.py", env=env, keys=_HotOnStart(fw_edge, ["g", *idle(1.0)]))
-    assert "joint_hot" in out and "walking for" not in out
-    assert set(fw_edge.velocities()) == {ZERO}, "the walk tool moved a robot that was not ready"
-
-
-def test_agent_room_pause_stops_the_walk(run, fw_edge, rooms, camera, manager):
-    pytest.importorskip("PIL")
-    fw_edge.set_mode("move")
-    env = {"MENLO_MANAGER_URL": manager.url, "MENLO_CREDENTIAL": CREDENTIAL}
-    keys = Keys(["g", *idle(0.5), " ", *idle(1.0)])
-    run("apps/agent_room.py", env=env, keys=keys)
-    after = fw_edge.velocities_between(keys.last(" ") + 0.2)
-    assert after == [] or set(after) == {ZERO}
-
-
-def test_follow_the_ball_moves_nothing_until_the_start_key(run, fw_edge, rooms, camera, manager):
-    pytest.importorskip("numpy")
-    fw_edge.set_mode("move")
-    _show_the_ball(camera)
-    run("apps/follow_the_ball.py", env=_hybrid_env(manager), keys=Keys(idle(0.5)))
-    assert all(v == ZERO for v in fw_edge.velocities()), "it followed before g was pressed"
-
-
-def test_follow_the_ball_turns_towards_the_ball_and_stops(run, fw_edge, rooms, camera, manager):
-    pytest.importorskip("numpy")
-    fw_edge.set_mode("move")
-    _show_the_ball(camera)
-    run("apps/follow_the_ball.py", env=_hybrid_env(manager), keys=Keys(["g", *idle(1.0)]))
-    vs = fw_edge.velocities()
-    # The ball fills the frame, a little left of centre: turn left, do not walk into it.
-    assert any(vyaw > 0 and vx == 0.0 for vx, _, vyaw in vs)
-    assert vs[-1] == ZERO
-
-
-def test_follow_the_ball_pauses_on_space(run, fw_edge, rooms, camera, manager):
-    pytest.importorskip("numpy")
-    fw_edge.set_mode("move")
-    _show_the_ball(camera)
-    keys = Keys(["g", *idle(0.5), " ", *idle(1.0)])
-    run("apps/follow_the_ball.py", env=_hybrid_env(manager), keys=keys)
-    assert any(vyaw > 0 for _, _, vyaw in fw_edge.velocities())
-    after = fw_edge.velocities_between(keys.last(" ") + 0.2)
-    assert after and set(after) == {ZERO}
-
-
-def _after_turning(fw_edge: FakeEdge, then: Callable[[], None]) -> threading.Thread:
-    """Once the robot is turning towards the ball, call ``then`` (in a thread)."""
-
-    def watch() -> None:
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline:
-            if any(vyaw > 0 for _, _, vyaw in fw_edge.velocities()):
-                then()
-                return
-            time.sleep(0.01)
-
-    thread = threading.Thread(target=watch, daemon=True)
-    thread.start()
-    return thread
-
-
-def test_follow_the_ball_stops_when_the_camera_freezes(run, fw_edge, rooms, camera, manager):
-    pytest.importorskip("numpy")
-    fw_edge.set_mode("move")
-    _show_the_ball(camera)
-    frozen: list[float] = []
-
-    def freeze() -> None:
-        camera(None)  # the last frame still shows the ball, but it only gets older
-        frozen.append(time.monotonic())
-
-    watcher = _after_turning(fw_edge, freeze)
-    run("apps/follow_the_ball.py", env=_hybrid_env(manager), keys=Keys(["g", *idle(2.0)]))
-    watcher.join()
-    assert frozen, "the robot never turned towards the ball"
-    # A frame older than 0.3 s is not acted on; allow a tick and a hold re-send past that.
-    later = fw_edge.velocities_between(frozen[0] + 0.3 + 0.25)
-    assert later and set(later) == {ZERO}
-
-
-def test_follow_the_ball_stops_when_its_loop_stalls(
-    run, fw_edge, rooms, camera, manager, monkeypatch
-):
-    pytest.importorskip("numpy")
-    fw_edge.set_mode("move")
-    _show_the_ball(camera)
-    real = Frame.to_numpy
-    stall: list[float] = []
-
-    def to_numpy(self: Frame) -> object:
-        if not stall and any(vyaw > 0 for _, _, vyaw in fw_edge.velocities()):
-            stall.append(time.monotonic())
-            time.sleep(1.5)  # the script is busy elsewhere, not sending
-            stall.append(time.monotonic())
-        return real(self)
-
-    monkeypatch.setattr(Frame, "to_numpy", to_numpy)
-    run("apps/follow_the_ball.py", env=_hybrid_env(manager), keys=Keys(["g", *idle(1.0)]))
-    assert len(stall) == 2, "the robot never turned towards the ball"
-    # Each step holds for 0.5 s at most: within that (and a keepalive tick) the zero goes
-    # out and nothing but zero follows until the loop runs again.
-    held = fw_edge.velocities_between(stall[0] + 0.5 + 0.2, stall[1])
-    assert all(v == ZERO for v in held), held
-    assert ZERO in fw_edge.velocities_between(stall[0], stall[1])
-
-
-def test_follow_the_ball_damps_only_on_yes(run, fw_edge, rooms, camera, manager):
-    pytest.importorskip("numpy")
-    fw_edge.set_mode("move")
-    run("apps/follow_the_ball.py", env=_hybrid_env(manager), keys=Keys(["b", "n"]))
-    assert "damp" not in fw_edge.modes()
-    run("apps/follow_the_ball.py", env=_hybrid_env(manager), keys=Keys(["b", "y"]))
-    assert fw_edge.modes() == ["damp"]
 
 
 # ── without the SDK ──────────────────────────────────────────────────────────

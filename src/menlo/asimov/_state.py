@@ -30,12 +30,15 @@ class Mode(enum.IntEnum):
     """The firmware's posture, as REPORTED. Values are ``asimov.io.ControlMode``.
 
     Never passed to a command: the verbs ``stand()``, ``damp()`` and ``set_velocity()``
-    imply the mode they need.
+    imply the mode they need. ``FAULT_DAMP`` is the firmware's latched emergency damping:
+    every actuator is compliant, as in DAMP, and the robot does not stand or move again
+    until the firmware restarts. ``State.faulted`` is true in it.
     """
 
     DAMP = 0
     STAND = 1
     MOVE = 2
+    FAULT_DAMP = 5
     UNKNOWN = -1
 
     @classmethod
@@ -211,11 +214,16 @@ class State:
 
     @property
     def faulted(self) -> bool:
-        """An error flag or any critical alert. The firmware sets ``error_flags`` when a
-        critical alert latches DAMP (bit 0 = latched, bit 1+n = critical alert n) and keeps
-        them set until it restarts; the robot stays in DAMP until then. The alert itself
-        clears about 2.5 s after its condition ends, so ``error_flags`` is what stays."""
-        return bool(self.error_flags) or any(a.critical for a in self.alerts)
+        """Robot mode FAULT_DAMP, an error flag or any critical alert. The firmware sets
+        ``error_flags`` when a critical alert latches DAMP (bit 0 = latched, bit 1+n =
+        critical alert n) and keeps them set until it restarts; the robot stays in DAMP until
+        then. The alert itself clears about 2.5 s after its condition ends, so
+        ``error_flags`` is what stays."""
+        return (
+            self.mode is Mode.FAULT_DAMP
+            or bool(self.error_flags)
+            or any(a.critical for a in self.alerts)
+        )
 
     @property
     def joint_pos(self) -> tuple[float, ...]:

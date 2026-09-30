@@ -18,6 +18,10 @@ from menlo.asimov.transport._livekit_client import identity_from_token
 from menlo.asimov.transport.livekit import HybridTransport, LiveKitTransport
 from menlo.asimov.transport.udp import UdpTransport
 
+#: ``CONTROL_MODE_FAULT_DAMP``, by value: asimov.io protocol v1.3.0 adds it, and the SDK
+#: reads robot modes by value, so it works whatever version of the bindings is installed.
+FAULT_DAMP = 5
+
 
 def _free_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -55,7 +59,8 @@ class FakeEdge:
     armed; a velocity or trajectory while DAMPed is dropped (the edge's DAMP gate); a
     trajectory in MOVE sets the reported joint positions to its targets (after the
     firmware's ankle coupling); and a latched
-    fault (``fault()``) holds DAMP and ignores STAND and MOVE.
+    fault (``fault()``, or ``fault_damp()`` for robot mode FAULT_DAMP) holds the robot limp
+    and ignores STAND and MOVE.
     """
 
     def __init__(
@@ -136,8 +141,8 @@ class FakeEdge:
         pb = self._common_pb
         with self._fw_lock:
             drive = c.HasField("policy") or c.HasField("all_trajectory")
-            if self.state.error_flags:
-                return  # latched: DAMP until the firmware restarts
+            if self.state.error_flags or self._mode() == FAULT_DAMP:
+                return  # latched: limp until the firmware restarts
             if drive:
                 mode = self._mode()
                 if mode == pb.CONTROL_MODE_DAMP:
@@ -175,6 +180,11 @@ class FakeEdge:
         with self._fw_lock:
             self.state.error_flags |= 1 | (1 << (1 + alert_id))
             self._enter(self._common_pb.CONTROL_MODE_DAMP)
+
+    def fault_damp(self) -> None:
+        """Robot mode FAULT_DAMP: the firmware's latched emergency damping."""
+        with self._fw_lock:
+            self._enter(FAULT_DAMP)
 
     def _push(self) -> None:
         out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -262,6 +272,13 @@ def connect_udp(
     if link_timeout is not None:
         robot_kw["link_timeout"] = link_timeout
     return Robot(cfg, **robot_kw).connect("udp", **connect_kw)
+
+
+def put_in(robot: Robot, edge: FakeEdge, mode: str) -> None:
+    """Make the fake robot report robot mode ``mode`` and wait until ``robot`` has seen it:
+    a motion command checks the robot mode before it sends."""
+    edge.set_mode(mode)
+    robot.wait_until(lambda s: s.mode.name == mode.upper(), timeout=2.0)
 
 
 @pytest.fixture

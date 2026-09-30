@@ -1,4 +1,4 @@
-"""Battery flags, alert names, euler angles, callbacks, recording and goto()."""
+"""Battery flags, alert names, euler angles, callbacks, recording and set_joints()."""
 
 from __future__ import annotations
 
@@ -19,12 +19,12 @@ from menlo.asimov import (
 )
 from menlo.asimov._media import AudioChunk
 from menlo.asimov.recording import load
-from tests.conftest import connect_udp
+from tests.conftest import connect_udp, put_in
 
 
 def _pose(value: float) -> list[float]:
     """Every joint at ``value``, the ankles (A, B motors 4, 5, 10, 11) at zero: equal A and B
-    is an ankle roll the firmware limits to 0.1 rad, and a goto refuses a target past it."""
+    is an ankle roll the firmware limits to 0.1 rad, and a set_joints refuses a target past it."""
     pose = [value] * 25
     for i in (4, 5, 10, 11):
         pose[i] = 0.0
@@ -42,26 +42,26 @@ def test_battery_protection_flags_are_named_and_charging_follows_the_sign():
 def test_euler_from_quaternion(edge, robot):
     edge.state.base_quat[:] = [1.0, 0.0, 0.0, 0.0]
     time.sleep(0.05)
-    assert robot.state.euler == pytest.approx((0.0, 0.0, 0.0))
+    assert robot.get_state().euler == pytest.approx((0.0, 0.0, 0.0))
     yaw = math.pi / 2
     edge.state.base_quat[:] = [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
     time.sleep(0.05)
-    assert robot.state.euler[2] == pytest.approx(yaw, abs=1e-6)
-    assert robot.state.yaw == pytest.approx(yaw, abs=1e-6)
+    assert robot.get_state().euler[2] == pytest.approx(yaw, abs=1e-6)
+    assert robot.get_state().yaw == pytest.approx(yaw, abs=1e-6)
     # a turn is a wrapped difference, so 170° -> -170° reads as +20°, not -340°
     assert math.remainder(math.radians(-170) - math.radians(170), math.tau) == pytest.approx(
         math.radians(20)
     )
     edge.state.base_quat[:] = []
     time.sleep(0.05)
-    assert robot.state.yaw is None and robot.state.euler is None
+    assert robot.get_state().yaw is None and robot.get_state().euler is None
 
 
 def test_alert_carries_first_set_us_and_a_name(edge, robot):
     a = edge.state.active_alerts.add()
     a.id, a.severity, a.first_set_us = 27, 1, 123456
     time.sleep(0.05)
-    alert = robot.state.alerts[0]
+    alert = robot.get_state().alerts[0]
     assert alert.name == "BMS_LOW_SOC" and alert.first_set_us == 123456 and not alert.critical
     from menlo.asimov import Alert
 
@@ -107,11 +107,12 @@ def test_state_alert_and_mode_callbacks(edge, robot):
 def test_recording_writes_states_and_commands_and_loads_back(edge, robot, tmp_path):
     path = tmp_path / "run.jsonl"
     with robot.record(path) as rec:
-        robot.stand()
+        robot.stand(wait=False)  # this fake robot follows no command: it is put in MOVE
+        edge.set_mode("move")
         time.sleep(0.2)
-        robot.set_velocity(vx=0.1)
+        robot.set_velocity(vx=0.1, wait=False)
         time.sleep(0.2)
-        robot.stop()
+        robot.balance()
     assert rec.samples > 10 and rec.commands_written >= 3
     lines = list(load(path))
     kinds = {line["kind"] for line in lines}
@@ -125,10 +126,11 @@ def test_recording_writes_states_and_commands_and_loads_back(edge, robot, tmp_pa
 
 
 def test_goto_clocks_setpoints_from_the_current_pose_then_holds_the_target(edge, robot):
+    put_in(robot, edge, "move")
     for i in range(25):
         edge.state.joint_pos[i] = 0.1
     time.sleep(0.05)
-    robot.goto(_pose(0.5), duration=0.5, hz=20, wait=False)
+    robot.set_joints(_pose(0.5), duration=0.5, hz=20, wait=False)
     assert edge.wait_for(lambda r: sum(c.HasField("all_trajectory") for c in r) >= 10, timeout=2.0)
     traj = [c.all_trajectory.positions[0] for c in edge.received if c.HasField("all_trajectory")]
     motion = traj[:10]
@@ -140,24 +142,26 @@ def test_goto_clocks_setpoints_from_the_current_pose_then_holds_the_target(edge,
     time.sleep(0.35)
     later = [c.all_trajectory.positions[0] for c in edge.received if c.HasField("all_trajectory")]
     assert len(later) >= n + 2 and all(p == pytest.approx(0.5) for p in later[n:])
-    robot.stand()  # another verb ends the hold
+    robot.damp(wait=False)  # another verb ends the hold
     n = sum(c.HasField("all_trajectory") for c in edge.received)
     time.sleep(0.3)
     assert sum(c.HasField("all_trajectory") for c in edge.received) <= n + 1
 
 
-def test_a_velocity_verb_cancels_a_running_goto(edge, robot):
-    robot.goto(_pose(0.5), duration=1.0, hz=20, wait=False)
+def test_a_velocity_verb_cancels_a_running_set_joints(edge, robot):
+    put_in(robot, edge, "move")
+    robot.set_joints(_pose(0.5), duration=1.0, hz=20, wait=False)
     time.sleep(0.15)
-    robot.set_velocity(vx=0.1)
+    robot.set_velocity(vx=0.1, wait=False)
     n = sum(c.HasField("all_trajectory") for c in edge.received)
     time.sleep(0.3)
     assert sum(c.HasField("all_trajectory") for c in edge.received) <= n + 1
 
 
 def test_goto_wait_times_out_when_the_robot_does_not_follow(edge, robot):
+    put_in(robot, edge, "move")
     with pytest.raises(WaitTimeoutError):
-        robot.goto(_pose(0.5), duration=0.2, hz=20, wait=True, timeout=0.5)
+        robot.set_joints(_pose(0.5), duration=0.2, hz=20, wait=True, timeout=0.5)
 
 
 def test_alerts_sent_every_20th_frame_are_carried_forward_for_stable_reads():
@@ -178,30 +182,35 @@ def test_alerts_sent_every_20th_frame_are_carried_forward_for_stable_reads():
             a = edge.state.active_alerts.add()
             a.id, a.severity = 7, 0
             time.sleep(0.3)
-            reads = [bool(robot.state.alerts) for _ in range(40) if not time.sleep(0.005)]
+            reads = [bool(robot.get_state().alerts) for _ in range(40) if not time.sleep(0.005)]
             assert all(reads), "alerts flickered between frames"
-            assert all(robot.state.faulted for _ in range(10))
+            assert all(robot.get_state().faulted for _ in range(10))
             del edge.state.active_alerts[:]
             time.sleep(0.6)
-            assert robot.state.alerts == ()
+            assert robot.get_state().alerts == ()
             assert events == [("FALL_DETECTED", "raised"), ("FALL_DETECTED", "cleared")]
     finally:
         edge.close()
 
 
 def test_goto_refuses_to_plan_from_a_stale_pose(edge, robot):
-    from menlo.asimov import StateStaleError
+    from menlo.asimov import NotReadyError
 
+    put_in(robot, edge, "move")
     robot.link_timeout = 5.0  # long enough that LinkLostError does not fire first
     edge.pushing = False
     time.sleep(0.7)
-    with pytest.raises(StateStaleError):
-        robot.goto(_pose(0.5), duration=0.5, wait=False)
+    before = len(edge.received)
+    with pytest.raises(NotReadyError) as info:
+        robot.set_joints(_pose(0.5), duration=0.5, wait=False, timeout=0.2)
+    assert info.value.has("stale_state") and info.value.action == "trajectory"
+    assert len(edge.received) == before, "nothing is sent from a stale pose"
 
 
 def test_a_held_goto_stops_when_the_link_is_lost(edge, robot):
+    put_in(robot, edge, "move")
     robot.link_timeout = 0.3
-    robot.goto(_pose(0.5), duration=0.2, hz=20, wait=False)
+    robot.set_joints(_pose(0.5), duration=0.2, hz=20, wait=False)
     time.sleep(0.3)
     edge.pushing = False
     time.sleep(0.8)
@@ -215,12 +224,12 @@ def test_alerts_from_the_previous_session_do_not_haunt_a_reopen(edge, robot):
     a = edge.state.active_alerts.add()
     a.id, a.severity = 7, 0
     time.sleep(0.1)
-    assert robot.state.faulted
+    assert robot.get_state().faulted
     robot.close()
     del edge.state.active_alerts[:]
     robot.open(timeout=2.0)
-    assert not robot.state.faulted, "a carried alert leaked across sessions"
-    assert not robot.state.alerts
+    assert not robot.get_state().faulted, "a carried alert leaked across sessions"
+    assert not robot.get_state().alerts
     robot.close()
 
 
@@ -235,8 +244,9 @@ def test_recording_restores_the_callback_set_after_construction(edge, robot, tmp
 
 
 def test_goto_captures_its_generation_with_the_first_setpoint(edge, robot):
-    """A verb that lands during goto()'s first send must cancel the motion. Staged by
+    """A verb that lands during set_joints()'s first send must cancel the motion. Staged by
     bumping the generation from inside the first trajectory send."""
+    put_in(robot, edge, "move")
     real_send = robot._send
     fired = []
 
@@ -244,11 +254,11 @@ def test_goto_captures_its_generation_with_the_first_setpoint(edge, robot):
         result = real_send(name, command, gen, **kw)
         if name == "trajectory" and not fired:
             fired.append(1)
-            robot.damp()  # another verb lands right after the first setpoint left
+            robot.damp(wait=False)  # another verb lands right after the first setpoint left
         return result
 
     robot._send = racing_send  # type: ignore[method-assign]
-    robot.goto(_pose(0.5), duration=0.3, hz=20, wait=False)
+    robot.set_joints(_pose(0.5), duration=0.3, hz=20, wait=False)
     time.sleep(0.5)
     n_traj = sum(c.HasField("all_trajectory") for c in edge.received)
     assert n_traj == 1, f"{n_traj} trajectory setpoints went out after the takeover verb"
@@ -260,15 +270,16 @@ def test_goto_captures_its_generation_with_the_first_setpoint(edge, robot):
 )
 def test_goto_validates_its_arguments_before_any_setpoint_leaves(edge, robot, kw):
     with pytest.raises(ValueError):
-        robot.goto(_pose(0.5), duration=0.3, wait=False, **kw)
+        robot.set_joints(_pose(0.5), duration=0.3, wait=False, **kw)
     time.sleep(0.1)
     assert not any(c.HasField("all_trajectory") for c in edge.received)
 
 
 def test_recording_logs_the_safety_zero_sent_by_close(edge, robot, tmp_path):
+    put_in(robot, edge, "move")
     path = tmp_path / "run.jsonl"
     with robot.record(path) as rec:
-        robot.set_velocity(vx=0.3)
+        robot.set_velocity(vx=0.3, wait=False)
         assert edge.wait_for(lambda r: any(c.HasField("policy") for c in r))
         robot.close()
     assert edge.velocities()[-1] == (0.0, 0.0, 0.0)
@@ -278,10 +289,11 @@ def test_recording_logs_the_safety_zero_sent_by_close(edge, robot, tmp_path):
 
 
 def test_recording_logs_the_safety_zero_sent_on_link_loss(edge, robot, tmp_path):
+    put_in(robot, edge, "move")
     robot.link_timeout = 0.3
     path = tmp_path / "run.jsonl"
     with robot.record(path):
-        robot.set_velocity(vx=0.3)
+        robot.set_velocity(vx=0.3, wait=False)
         assert edge.wait_for(lambda r: any(c.HasField("policy") and c.policy.vx > 0 for c in r))
         edge.pushing = False
         time.sleep(0.8)
@@ -292,14 +304,15 @@ def test_recording_logs_the_safety_zero_sent_on_link_loss(edge, robot, tmp_path)
 
 
 def test_damp_from_another_thread_ends_a_running_goto_before_its_next_setpoint(edge, robot):
-    """The docs promise goto() is fenced: a mode verb from any thread ends it, and no
+    """The docs promise set_joints() is fenced: a mode verb from any thread ends it, and no
     setpoint follows the verb. A hand-rolled trajectory loop is the unfenced case."""
-    robot.goto(_pose(0.4), duration=5.0, hz=50, wait=False)
+    put_in(robot, edge, "move")
+    robot.set_joints(_pose(0.4), duration=5.0, hz=50, wait=False)
     assert edge.wait_for(lambda r: sum(c.HasField("all_trajectory") for c in r) >= 5, timeout=2.0)
     done = threading.Event()
 
     def other_thread():
-        robot.damp()
+        robot.damp(wait=False)
         done.set()
 
     threading.Thread(target=other_thread).start()

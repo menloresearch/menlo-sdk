@@ -337,17 +337,13 @@ class ConnectionConfig:
         return self.mode if self.mode is not None else self.only_mode()
 
     def only_mode(self) -> ConnectMode:
-        """The one mode this config can connect on. ``ValueError`` when the choice is not
-        the config's to make."""
+        """The mode the set slots imply: ``udp`` alone is udp, ``livekit`` alone is livekit,
+        and both together are hybrid. ``connect("udp")`` or ``connect("livekit")`` still
+        picks one of the two on a config that has both."""
         modes = self.available_modes()
-        if len(modes) == 1:
-            return modes[0]
         if not modes:
             raise ConnectError("this ConnectionConfig has no connection set; nothing to connect on")
-        raise ValueError(
-            f"this ConnectionConfig can connect on {', '.join(modes)}; pass connect(mode)"
-            " or set its mode"
-        )
+        return "hybrid" if "hybrid" in modes else modes[0]
 
     def transport_for(
         self,

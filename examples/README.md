@@ -5,14 +5,14 @@ The scripts connect to the saved robot (`menlo setup`), or to the robot the `MEN
 environment variables describe, for example `MENLO_UDP_HOST=192.168.22.32`. Read the
 docstring at the top of a file before you run it: it says what the robot must be doing.
 
-Every script that moves the robot first runs `require_ready()` from `check.py`: it prints
-what stands in the way and exits without sending anything when the robot is not ready.
-Nothing here is an emergency stop: use the E-Stop in Asimov Manager, or cut power at the
-battery unit.
+The SDK checks the robot before `stand()`, `balance()`, `set_velocity()` and `set_joints()`
+send anything. When the robot is not ready, the scripts print what stands in the way and what
+fixes it, and exit with nothing sent. Nothing here is an emergency stop: use the E-Stop in Asimov Manager, or
+cut power at the battery unit.
 
 ## Check
 
-- [check.py](check.py): readiness to stand, walk or run a trajectory; sends nothing.
+- [check.py](check.py): the same check on its own, for standing, walking and a trajectory; sends nothing.
 
 ## Connect
 
@@ -22,25 +22,36 @@ battery unit.
 
 - [read_state.py](read_state.py): robot mode, arming, faults, battery, actuator temperatures, IMU, alerts and state rate.
 
-## Stand, walk, damp
+## Stand, balance, walk, damp
 
 Run them in this order. The robot must be on its feet, hanging from its gantry hook.
 
-- [stand.py](stand.py): DAMP to STAND, then wait until armed.
-- [walk.py](walk.py): walk forward for 3 s, then `stop()`; the robot stays in MOVE, balancing.
-- [damp.py](damp.py): every actuator limp; asks first; the robot must be supported.
+- [stand.py](stand.py): DAMP to STAND; returns once armed.
+- [balance.py](balance.py): STAND to MOVE at zero velocity; the walking policy balances the robot in place.
+- [walk.py](walk.py): walk forward for 3 s in MOVE; the robot then balances in place.
+- [damp.py](damp.py): put the robot in DAMP (every actuator stops holding its position); asks first; the robot must be supported.
+
+## Waiting on the robot
+
+- [wait_until.py](wait_until.py): act the moment the elbow passes an angle, while `set_joints()` is still moving it, with the robot supported.
+
+## Streaming from your own loop
+
+- [stream_velocity.py](stream_velocity.py): send velocity at 50 Hz from your own loop with `set_velocity(hold=False)`, then balance.
 
 ## Keyboard
 
-- [keyboard.py](keyboard.py): drive with w, a, s, d, q and e in short steps that stop when you let go; t stands, b damps, x quits.
+- [keyboard.py](keyboard.py): drive with w, a, s, d, q and e in short steps that stop when you let go; t stands, space balances, b damps, x quits.
 
 ## Joints
 
-- [move_joints.py](move_joints.py): bend an elbow with `goto()`, with the robot supported.
+- [move_joints.py](move_joints.py): bend an elbow with `set_joints()`, with the robot supported.
 
 ## Media
 
 - [camera_and_audio.py](camera_and_audio.py): save a photo, a short clip as JPEG frames with its sound as a WAV file, and play a tone on the speaker (hybrid or livekit).
+- [record_audio.py](record_audio.py): record the microphone to a WAV file (hybrid or livekit).
+- [play_audio.py](play_audio.py): play a WAV file on the speaker (hybrid or livekit).
 
 ## Recording
 
@@ -56,10 +67,3 @@ The robot's LiveKit room with `livekit` and `asimov-protocol` only. Set `MANAGER
 - [livekit_raw/read_state.py](livekit_raw/read_state.py): print the robot's state.
 - [livekit_raw/camera.py](livekit_raw/camera.py): save one camera frame.
 - [livekit_raw/audio.py](livekit_raw/audio.py): record the microphone to a WAV file.
-
-## Apps
-
-Nothing moves until you press g. Space pauses, b damps (asks first), x quits.
-
-- [apps/follow_the_ball.py](apps/follow_the_ball.py): steer towards a magenta ball seen by the robot's camera.
-- [apps/agent_room.py](apps/agent_room.py): camera and walking as tools for an agent in the robot's room.

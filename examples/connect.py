@@ -32,7 +32,7 @@ livekit = ConnectionConfig(livekit=ManagerConfig(url=MANAGER_URL, credential=CRE
 config = {"udp": udp, "hybrid": hybrid, "livekit": livekit}[MODE]
 
 with Robot(config).connect(MODE) as robot:
-    state = robot.state
+    state = robot.get_state()
     print(f"connected over {MODE} to {robot.info.endpoint}")
     print(f"robot mode {state.mode.name}, armed {robot.armed}")
     if state.battery is not None:

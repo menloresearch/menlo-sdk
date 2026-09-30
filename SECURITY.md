@@ -1,12 +1,24 @@
-# Security
+# Security Policy
 
-This SDK sends motion commands to a robot over plain UDP on a local network and trusts the
-network it runs on. Report a vulnerability privately to the maintainers at
-security@menlo.ai rather than in a public issue; include the version and a way to
-reproduce. You will get an acknowledgement within a few days.
+## Supported Versions
 
-What the SDK does to limit damage on its own: speeds are clamped client-side and the clamp
-is visible; a held velocity expires on the robot 2 s after the last packet; a lost
-link sends a zero velocity and stops re-sending any held trajectory (Asimov Edge puts the
-robot in DAMP 2 s later); state datagrams that do not look like the robot are dropped,
-and `state_source=` restricts which address may send state.
+| Version | Security fixes |
+|---|---|
+| Latest release | Yes |
+| Previous minor release | Best effort |
+| Older releases | No |
+
+We release security fixes for the latest version of menlo-sdk. For a serious vulnerability,
+we will also try to release a fix for the previous minor release, but we cannot promise it.
+
+## Reporting a Vulnerability
+
+Please do not report security vulnerabilities in public GitHub issues.
+
+Email security@menlo.ai with:
+
+- a description of the vulnerability and its impact,
+- the menlo-sdk version affected,
+- the steps to reproduce it.
+
+You will receive an acknowledgement within a few days, and updates while a fix is prepared.

@@ -16,7 +16,7 @@ from menlo.asimov import ConnectionConfig, Robot, UdpConfig
 cfg = ConnectionConfig(udp=UdpConfig(
     "127.0.0.1", command_port={edge.command_port}, state_bind=("127.0.0.1", {edge.state_port})))
 with Robot(cfg).connect("udp", timeout=3.0) as robot:
-    robot.state
+    robot.get_state()
 loaded = sorted(m for m in ("livekit", "questionary", "rich") if m in sys.modules)
 print(",".join(loaded))
 """

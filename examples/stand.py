@@ -1,25 +1,23 @@
-"""Stand the robot up from DAMP and wait until it is armed. Sends STAND and nothing else.
+"""Put the robot in STAND: the actuators hold a standing pose, with no balancing.
 
-The robot must be on its feet, hanging from its gantry hook. STAND holds a fixed pose with
-no balance loop; the robot balances only once it walks (MOVE). Run walk.py next.
+The robot must hang from its gantry hook with both feet on the floor. stand() returns once
+the robot is in STAND and armed. Sends STAND and nothing else. The robot balances only in
+MOVE: run balance.py next.
 Run: python examples/stand.py
 """
 
-from check import require_ready
-from menlo.asimov import Mode, Robot
+import sys
 
-ARM_TIMEOUT_S = 5.0  # the firmware arms after 0.5 s upright in STAND
+from menlo.asimov import NotReadyError, Robot, WaitTimeoutError
 
 with Robot().connect() as robot:
-    require_ready(robot, "stand")  # fresh state, no latched fault, battery and actuators ok
-
     # region main
-    if robot.state.mode is Mode.DAMP:
+    try:
+        # Checks the robot first. Returns once it reports STAND and has been upright for
+        # 0.5 s (armed): the firmware accepts MOVE only after that.
         robot.stand()
-        robot.wait_for(Mode.STAND)
-    else:
-        print(f"the robot is already in {robot.state.mode.name}; nothing sent")
-    # Armed: STAND held upright for 0.5 s. Until then the firmware does not enter MOVE.
-    robot.wait_ready("move", timeout=ARM_TIMEOUT_S)
-    print(f"robot mode {robot.state.mode.name}, armed {robot.armed}")
+    except (NotReadyError, WaitTimeoutError) as exc:
+        print(exc)  # what is wrong and what fixes it
+        sys.exit(1)
+    print(f"robot mode {robot.get_state().mode.name}, armed {robot.armed}")
     # endregion

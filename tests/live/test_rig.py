@@ -24,29 +24,30 @@ def test_stand_walk_stop_damp(live_host):
     with connect_udp(live_host, timeout=5.0) as robot:
         print(robot.info)
         assert robot.info.dof == 25
-        assert robot.state.age_s < 0.5, "state should be streaming"
+        assert robot.get_state().age_s < 0.5, "state should be streaming"
 
-        sent = robot.stand()
+        sent = robot.stand(timeout=15.0)  # returns once STAND is reported and armed
         assert isinstance(sent.wait_outcome(), Unknown), "no outcome channel on the UDP lane"
-        s = robot.wait_for(Mode.STAND, timeout=15.0)
-        print(f"STAND reported after {time.monotonic() - sent.sent_at:.2f}s; upright={s.upright}")
-        assert s.upright is True
+        s = robot.get_state()
+        print(f"armed after {time.monotonic() - sent.sent_at:.2f}s; upright={s.upright}")
+        assert s.mode is Mode.STAND and robot.armed is True and s.upright is True
 
-        robot.set_velocity(vx=0.2, duration=3.0)
-        s = robot.wait_for(Mode.MOVE, timeout=5.0)
+        robot.set_velocity(vx=0.2, duration=3.0, wait=False)
+        s = robot.wait_until(lambda s: s.mode is Mode.MOVE, timeout=5.0)
         assert s.upright is True
         time.sleep(3.5)  # the bounded hold ends by itself (SDK sends the zero)
-        assert robot.state.mode is Mode.MOVE, "zero velocity keeps the firmware in MOVE, at rest"
-        assert robot.state.upright is True
+        assert robot.get_state().mode is Mode.MOVE, (
+            "zero velocity keeps the firmware in MOVE, at rest"
+        )
+        assert robot.get_state().upright is True
 
         # No stand() here: STAND is a stiffen with no balance loop, and a free-standing
         # robot asked for it after a walk tips over. A second walk starts from MOVE at rest.
-        robot.set_velocity(vx=0.2)
-        robot.wait_for(Mode.MOVE, timeout=5.0)
-        robot.stop()
+        robot.set_velocity(vx=0.2, wait=False)
+        robot.wait_until(lambda s: s.mode is Mode.MOVE, timeout=5.0)
+        robot.balance()
         time.sleep(1.0)
-        assert robot.state.upright is True
+        assert robot.get_state().upright is True
 
-        robot.damp()
-        s = robot.wait_for(Mode.DAMP, timeout=5.0)
-        print(f"DAMP reported; gravity={s.gravity}")
+        robot.damp()  # returns once DAMP is reported
+        print(f"DAMP reported; gravity={robot.get_state().gravity}")

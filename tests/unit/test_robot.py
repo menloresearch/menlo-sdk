@@ -29,15 +29,16 @@ from menlo.asimov import (
     WaitTimeoutError,
 )
 from menlo.asimov.robot import KEEPALIVE_HZ
-from tests.conftest import connect_udp
+from tests.conftest import connect_udp, put_in
 
 # ── connect ───────────────────────────────────────────────────────────────────
 
 
 def test_a_waited_hold_needs_a_duration_and_ends_early_when_superseded(edge, robot):
+    put_in(robot, edge, "move")
     with pytest.raises(ValueError, match="needs a duration"):
         robot.set_velocity(vx=0.1, wait=True)
-    threading.Timer(0.15, robot.stop).start()
+    threading.Timer(0.15, robot.balance).start()
     started = time.monotonic()
     robot.set_velocity(vx=0.2, duration=5.0, wait=True)  # another verb ends it
     assert time.monotonic() - started < 1.0
@@ -49,6 +50,7 @@ def test_a_waited_hold_needs_a_duration_and_ends_early_when_superseded(edge, rob
 
 
 def test_closing_during_a_waited_hold_raises_instead_of_pretending_it_finished(edge, robot):
+    put_in(robot, edge, "move")
     threading.Timer(0.1, robot.close).start()
     with pytest.raises(NotConnectedError, match="closed before the hold ended"):
         robot.set_velocity(vx=0.2, duration=5.0, wait=True)
@@ -60,8 +62,8 @@ def test_connect_waits_for_the_first_state_and_describes_the_robot(edge, robot):
     assert robot.info.dof == 25
     assert robot.info.transport == "udp"
     assert robot.info.joint_names is not None and robot.info.joint_names[3] == "L_Knee"
-    assert robot.state.mode is Mode.DAMP
-    assert robot.state.upright is True
+    assert robot.get_state().mode is Mode.DAMP
+    assert robot.get_state().upright is True
 
 
 def test_connect_refuses_when_nobody_answers():
@@ -95,7 +97,7 @@ def test_connect_refuses_a_protocol_version_it_was_not_built_for(edge):
 
 
 def test_stand_and_damp_are_sent_once_and_encoded_as_modes(edge, robot):
-    robot.stand()
+    robot.stand(wait=False)
     robot.damp()
     assert edge.wait_for(lambda r: len(r) >= 2)
     time.sleep(3 / KEEPALIVE_HZ)
@@ -105,7 +107,8 @@ def test_stand_and_damp_are_sent_once_and_encoded_as_modes(edge, robot):
 def test_set_velocity_is_held_at_the_keepalive_rate(edge, robot):
     """The hold is what keeps the edge's 2 s watchdog from zero-STANDing the robot while
     the script is off doing vision."""
-    robot.set_velocity(vx=0.2, vyaw=0.1)
+    put_in(robot, edge, "move")
+    robot.set_velocity(vx=0.2, vyaw=0.1, wait=False)
     time.sleep(4 / KEEPALIVE_HZ)
     vels = edge.velocities()
     assert len(vels) >= 3, vels
@@ -116,25 +119,27 @@ def test_set_velocity_is_held_at_the_keepalive_rate(edge, robot):
 
 
 def test_velocity_is_clamped_and_the_clamp_is_visible(edge, robot):
-    sent = robot.set_velocity(vx=20.0, vyaw=-99.0)
+    put_in(robot, edge, "move")
+    sent = robot.set_velocity(vx=20.0, vyaw=-99.0, wait=False)
     assert sent.clamped is True
     assert sent.command == Velocity(0.4, 0.0, -0.8)
     assert edge.wait_for(lambda r: any(c.HasField("policy") for c in r))
     assert edge.velocities()[-1] == (0.4, 0.0, -0.8)
-    assert robot.set_velocity(vx=0.1).clamped is False
+    assert robot.set_velocity(vx=0.1, wait=False).clamped is False
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_non_finite_velocity_is_a_caller_bug_not_a_command(edge, robot, bad):
     """NaN sails through min/max. It has to be refused before it exists as a command."""
     with pytest.raises(ValueError):
-        robot.set_velocity(vx=bad)
+        robot.set_velocity(vx=bad, wait=False)
     time.sleep(0.05)
     assert edge.velocities() == []
 
 
 def test_a_bounded_hold_ends_with_a_zero(edge, robot):
-    robot.set_velocity(vx=0.3, duration=0.25)
+    put_in(robot, edge, "move")
+    robot.set_velocity(vx=0.3, duration=0.25, wait=False)
     time.sleep(0.6)
     vels = edge.velocities()
     assert (0.3, 0.0, 0.0) in vels
@@ -146,14 +151,15 @@ def test_a_bounded_hold_ends_with_a_zero(edge, robot):
 
 
 def test_stop_and_a_mode_command_end_the_hold(edge, robot):
-    robot.set_velocity(vx=0.2)
-    robot.stop()
+    put_in(robot, edge, "move")
+    robot.set_velocity(vx=0.2, wait=False)
+    robot.balance()
     assert edge.wait_for(lambda r: len(edge.velocities()) >= 2)  # 0.2 then the zero
     n_after_stop = len(edge.received)
     time.sleep(3 / KEEPALIVE_HZ)
     assert len(edge.received) == n_after_stop, "zero is not re-sent"
-    robot.set_velocity(vx=0.2)
-    robot.stand()
+    robot.set_velocity(vx=0.2, wait=False)
+    robot.damp(wait=False)
     assert edge.wait_for(lambda r: len(edge.modes()) >= 1)
     n = len(edge.received)
     time.sleep(3 / KEEPALIVE_HZ)
@@ -163,9 +169,10 @@ def test_stop_and_a_mode_command_end_the_hold(edge, robot):
 def test_a_superseded_velocity_never_reaches_the_robot(edge, robot):
     """The classic race: the keepalive read v1, the caller sent v2, the keepalive then
     transmitted the stale v1. Generation counting closes it."""
-    robot.set_velocity(vx=0.2)
+    put_in(robot, edge, "move")
+    robot.set_velocity(vx=0.2, wait=False)
     stale_gen = robot._generation
-    robot.stop()
+    robot.balance()
     assert edge.wait_for(lambda r: len(edge.velocities()) >= 2)  # both real sends landed
     before = len(edge.received)
     late = robot._send("set_velocity", Velocity(0.2), stale_gen)  # the keepalive's late send
@@ -175,6 +182,7 @@ def test_a_superseded_velocity_never_reaches_the_robot(edge, robot):
 
 
 def test_trajectory_length_must_match_the_robot(edge, robot):
+    put_in(robot, edge, "move")
     with pytest.raises(ValueError):
         robot.trajectory([0.0] * 24)
     robot.trajectory([0.05] * 25, kp=[50.0] * 25, kd=[2.0] * 25)
@@ -187,7 +195,7 @@ def test_trajectory_length_must_match_the_robot(edge, robot):
 
 
 def test_outcomes_are_unknown_until_the_edge_reports_them(edge, robot):
-    sent = robot.stand()
+    sent = robot.stand(wait=False)
     assert sent.outcome is None
     o = sent.wait_outcome(timeout=0.05)
     assert isinstance(o, Unknown) and o.sequence == sent.sequence
@@ -199,9 +207,10 @@ def test_outcomes_are_unknown_until_the_edge_reports_them(edge, robot):
 
 
 def test_a_delivered_refusal_resolves_the_handle_and_the_callback(edge, robot):
+    put_in(robot, edge, "move")
     seen = []
     robot.on_refused = seen.append
-    sent = robot.set_velocity(vx=0.2)
+    sent = robot.set_velocity(vx=0.2, wait=False)
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FW_DAMPED, "firmware is DAMPed"))
     assert isinstance(sent.outcome, Refused) and sent.outcome.reason is Refusal.FW_DAMPED
     assert sent.outcome.reason.retryable is False
@@ -221,8 +230,8 @@ def test_an_unrecognised_refusal_is_still_a_refusal():
 # ── waits ─────────────────────────────────────────────────────────────────────
 
 
-def test_wait_for_follows_the_robots_own_report(edge, robot):
-    robot.stand()
+def test_wait_until_follows_the_robots_own_report(edge, robot):
+    robot.stand(wait=False)
 
     def flip():
         time.sleep(0.2)
@@ -231,15 +240,15 @@ def test_wait_for_follows_the_robots_own_report(edge, robot):
     import threading
 
     threading.Thread(target=flip, daemon=True).start()
-    s = robot.wait_for(Mode.STAND, timeout=2.0)
+    s = robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=2.0)
     assert s.mode is Mode.STAND
 
 
 def test_wait_times_out_with_a_typed_error_that_is_also_a_TimeoutError(edge, robot):
     with pytest.raises(WaitTimeoutError) as exc:
-        robot.wait_for(Mode.STAND, timeout=0.2)
+        robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=0.2)
     assert isinstance(exc.value, TimeoutError) and isinstance(exc.value, MenloError)
-    assert "STAND" in str(exc.value) and exc.value.last is not None
+    assert "robot mode DAMP" in str(exc.value) and exc.value.last is not None
 
 
 def test_wait_refuses_to_succeed_on_a_state_that_stopped_updating(edge, robot):
@@ -256,7 +265,7 @@ def test_wait_gives_up_early_on_a_fault_damp(edge, robot):
     a.id, a.severity = 7, 0  # severity 0 == CRITICAL on the firmware's scale
     time.sleep(0.05)
     with pytest.raises(RobotFaultedError) as exc:
-        robot.wait_for(Mode.STAND, timeout=2.0)
+        robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=2.0)
     assert exc.value.state.faulted is True
     assert exc.value.state.alerts[0].critical is True
 
@@ -264,10 +273,10 @@ def test_wait_gives_up_early_on_a_fault_damp(edge, robot):
 def test_wait_stops_when_the_pending_mode_command_is_refused(edge, robot):
     from menlo.asimov import CommandRefusedError
 
-    sent = robot.stand()
+    sent = robot.stand(wait=False)
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     with pytest.raises(CommandRefusedError):
-        robot.wait_for(Mode.STAND, timeout=2.0)
+        robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=2.0)
 
 
 # ── liveness & lifecycle ──────────────────────────────────────────────────────
@@ -281,11 +290,12 @@ def test_link_lost_when_state_goes_silent(edge, robot):
     time.sleep(0.8)
     assert not robot.connected and lost
     with pytest.raises(LinkLostError):
-        robot.set_velocity(vx=0.1)
+        robot.set_velocity(vx=0.1, wait=False)
 
 
 def test_close_zeroes_a_held_velocity_then_stops_talking(edge, robot):
-    robot.set_velocity(vx=0.3)
+    put_in(robot, edge, "move")
+    robot.set_velocity(vx=0.3, wait=False)
     assert edge.wait_for(lambda r: any(c.HasField("policy") for c in r))
     robot.close()
     assert edge.wait_for(lambda r: any(c.HasField("policy") and c.policy.vx == 0.0 for c in r))
@@ -296,11 +306,11 @@ def test_close_zeroes_a_held_velocity_then_stops_talking(edge, robot):
     assert len(edge.received) == n
     robot.close()  # idempotent
     with pytest.raises(NotConnectedError):
-        robot.stand()
+        robot.stand(wait=False)
 
 
 def test_close_without_a_held_velocity_sends_nothing(edge, robot):
-    robot.stand()
+    robot.stand(wait=False)
     assert edge.wait_for(lambda r: len(r) >= 1)
     n = len(edge.received)
     robot.close()
@@ -315,9 +325,9 @@ def test_with_block_closes_and_the_state_names_joints(edge):
         state_bind=("127.0.0.1", edge.state_port),
         timeout=2,
     ) as r:
-        assert r.state.joint("L_Knee").pos == 0.0
+        assert r.get_state().joint("L_Knee").pos == 0.0
         with pytest.raises(KeyError):
-            r.state.joint("left_knee")
+            r.get_state().joint("left_knee")
         assert r.info.joint_index("Waist_Yaw") == 22
     assert not r.connected
 
@@ -325,31 +335,39 @@ def test_with_block_closes_and_the_state_names_joints(edge):
 # ── concurrency, liveness, and trust in the state stream ─────────────────────
 
 
-def test_damp_is_never_dropped_by_a_racing_set_velocity(edge, robot):
+def test_damp_is_never_dropped_by_a_racing_set_velocity(edge, robot, wait=False):
     """A verb the caller issued must go out even while another thread drives. The
     generation fence is for the keepalive's re-sends only."""
     import sys
     import threading
 
+    put_in(robot, edge, "move")  # this fake robot stays in MOVE: the drive keeps driving
     old = sys.getswitchinterval()
     sys.setswitchinterval(1e-6)
     try:
         stop = threading.Event()
+        drives: list[int] = []
+        errors: list[BaseException] = []
 
         def drive() -> None:
-            while not stop.is_set():
-                robot.set_velocity(vx=0.1)
+            try:
+                while not stop.is_set():
+                    robot.set_velocity(vx=0.1, wait=False)
+                    drives.append(1)
+            except BaseException as exc:
+                errors.append(exc)
 
         t = threading.Thread(target=drive, daemon=True)
         t.start()
         try:
-            dropped = sum(robot.damp().sequence == -1 for _ in range(1500))
+            dropped = sum(robot.damp(wait=False).sequence == -1 for _ in range(1500))
         finally:
             stop.set()
             t.join(timeout=2.0)
     finally:
         sys.setswitchinterval(old)
     assert dropped == 0, f"{dropped} damp() calls were dropped as 'superseded'"
+    assert drives and errors == [], f"the racing drive ran and never raised: {errors}"
 
 
 def test_wait_until_survives_the_pending_table_churning_under_it(edge, robot):
@@ -363,7 +381,7 @@ def test_wait_until_survives_the_pending_table_churning_under_it(edge, robot):
 
         def churn() -> None:
             while not stop.is_set():
-                robot.stand()  # every send inserts into (and trims) the pending table
+                robot.stand(wait=False)  # every send inserts into (and trims) the pending table
 
         t = threading.Thread(target=churn, daemon=True)
         t.start()
@@ -395,8 +413,9 @@ def test_close_from_the_link_lost_callback_really_closes(edge, robot):
 def test_link_lost_zeroes_a_held_velocity(edge, robot):
     """State went quiet but the command path may still reach the edge: the last frame the
     robot hears from us must be zero, not the velocity we were holding."""
+    put_in(robot, edge, "move")
     robot.link_timeout = 0.3
-    robot.set_velocity(vx=0.3)
+    robot.set_velocity(vx=0.3, wait=False)
     assert edge.wait_for(lambda r: any(c.HasField("policy") and c.policy.vx > 0 for c in r))
     edge.pushing = False
     time.sleep(0.8)
@@ -441,7 +460,7 @@ def test_a_foreign_state_datagram_does_not_keep_the_link_alive(edge, robot, payl
     try:
         time.sleep(0.9)
         assert not robot.connected, "foreign datagrams refreshed liveness"
-        assert len(robot.state.joints) == 25, "a foreign sample became robot.state"
+        assert len(robot.get_state().joints) == 25, "a foreign sample became robot.get_state()"
     finally:
         stop.set()
         t.join(timeout=1.0)
@@ -450,20 +469,20 @@ def test_a_foreign_state_datagram_does_not_keep_the_link_alive(edge, robot, payl
 def test_a_refused_stand_does_not_poison_a_later_drive(edge, robot):
     from menlo.asimov import CommandRefusedError
 
-    sent = robot.stand()
+    sent = robot.stand(wait=False)
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     with pytest.raises(CommandRefusedError):
-        robot.wait_for(Mode.STAND, timeout=1.0)
-    robot.set_velocity(vx=0.1)  # a new verb is in force; the old refusal is history
+        robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=1.0)
     edge.set_mode("move")
-    assert robot.wait_for(Mode.MOVE, timeout=2.0).mode is Mode.MOVE
+    robot.set_velocity(vx=0.1, wait=False)  # a new verb is in force; the old refusal is history
+    assert robot.wait_until(lambda s: s.mode is Mode.MOVE, timeout=2.0).mode is Mode.MOVE
 
 
 def test_a_fault_in_an_unknown_mode_still_fails_fast(edge, robot):
     edge.state.current_mode = 99
     edge.state.error_flags = 0x4
     with pytest.raises(RobotFaultedError):
-        robot.wait_for(Mode.STAND, timeout=3.0)
+        robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=3.0)
 
 
 def test_the_host_is_resolved_once_at_open(edge):
@@ -499,14 +518,14 @@ def test_reopen_waits_for_fresh_state_instead_of_the_last_session(edge, robot):
         robot.open(timeout=0.4)  # the old session's sample must not satisfy this wait
     edge.pushing = True
     robot.open(timeout=2.0)
-    assert robot.connected and robot.state.age_s < 1.0
+    assert robot.connected and robot.get_state().age_s < 1.0
     robot.close()
 
 
 def test_a_refusal_names_the_verb_that_was_refused(edge, robot):
     from menlo.asimov import CommandRefusedError
 
-    sent = robot.stand()
+    sent = robot.stand(wait=False)
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     with pytest.raises(CommandRefusedError) as info:
         sent.require()
@@ -516,7 +535,7 @@ def test_a_refusal_names_the_verb_that_was_refused(edge, robot):
 
 
 def test_a_resolved_outcome_leaves_the_pending_table(edge, robot):
-    sent = robot.stand()
+    sent = robot.stand(wait=False)
     assert sent.sequence in robot._pending
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     assert sent.sequence not in robot._pending and sent.outcome is not None
@@ -546,16 +565,16 @@ def test_an_older_reordered_state_sample_never_overwrites_a_newer_one(edge, robo
     robot._forget_state()  # start the stream near the wrap; from seq 1 a jump there IS "older"
     robot._on_state(sample(high, 1))  # STAND, newest
     robot._on_state(sample(high - 7, 0))  # an older DAMP sample arriving late
-    assert robot.state.sequence == high and robot.state.mode is Mode.STAND
+    assert robot.get_state().sequence == high and robot.get_state().mode is Mode.STAND
     robot._on_state(sample(0, 2))  # the counter wrapped to exactly 0: NEWER, not older
-    assert robot.state.sequence == 0 and robot.state.mode is Mode.MOVE
+    assert robot.get_state().sequence == 0 and robot.get_state().mode is Mode.MOVE
     robot._on_state(sample(high, 0))  # and a pre-wrap straggler after that is dropped
-    assert robot.state.sequence == 0 and robot.state.mode is Mode.MOVE
+    assert robot.get_state().sequence == 0 and robot.get_state().mode is Mode.MOVE
 
 
 def test_a_restarted_firmware_counter_is_followed_not_dropped(edge, robot):
     """The firmware rebooted under a live link: its sequence counter restarts at 0. Dropping
-    every sample until it climbed past the old value froze robot.state for minutes."""
+    every sample until it climbed past the old value froze robot.get_state() for minutes."""
     from menlo.asimov.transport.udp import state_from_robot_state
 
     edge.pushing = False
@@ -569,21 +588,21 @@ def test_a_restarted_firmware_counter_is_followed_not_dropped(edge, robot):
 
     robot._on_state(sample(5000, 0))
     robot._on_state(sample(5001, 0))
-    assert robot.state.sequence == 5001 and robot.state.mode is Mode.DAMP
+    assert robot.get_state().sequence == 5001 and robot.get_state().mode is Mode.DAMP
     robot._on_state(sample(0, 2))  # the counter restarted: a NEW stream, not an old datagram
-    assert robot.state.sequence == 0 and robot.state.mode is Mode.MOVE
+    assert robot.get_state().sequence == 0 and robot.get_state().mode is Mode.MOVE
     robot._on_state(sample(1, 2))
-    assert robot.state.sequence == 1, "and it keeps advancing from there"
+    assert robot.get_state().sequence == 1, "and it keeps advancing from there"
     robot._on_state(sample(0, 0))  # a genuinely reordered straggler of the new stream: dropped
-    assert robot.state.sequence == 1 and robot.state.mode is Mode.MOVE
+    assert robot.get_state().sequence == 1 and robot.get_state().mode is Mode.MOVE
     # a small backwards step is still the UDP reorder case, and still dropped
     robot._on_state(sample(900, 0))
     robot._on_state(sample(400, 1))
-    assert robot.state.sequence == 900
+    assert robot.get_state().sequence == 900
     # inside the window, a firmware clock a second in the past is a restart too
     robot._on_state(sample(950, 0, clock_us=20_000_000))
     robot._on_state(sample(300, 2, clock_us=1_000_000))
-    assert robot.state.sequence == 300 and robot.state.mode is Mode.MOVE
+    assert robot.get_state().sequence == 300 and robot.get_state().mode is Mode.MOVE
 
 
 def test_a_wait_sees_a_restarted_stream_as_fresh_not_stale(edge, robot):
@@ -610,8 +629,9 @@ def test_a_wait_sees_a_restarted_stream_as_fresh_not_stale(edge, robot):
 
 
 def test_reopen_after_link_lost_is_a_working_reconnect(edge, robot):
+    put_in(robot, edge, "move")
     robot.link_timeout = 0.3
-    robot.set_velocity(vx=0.1)
+    robot.set_velocity(vx=0.1, wait=False)
     edge.pushing = False
     time.sleep(0.8)
     assert not robot.connected
@@ -619,22 +639,23 @@ def test_reopen_after_link_lost_is_a_working_reconnect(edge, robot):
     edge.pushing = True
     robot.open(timeout=2.0)
     assert robot.connected, "the old LinkLostError must not outlive the session that produced it"
-    robot.set_velocity(vx=0.1)  # would raise the stale LinkLostError before the fix
+    robot.set_velocity(vx=0.1, wait=False)  # would raise the stale LinkLostError before the fix
     assert edge.wait_for(lambda r: sum(c.HasField("policy") for c in r) >= 3)
-    robot.wait_for(Mode.DAMP, timeout=1.0)  # waits work too (edge is DAMP by default)
+    robot.wait_until(lambda s: s.mode is Mode.MOVE, timeout=1.0)  # waits work too
     robot.close()
 
 
 def test_a_refusal_from_the_previous_session_does_not_haunt_a_reopen(edge, robot):
     from menlo.asimov import CommandRefusedError
 
-    sent = robot.stand()
+    sent = robot.stand(wait=False)
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     with pytest.raises(CommandRefusedError):
-        robot.wait_for(Mode.STAND, timeout=1.0)
+        robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=1.0)
     robot.close()
     robot.open(timeout=2.0)
-    assert robot.wait_for(Mode.DAMP, timeout=2.0).mode is Mode.DAMP  # raised before the fix
+    # raised before the fix
+    assert robot.wait_until(lambda s: s.mode is Mode.DAMP, timeout=2.0).mode is Mode.DAMP
     assert list(robot.outcomes()) == [], "old-session refusals must not surface in the new one"
     robot.close()
 
@@ -647,7 +668,7 @@ def test_reopen_learns_the_robot_again_instead_of_filtering_it_as_foreign(edge, 
     robot.open(
         timeout=2.0
     )  # would time out before the fix: every sample dropped as "not this robot"
-    assert robot.info.dof == 12 and len(robot.state.joints) == 12
+    assert robot.info.dof == 12 and len(robot.get_state().joints) == 12
     robot.close()
 
 
@@ -670,16 +691,18 @@ def test_a_stop_can_never_become_motion_through_the_clamp():
 
 
 def test_waits_refuse_a_closed_robot(edge, robot):
-    robot.wait_for(Mode.DAMP, timeout=1.0)  # works while open
+    robot.wait_until(lambda s: s.mode is Mode.DAMP, timeout=1.0)  # works while open
     robot.close()
     with pytest.raises(NotConnectedError):
-        robot.wait_for(Mode.DAMP, timeout=1.0)  # the cached DAMP sample must not satisfy it
+        # the cached DAMP sample must not satisfy it
+        robot.wait_until(lambda s: s.mode is Mode.DAMP, timeout=1.0)
 
 
-def test_stop_is_named_stop(edge, robot):
-    sent = robot.stop()
-    assert sent.name == "stop" and sent.command.is_zero
-    assert robot.set_velocity(vx=0.1).name == "set_velocity"
+def test_balance_is_named_balance(edge, robot):
+    put_in(robot, edge, "move")
+    sent = robot.balance()
+    assert sent.name == "balance" and sent.command.is_zero
+    assert robot.set_velocity(vx=0.1, wait=False).name == "set_velocity"
 
 
 def test_an_outcome_for_a_sequence_we_never_sent_is_dropped(edge, robot):
@@ -701,7 +724,7 @@ def test_connect_direct_takes_link_timeout(edge):
 
 
 def test_outcomes_drains_at_call_time_not_first_iteration(edge, robot):
-    sent = robot.stand()
+    sent = robot.stand(wait=False)
     robot._tx.deliver_outcome(Refused(sent.sequence, Refusal.FAULT_DAMPED))
     it = robot.outcomes()  # not iterated
     assert len(robot._refusals) == 0, "the drain must happen when outcomes() is called"
@@ -741,7 +764,7 @@ def test_an_unresolvable_state_source_is_named_in_the_error(edge):
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.0, -1.0])
 def test_duration_must_be_a_positive_finite_number(edge, robot, bad):
     with pytest.raises(ValueError):
-        robot.set_velocity(vx=0.1, duration=bad)
+        robot.set_velocity(vx=0.1, duration=bad, wait=False)
     assert robot._latched is None, "a rejected duration must not leave a velocity held"
 
 
@@ -761,17 +784,17 @@ def test_link_timeout_must_be_a_positive_finite_number(edge):
 
 
 def test_a_fault_damp_is_reported_even_when_the_wait_asked_for_damp(edge, robot):
-    """`damp(); wait_for(DAMP)` on a robot that fault-DAMPed must not read as success: the
+    """`damp()` on a robot that fault-DAMPed must not read as success: the
     fault takes precedence over the predicate, and the state rides on the exception."""
     a = edge.state.active_alerts.add()
     a.id, a.severity = 7, 0  # FALL_DETECTED, critical
     edge.set_mode("damp")
     deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and not robot.state.faulted:
+    while time.monotonic() < deadline and not robot.get_state().faulted:
         time.sleep(0.01)  # let a sample carrying the alert arrive
-    assert robot.state.faulted
+    assert robot.get_state().faulted
     with pytest.raises(RobotFaultedError) as info:
-        robot.wait_for(Mode.DAMP, timeout=2.0)
+        robot.wait_until(lambda s: s.mode is Mode.DAMP, timeout=2.0)
     assert info.value.state.mode is Mode.DAMP and info.value.state.alerts[0].name == "FALL_DETECTED"
 
 
@@ -801,7 +824,7 @@ def test_a_velocity_attempted_during_a_failed_open_never_reaches_the_next_sessio
     def controller() -> None:
         while not stop.is_set():
             try:
-                robot.set_velocity(vx=0.25)
+                robot.set_velocity(vx=0.25, wait=False)
             except NotConnectedError:
                 refused.append(1)
             time.sleep(0.02)
@@ -821,6 +844,7 @@ def test_a_velocity_attempted_during_a_failed_open_never_reaches_the_next_sessio
 
 
 def test_trajectory_needs_both_gains_or_neither(edge, robot):
+    put_in(robot, edge, "move")
     with pytest.raises(ValueError):
         robot.trajectory([0.0] * 25, kp=[10.0] * 25)
     with pytest.raises(ValueError):
@@ -850,8 +874,8 @@ def test_close_from_the_reader_thread_still_closes_the_transport(edge, robot):
     assert robot._tx._sock is None and not robot.connected
 
 
-def test_wait_for_keeps_a_stale_stream_as_StateStaleError(edge, robot):
+def test_wait_until_keeps_a_stale_stream_as_StateStaleError(edge, robot):
     edge.pushing = False
     time.sleep(0.4)
     with pytest.raises(StateStaleError):
-        robot.wait_for(Mode.STAND, timeout=2.0, stale_after=0.3)
+        robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=2.0, stale_after=0.3)

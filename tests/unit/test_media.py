@@ -162,8 +162,11 @@ def test_battery_is_a_capability_when_the_robot_reports_one(edge):
         timeout=2,
     ) as r:
         assert r.has("battery")
-        assert r.state.battery is not None and r.state.battery.soc_percent == pytest.approx(77.0)
-        assert r.state.battery.protecting is False
+        assert (
+            r.get_state().battery is not None
+            and r.get_state().battery.soc_percent == pytest.approx(77.0)
+        )
+        assert r.get_state().battery.protecting is False
 
 
 def test_first_media_attachment_happens_once_under_concurrency(media):

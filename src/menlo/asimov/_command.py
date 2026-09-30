@@ -1,8 +1,8 @@
 """What the SDK sends, in the robot's own vocabulary.
 
-The verbs on :class:`~menlo.asimov.robot.Robot` are the wire's verbs (``set_velocity``,
-``stand``, ``damp``, ``stop``, ``trajectory``) because that is what Asimov Edge, the
-protocol and the robot's other controllers already call them. These dataclasses are
+The verbs on :class:`~menlo.asimov.robot.Robot` follow the wire (``stand``, ``damp``,
+``set_velocity``, ``trajectory``; ``balance`` is a zero velocity) because that is what
+Asimov Edge, the protocol and the robot's other controllers already call them. These dataclasses are
 their payloads, transport-neutral: the UDP transport encodes them as
 ``asimov.io.RobotCommand``; another transport encodes the same objects for its own wire.
 Nothing above the transport knows which.
@@ -109,7 +109,7 @@ class Trajectory:
     ``State.joint_pos`` reports. (On the biped, the ankle entries are the A and B motors;
     the SDK sends them as the ankle pitch and roll the firmware reads there, and the
     firmware limits those to 0.35 rad and 0.1 rad.) Holding a reported pose within those
-    ankle limits holds the robot still; ``Robot.trajectory`` and ``Robot.goto`` refuse a
+    ankle limits holds the robot still; ``Robot.trajectory`` and ``Robot.set_joints`` refuse a
     target outside them with ``ValueError``.
 
     A setpoint, not a queue: the robot holds the latest one. Length must equal the

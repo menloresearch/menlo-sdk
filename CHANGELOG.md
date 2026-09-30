@@ -3,6 +3,104 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+- `balance(timeout=5.0, wait=True)`: MOVE at zero velocity, where the walking policy balances
+  the robot in place. From an armed STAND it enters MOVE and returns once the robot reports
+  MOVE, waiting for arming up to `timeout`; in MOVE it ends any velocity hold and sends zero,
+  never checked, from any thread; in DAMP it raises `NotReadyError` (`stand()` it first) or
+  `RobotFaultedError`, and sends nothing. It is the only way from STAND into MOVE.
+- `set_velocity(hold=False)`: one velocity packet per call, nothing re-sent, for a loop that
+  clocks its own commands. It ends any running hold, is checked once without waiting, and
+  takes no `duration` and no `wait=True` (`ValueError`).
+- Open robots are closed at interpreter exit, so a script that ends without `close()` still
+  sends zero velocity after a held velocity.
+- `menlo balance`: from STAND it asks, then enters MOVE; in MOVE it sends zero velocity at
+  once.
+- Examples `balance.py` (between `stand.py` and `walk.py`), `wait_until.py` (act the moment
+  a joint passes an angle, mid-move), `stream_velocity.py` (a 50 Hz velocity loop),
+  `record_audio.py` (the microphone to a WAV file) and `play_audio.py` (a WAV file on the
+  speaker).
+- `Mode.FAULT_DAMP`: robot mode 5, the firmware's latched emergency damping (asimov.io
+  protocol v1.3.0). `state.faulted` is true in it, `preflight()` reports `faulted`, a held
+  velocity is released, waits raise `RobotFaultedError`, and `robot.armed` is `False`.
+- `Preflight.explain()`: the blocking problems in one sentence each, with what fixes them.
+- `NotReadyError.action`, `.problems` and `.has(code)`; `RobotFaultedError.sent`;
+  `WaitTimeoutError.sent`.
+
+### Changed
+- `goto()` is `set_joints()`, with the same parameters and behaviour. `trajectory()` is
+  unchanged.
+- `set_velocity()` works in MOVE only: from STAND it raises `NotReadyError` (`wrong_mode`,
+  "balance() it first") and sends nothing, so nothing leaves STAND for MOVE implicitly.
+- `set_velocity()` waits by default: it returns once the `duration` has ended and zero
+  velocity is sent. Without a `duration` it raises `ValueError`; pass `wait=False` to keep
+  the velocity until the next command. `timeout` defaults to `None` (5 s with a hold).
+- `walk.py` no longer enters MOVE; run `balance.py` first. `keyboard.py`: space balances
+  (from STAND it enters MOVE).
+- `menlo walk` needs the robot in MOVE (`menlo balance` first) and ends balancing in place.
+- `trajectory()` checks readiness once and raises at once when the robot is not ready, so a
+  streaming loop fails fast instead of stalling; pass `timeout=` to wait.
+- `stand()`, `set_velocity()`, `trajectory()` and `set_joints()` check the robot before they send.
+  When it is ready the check adds no delay. They wait up to their `timeout` for a problem
+  that clears on its own (`not_armed` right after a stand, `stale_state`, `no_state`), and
+  otherwise raise `NotReadyError`, or `RobotFaultedError` for a latched fault, with nothing
+  sent. `balance()` in MOVE and `damp()` are never checked.
+- `stand(timeout=10.0, wait=True)` returns once the robot reports STAND and is armed, so the
+  next `balance()` enters MOVE. It raises `WaitTimeoutError` when the robot does not arm in
+  time and `RobotFaultedError` for a fault while standing. In MOVE it raises
+  `NotReadyError` (`wrong_mode`) and sends nothing.
+- `damp(timeout=5.0, wait=True)` returns once the robot reports DAMP, and raises
+  `WaitTimeoutError` when it does not.
+- `set_velocity()` takes `timeout=` for the check: 5 s by default with a hold, 0 (check once)
+  with `hold=False`. `trajectory()` takes `timeout=` too, default 0: a streaming loop fails
+  fast. `set_joints()`'s `timeout` bounds the whole call, the check and the wait for the
+  target.
+- `RobotFaultedError` is a subclass of `NotReadyError`, so `except NotReadyError` catches
+  every "the robot cannot do that now". `NotReadyError` messages name every blocking problem
+  and what fixes it.
+- `set_joints()` from a stale pose raises `NotReadyError` (`stale_state`) after its timeout, where
+  it raised `StateStaleError`.
+- `wait_until()`'s `WaitTimeoutError` message names the timeout, the robot mode and the age
+  of the last state sample.
+- `menlo stand` and `menlo walk` still check before the plan; after the answer the SDK
+  command checks again and a refusal prints `Not feasible:`. `menlo stand` exits `3` when the
+  robot does not arm within 10 s.
+- The examples call the commands and print the `NotReadyError` they raise. `check.py` shows
+  `preflight()` on its own.
+- `connect()` with no mode on a config that has both `udp` and `livekit` connects in
+  `hybrid`. Before, it raised `ValueError`. `connect("udp")` and `connect("livekit")` still
+  pick one of the two.
+- The SDK is licensed under the Apache License 2.0. Releases up to 0.1.0rc7 were MIT.
+- The package description is "Python SDK for Menlo robots. Supports Asimov 1." The README,
+  which is also the PyPI page, is short: requirements, installation, usage, and links to the
+  documentation.
+
+### Fixed
+- `damp()` called from a state callback (`on_state`, `on_alert`, `on_mode_change`) sends DAMP
+  and returns at once. It used to wait on the thread that delivers state, which held up
+  every sample for up to 5 s. The other verbs that wait, and `wait_until()`, raise
+  `RuntimeError` there with nothing sent; `wait=False` works.
+- `balance()` after a fault-DAMP ended a `set_velocity(hold=False)` stream raises
+  `RobotFaultedError` and sends nothing. It used to send a zero velocity to the DAMPed robot.
+- `set_velocity(wait=True)` raises `RobotFaultedError` (with `sent`) when the robot
+  fault-DAMPs during the walk; it used to return as if the walk had run its course.
+- The `LinkLostError` for a state stream that went quiet says a zero velocity was sent only
+  when one was: with nothing held, nothing is sent.
+- `menlo stand` on a robot already in STAND waits for the new session to see it armed
+  before it says "armed" or "not armed"; an armed robot was reported "not armed".
+
+### Removed
+- `Robot.stop()`: `balance()` replaces it. `menlo stop`: `menlo balance` replaces it.
+- `Robot.goto()`: renamed `set_joints()`.
+- `Robot.wait_ready()`: the commands check readiness themselves; `preflight()` is the check
+  without a command.
+- `Robot.wait_for(mode)`: `stand()` and `damp()` wait for their robot mode; for any other,
+  `robot.wait_until(lambda s: s.mode is Mode.MOVE)`.
+- `require_ready()` in `examples/check.py`.
+- `examples/apps/` (`follow_the_ball.py` and `agent_room.py`).
+
 ## 0.1.0rc7 — 2026-09-30
 
 ### Changed

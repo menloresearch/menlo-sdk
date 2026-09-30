@@ -12,12 +12,19 @@ robot: everything that speaks the Asimov wire lives in `menlo.asimov`; the top l
 
 ## Rules
 
-- **Verbs are the wire's verbs.** `set_velocity`, `stand`, `damp`, `stop`, `trajectory`:
-  the names the edge, the protocol and the robot's other controllers already use. Do not
-  invent synonyms.
-- **No synchronous refusal.** A command returns a `Sent`; the verdict arrives as an
-  `Outcome`. `Unknown` is never success and never refusal.
-- **State is the truth about effect.** Waits read `robot.state`, never infer from what was
+- **Verbs are the wire's verbs.** `stand`, `damp`, `set_velocity`, `trajectory`: the names
+  the edge, the protocol and the robot's other controllers already use. `balance` (a zero
+  velocity, the one way into MOVE) and `set_joints` (a managed stream of trajectory
+  setpoints) are the two the SDK adds. Do not invent synonyms.
+- **One synchronous refusal: the SDK's own readiness check.** `stand`, `balance` from
+  STAND or DAMP, `set_velocity`, `trajectory` and `set_joints` run `preflight` before they
+  send: they wait up to their `timeout` for the codes in `_preflight.TRANSIENT`, and raise
+  `NotReadyError` (a latched fault: `RobotFaultedError`) with nothing sent for any other
+  blocking problem. `set_velocity` works in MOVE only. When the robot is ready the check
+  reads one cached sample and adds no delay. `balance` in MOVE and `damp` are never
+  checked. Nothing else refuses synchronously: a sent command returns a `Sent`, Asimov
+  Edge's verdict arrives as an `Outcome`, and `Unknown` is never success and never refusal.
+- **State is the truth about effect.** Waits read `robot.get_state()`, never infer from what was
   sent. Every wait refuses to succeed on a stale stream, and a fault is reported before a
   predicate is evaluated.
 - **Caller bugs are builtins** (`ValueError`, `KeyError`, `RuntimeError`); robot and link

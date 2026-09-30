@@ -93,7 +93,7 @@ class UdpTransport:
         _pb()  # fail here, with the install hint, not in the reader thread
         # Resolve the robot's name ONCE. sendto() with a hostname re-resolves on every
         # datagram: ten mDNS lookups a second under the keepalive, each able to stall
-        # damp()/stop() behind a slow resolver.
+        # damp()/balance() behind a slow resolver.
         resolving = self._host
         try:
             self._addr = (socket.gethostbyname(self._host), self._port)

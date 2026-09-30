@@ -5,24 +5,26 @@
     menlo robots add lab --mode udp --udp 192.168.22.32
     menlo status --watch                            # READY / NOT READY / FAULTED, live
     menlo stand                                     # DAMP -> STAND, then wait until armed
-    menlo walk --vx 0.3 --duration 3                # a bounded walk, then stop()
-    menlo stop                                      # zero velocity (stays in MOVE), at once
+    menlo balance                                   # MOVE at zero velocity: balancing
+    menlo walk --vx 0.3 --duration 3                # a bounded walk in MOVE, then balance
     menlo damp                                      # every actuator compliant
 
 Every command that talks to the robot connects the way a script does (``Robot().connect()``
-with ``--robot`` and ``--mode`` applied). ``stand``, ``walk`` and ``damp`` print one line,
-the plan (the robot, its state, and what will happen), and ask ``Proceed? [y/N]``;
-``-y``/``--yes`` answers yes. Before the plan, ``stand`` and ``walk`` check
-``robot.preflight()``: a robot that cannot do it now gets ``Not feasible:`` and no
-question, and ``walk`` checks again after the answer. ``damp`` is not gated by preflight.
-``stop`` never asks. Exit codes:
+with ``--robot`` and ``--mode`` applied). ``stand``, ``walk``, ``damp`` and ``balance``
+from STAND print one line, the plan (the robot, its state, and what will happen), and ask
+``Proceed? [y/N]``; ``-y``/``--yes`` answers yes. Before the plan, ``stand``, ``balance``
+and ``walk`` check ``robot.preflight()``: a robot that cannot do it now gets
+``Not feasible:`` and no question. After the answer the command itself checks again
+(``robot.stand()``, ``robot.balance()``, ``robot.set_velocity()``) and refuses the same
+way. ``damp`` is never checked. ``balance`` in MOVE never asks. Exit codes:
 
     0    done
     1    error: connection, robot, or saved robots
     2    usage: the command line cannot run as given (a missing flag, no terminal to ask on)
-    3    not feasible: the check before the command refused, or the robot did not become ready
+    3    not feasible: the check before the command refused, or the robot did not become
+         ready (not armed in time, or a fault)
     4    cancelled: you answered no; nothing was sent
-    130  interrupted (Ctrl-C); a walk sends stop() first
+    130  interrupted (Ctrl-C); a walk sends balance() first
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ import sys
 from collections.abc import Callable, Sequence
 
 from menlo import __version__
-from menlo.asimov import MenloError, NotReadyError
+from menlo.asimov import MenloError, NotReadyError, WaitTimeoutError
 from menlo.asimov.connection import MODES
 from menlo.cli._common import (
     EXIT_ERROR,
@@ -66,8 +68,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_USAGE
     except NotReadyError as exc:
         print(f"menlo {name}: {exc}", file=sys.stderr)
-        if str(exc.preflight) != str(exc):
-            print(exc.preflight, file=sys.stderr)
+        return EXIT_NOT_READY
+    except WaitTimeoutError as exc:
+        print(f"menlo {name}: {exc}", file=sys.stderr)
         return EXIT_NOT_READY
     except (MenloError, ValueError, KeyError, OSError) as exc:
         print(f"menlo {name}: {_message(exc)}", file=sys.stderr)
@@ -161,11 +164,17 @@ def build_parser() -> argparse.ArgumentParser:
         "stand the robot up from DAMP and wait until armed (asks first)",
         asks=True,
     )
+    command(
+        "balance",
+        _run("_drive", "balance"),
+        "balance in place in MOVE: from STAND enter MOVE (asks first); in MOVE end a walk at once",
+        asks=True,
+    )
 
     walk = command(
         "walk",
         _run("_drive", "walk"),
-        "walk for a bounded time, then stop() (asks first)",
+        "walk in MOVE for a bounded time, then balance in place (asks first)",
         asks=True,
     )
     walk.add_argument("--vx", type=float, default=0.0, help="forward, m/s")
@@ -175,7 +184,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--duration", type=float, required=True, metavar="S", help="seconds, at most 10"
     )
 
-    command("stop", _run("_drive", "stop"), "send zero velocity at once; the robot keeps balancing")
     command(
         "damp",
         _run("_drive", "damp"),

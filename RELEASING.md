@@ -66,7 +66,7 @@ GitHub Release and a PyPI upload.
 3. The `sdk-release` workflow does the rest, stopping at the first thing that is wrong:
    - builds the sdist and wheel from the tagged `sdk/` tree alone, and refuses if the tag,
      the wheel's version and the `CHANGELOG.md` heading disagree, or the version is `.dev`;
-   - runs this repository's checks (ruff, mypy `--strict`, unit tests on 3.12 and 3.13) on
+   - runs this repository's checks (ruff, mypy `--strict`, unit tests on 3.12, 3.13 and 3.14) on
      the tagged tree;
    - waits for a reviewer on its `pypi` environment, then waits for that tree to be
      mirrored here and uploads the files it built;
@@ -99,7 +99,7 @@ cherry-picked onto it, and the ancestry check and the mirror extended to that br
 
 ## What a release must satisfy
 
-- The release workflow re-runs lint, mypy strict and the unit tests (3.12 and 3.13) on the tagged
+- The release workflow re-runs lint, mypy strict and the unit tests (3.12, 3.13 and 3.14) on the tagged
   tree itself. The real-edge integration job runs in this repository's CI when the release
   commit is mirrored; the `pypi` reviewer checks it passed there before approving.
 - The `asimov-protocol` floor in `pyproject.toml` names a release that is on PyPI, and

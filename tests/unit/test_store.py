@@ -172,12 +172,15 @@ def test_a_robot_with_no_config_binds_to_the_environment_and_picks_the_only_lane
     assert robot.config.available_modes() == ("livekit",)
     assert robot.config.only_mode() == "livekit"
     assert not robot.connected
-    with pytest.raises(
-        ValueError, match=r"can connect on udp, hybrid, livekit; pass connect\(mode\)"
-    ):
-        Robot(
-            ConnectionConfig(udp=UdpConfig("h"), livekit=LiveKitConfig("ws://x", "r", "t"))
-        ).connect()
+
+
+def test_the_default_connection_mode_follows_the_slots_that_are_set():
+    both = ConnectionConfig(udp=UdpConfig("h"), livekit=LiveKitConfig("ws://x", "r", "t"))
+    assert both.available_modes() == ("udp", "hybrid", "livekit")
+    assert both.default_mode() == "hybrid"
+    assert ConnectionConfig(udp=UdpConfig("h")).default_mode() == "udp"
+    assert ConnectionConfig(livekit=LiveKitConfig("ws://x", "r", "t")).default_mode() == "livekit"
+    assert ConnectionConfig(udp=UdpConfig("h"), livekit=None, mode="udp").default_mode() == "udp"
     with pytest.raises(ConnectError, match="no connection set"):
         Robot(ConnectionConfig()).connect()
 

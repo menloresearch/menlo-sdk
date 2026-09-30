@@ -106,7 +106,7 @@ def check_udp(robot: StoredRobot) -> Check:
                 "udp",
                 "ok",
                 f"state from {host} after {first:.2f} s, {rate.hz:.0f} Hz, "
-                f"robot mode {r.state.mode.name}",
+                f"robot mode {r.get_state().mode.name}",
             )
     except ProtocolMismatchError as exc:
         return Check("udp", "fail", str(exc))

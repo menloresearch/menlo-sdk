@@ -1,15 +1,12 @@
 """``menlo.asimov``: drive an Asimov robot from Python.
 
-    from menlo.asimov import Mode, Robot
+    from menlo.asimov import Robot
 
     with Robot().connect() as robot:                 # the saved robot (`menlo setup`)
-        if robot.state.mode is Mode.DAMP:
-            robot.wait_ready("stand")                # fresh state, no fault, battery ok
-            robot.stand()
-            robot.wait_for(Mode.STAND)
-        robot.wait_ready("move")                     # armed: STAND held upright 0.5 s
-        robot.set_velocity(vx=0.25, duration=4.0, wait=True)
-        robot.stop()
+        robot.stand()                                # checks first; returns once armed
+        robot.balance()                              # MOVE: balancing in place
+        robot.set_velocity(vx=0.25, duration=4.0)    # walk 4 s, then zero velocity
+        robot.balance()                              # stays in MOVE, balancing
 
     from menlo.asimov import ConnectionConfig, UdpConfig, ManagerConfig
 

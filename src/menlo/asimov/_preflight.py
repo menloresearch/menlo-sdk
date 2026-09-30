@@ -1,14 +1,21 @@
-"""Is the robot ready for what a script is about to ask of it? Read from its own report.
+"""Is the robot ready for a command? Read from its own report.
 
-    check = robot.preflight("move")
+    check = robot.preflight("move")    # sends nothing, never blocks
     if not check.ok:
         print(check)                   # every problem, one per line
-    robot.wait_ready("move")           # or block until ready; NotReadyError if it cannot be
+
+``stand()``, ``set_velocity()``, ``trajectory()`` and ``set_joints()`` run the same check
+before they send anything, and so does ``balance()`` from STAND; they raise
+:class:`~menlo.asimov.NotReadyError` when it fails. ``set_velocity()`` also needs the
+robot in MOVE: from STAND it refuses with ``wrong_mode``, where ``preflight("move")``
+(can the robot enter or be in MOVE) passes.
+``preflight`` is for a script, or a status display, that wants to decide for itself.
 
 Each :class:`Problem` has a stable ``code`` a script can branch on, a message for people,
 and ``blocking``: a blocking problem makes ``ok`` false. A field the robot does not report
 is a non-blocking problem (``unknown_*``): the check says it could not look, and never
-assumes the answer.
+assumes the answer. A command waits up to its ``timeout`` for the codes in ``TRANSIENT``,
+which clear on their own; any other blocking problem fails the command at once.
 
 Codes:
 
@@ -39,8 +46,8 @@ from typing import Literal, get_args
 
 from menlo.asimov._state import ALERT_NAMES, Mode, State
 
-#: What a script checks readiness for. ``move`` is ``set_velocity``; ``trajectory`` is
-#: ``trajectory`` and ``goto``.
+#: What a script checks readiness for. ``move`` is ``balance`` from STAND and
+#: ``set_velocity``; ``trajectory`` is ``trajectory`` and ``set_joints``.
 Action = Literal["stand", "move", "trajectory"]
 ACTIONS: tuple[Action, ...] = get_args(Action)
 #: How each action reads in a sentence: "ready to stand", "not ready to run a trajectory".
@@ -61,8 +68,20 @@ ARM_HOLD_S = 0.5
 #: made of one unobserved stretch (2.5 samples at 10 Hz).
 ARM_MAX_GAP_S = MAX_STATE_AGE_S / 2
 
-#: Blocking codes that waiting does not clear.
-PERMANENT = frozenset({"not_connected", "faulted"})
+#: Blocking codes a command waits out, up to its ``timeout``: they clear on their own (a
+#: sample arrives, the robot arms). Every other blocking code fails the command at once.
+TRANSIENT = frozenset({"no_state", "stale_state", "not_armed"})
+
+#: What to do about a blocking problem, when its message does not already say.
+FIXES: dict[str, str] = {
+    "not_connected": "close() and connect() again",
+    "no_state": "check that the robot's firmware is running",
+    "stale_state": "check the network link to the robot",
+    "battery_protecting": "check the battery before you drive",
+    "battery_low": "charge the battery",
+    "joint_hot": "let the actuators cool",
+    "not_armed": "keep the robot upright in STAND; stand() returns once it is armed",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +124,16 @@ class Preflight:
             return head
         return head + ":\n" + "\n".join(f"  - {p}" for p in self.problems)
 
+    def explain(self) -> str:
+        """The blocking problems in one sentence each, with what fixes them: the message
+        of the :class:`~menlo.asimov.NotReadyError` a command raises for this check."""
+        head = ("ready to " if self.ok else "not ready to ") + PHRASES[self.action]
+        reasons = []
+        for p in self.blocking:
+            fix = FIXES.get(p.code)
+            reasons.append(f"{p.message} ({p.code})" + (f"; {fix}" if fix else ""))
+        return head + (": " + ". ".join(reasons) if reasons else "")
+
 
 def tilt_deg(gravity: tuple[float, float, float]) -> float:
     """Angle between the body's vertical and measured gravity, in degrees."""
@@ -135,7 +164,7 @@ def _mode_problems(action: Action, state: State, armed: bool | None) -> list[Pro
                 Problem(
                     "wrong_mode",
                     "the robot is in MOVE; STAND has no balance loop and a free-standing "
-                    "robot tips over. Use stop() to stand still in MOVE",
+                    "robot tips over. Use balance() to stand still in MOVE",
                     True,
                 )
             )
@@ -146,7 +175,7 @@ def _mode_problems(action: Action, state: State, armed: bool | None) -> list[Pro
         return problems
 
     # move / trajectory: from an armed STAND, or in MOVE
-    if mode is Mode.DAMP and state.faulted:
+    if mode is Mode.FAULT_DAMP or (mode is Mode.DAMP and state.faulted):
         pass  # the latched fault is the reason, and stand() does not clear it
     elif mode is Mode.DAMP:
         add(Problem("wrong_mode", "the robot is in DAMP; stand() it first", True))
@@ -208,7 +237,11 @@ def evaluate(
             )
         )
     if state.faulted:
-        names = ", ".join(fault_names(state)) or f"error_flags={state.error_flags:#x}"
+        names = ", ".join(fault_names(state)) or (
+            "robot mode FAULT_DAMP"
+            if state.mode is Mode.FAULT_DAMP
+            else f"error_flags={state.error_flags:#x}"
+        )
         add(
             Problem(
                 "faulted",
@@ -266,8 +299,10 @@ __all__ = [
     "ARM_GRAVITY_Z",
     "ARM_HOLD_S",
     "BATTERY_LOW_PERCENT",
+    "FIXES",
     "JOINT_HOT_C",
     "MAX_STATE_AGE_S",
+    "TRANSIENT",
     "Action",
     "Preflight",
     "Problem",

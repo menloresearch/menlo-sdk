@@ -12,10 +12,18 @@ import io
 import json
 import threading
 import time
+from collections.abc import Callable
 
 import pytest
 
-from menlo.asimov import ConnectionConfig, Robot, RobotStore, StoredRobot, UdpConfig
+from menlo.asimov import (
+    ConnectionConfig,
+    Robot,
+    RobotFaultedError,
+    RobotStore,
+    StoredRobot,
+    UdpConfig,
+)
 from menlo.cli import _common, _drive, _robots, build_parser, main
 from tests.conftest import FakeEdge, route_manager_rooms_to
 
@@ -329,8 +337,31 @@ def answer(monkeypatch):
 
 def _armed_stand(edge: FakeEdge) -> None:
     with Robot(ConnectionConfig(udp=_udp(edge))).connect("udp", timeout=3.0) as robot:
+        robot.stand()  # returns once armed
+
+
+def _balancing(edge: FakeEdge) -> None:
+    """DAMP -> STAND -> MOVE, as a user would before `menlo walk`."""
+    with Robot(ConnectionConfig(udp=_udp(edge))).connect("udp", timeout=3.0) as robot:
         robot.stand()
-        robot.wait_ready("move", timeout=3.0)
+        robot.balance()  # returns once MOVE is reported
+
+
+def _once_walking(edge: FakeEdge, then: Callable[[], None]) -> threading.Thread:
+    """Call ``then`` (in a thread) 0.3 s after the first nonzero velocity arrives."""
+
+    def watch() -> None:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if any(v != (0.0, 0.0, 0.0) for v in edge.velocities()):
+                time.sleep(0.3)
+                then()
+                return
+            time.sleep(0.01)
+
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
+    return thread
 
 
 def test_the_yes_flag_is_shared_by_the_commands_that_send(capsys):
@@ -339,9 +370,10 @@ def test_the_yes_flag_is_shared_by_the_commands_that_send(capsys):
         ["stand", "-y"],
         ["walk", "--vx", "1", "--duration", "1", "--yes"],
         ["damp", "-y"],
+        ["balance", "-y"],
     ):
         assert p.parse_args(argv).yes is True
-    for argv in (["stop", "-y"], ["status", "--yes"], ["robots", "-y"]):
+    for argv in (["stop"], ["status", "--yes"], ["robots", "-y"]):
         with pytest.raises(SystemExit) as info:
             p.parse_args(argv)
         assert info.value.code == 2
@@ -359,13 +391,22 @@ def test_stand_prints_the_plan_asks_and_stands_on_yes(fw_edge, at_edge, answer, 
     assert fw_edge.modes() == ["stand"]
 
 
+def test_stand_on_an_armed_stand_says_armed_and_sends_nothing(fw_edge, at_edge, capsys):
+    at_edge(fw_edge)
+    _armed_stand(fw_edge)
+    fw_edge.received.clear()
+    assert main(["stand"]) == 0  # a new session: it has not yet seen 0.5 s upright
+    assert "lab is already in STAND (armed); nothing sent." in capsys.readouterr().out
+    assert fw_edge.received == []
+
+
 @pytest.mark.parametrize("typed", ["n\n", "\n", "", "nope\n"])
 def test_anything_but_yes_cancels_and_sends_nothing(edge, at_edge, answer, capsys, typed):
     at_edge(edge)
     answer(typed)
     assert main(["damp"]) == 4
     out = capsys.readouterr().out
-    assert "→ damp: every actuator goes limp and a standing robot folds" in out
+    assert "→ damp: every actuator stops holding its position and a standing robot falls" in out
     assert "the robot must be supported. Not an emergency stop" in out
     assert "Cancelled; nothing sent." in out
     assert edge.received == []
@@ -385,29 +426,42 @@ def test_no_terminal_and_no_yes_is_a_usage_error_and_sends_nothing(edge, at_edge
 
 def test_walk_plans_the_clamped_speed_and_yes_skips_the_question(fw_edge, at_edge, capsys):
     at_edge(fw_edge)
-    _armed_stand(fw_edge)
+    _balancing(fw_edge)
     fw_edge.received.clear()
-    started = time.monotonic()
     assert main(["walk", "--vx", "0.6", "--vyaw", "-0.2", "--duration", "0.4", "--yes"]) == 0
     out = capsys.readouterr().out
     assert (
-        "lab (udp, 127.0.0.1) · STAND, armed · battery not reported → walk vx 0.40 m/s "
-        "(asked 0.60), vy 0.00 m/s, vyaw -0.20 rad/s for 0.4 s, then stop"
+        "lab (udp, 127.0.0.1) · MOVE · battery not reported → walk vx 0.40 m/s "
+        "(asked 0.60), vy 0.00 m/s, vyaw -0.20 rad/s for 0.4 s, then balance in place"
     ) in out
-    assert "Proceed?" not in out and "Stopped. Robot mode MOVE" in out
-    assert fw_edge.move_entered_at is not None and fw_edge.move_entered_at > started
+    assert "Proceed?" not in out and "Walk done. Robot mode MOVE, balancing in place" in out
+    assert fw_edge.modes() == [], "walk changed the robot mode"
     velocities = fw_edge.velocities()
     assert (0.4, 0.0, -0.2) in velocities and velocities[-1] == (0.0, 0.0, 0.0)
 
 
-def test_walk_waits_for_a_new_session_to_see_the_robot_armed(fw_edge, at_edge, answer, capsys):
+def test_balance_from_stand_asks_waits_until_armed_and_enters_move(
+    fw_edge, at_edge, answer, capsys
+):
     at_edge(fw_edge)
     _armed_stand(fw_edge)
     fw_edge.received.clear()
     answer("yes\n")
-    assert main(["walk", "--vx", "0.2", "--duration", "0.3"]) == 0
-    assert "STAND, armed" in capsys.readouterr().out
-    assert (0.2, 0.0, 0.0) in fw_edge.velocities()
+    assert main(["balance"]) == 0
+    out = capsys.readouterr().out
+    assert "STAND, armed" in out and "→ balance: MOVE at zero velocity" in out
+    assert "Proceed?" in out and "Balancing" in out
+    assert fw_edge.velocities() == [(0.0, 0.0, 0.0)]
+    assert fw_edge.state.current_mode == 2  # MOVE
+
+
+def test_balance_from_stand_on_no_sends_nothing(fw_edge, at_edge, answer, capsys):
+    at_edge(fw_edge)
+    _armed_stand(fw_edge)
+    fw_edge.received.clear()
+    answer("n\n")
+    assert main(["balance"]) == 4
+    assert fw_edge.received == []
 
 
 @pytest.mark.parametrize(
@@ -422,7 +476,22 @@ def test_walk_waits_for_a_new_session_to_see_the_robot_armed(fw_edge, at_edge, a
             lambda e: e.set_mode("move"),
             ["stand"],
             "Not feasible: lab is in MOVE, balancing. `stand` only runs from DAMP; "
-            "end a walk with `menlo stop`.",
+            "end a walk with `menlo balance`.",
+        ),
+        (
+            lambda e: e.set_mode("stand"),
+            ["walk", "--vx", "0.2", "--duration", "1"],
+            "Not feasible: lab is in STAND. Run `menlo balance` first.",
+        ),
+        (
+            lambda e: None,
+            ["balance"],
+            "Not feasible: lab is in DAMP, not balancing. Run `menlo stand` first.",
+        ),
+        (
+            lambda e: e.fault(),
+            ["balance"],
+            "Not feasible: lab is in DAMP, faulted. The firmware latched DAMP (FALL_DETECTED)",
         ),
         (
             lambda e: e.fault(),
@@ -450,7 +519,7 @@ def test_not_feasible_says_why_and_the_fix_and_never_asks(
     assert fw_edge.received == []
 
 
-def test_walk_before_arming_is_not_feasible_and_says_how_it_arms(
+def test_balance_before_arming_is_not_feasible_and_says_how_it_arms(
     fw_edge, at_edge, answer, monkeypatch, capsys
 ):
     at_edge(fw_edge)
@@ -458,7 +527,7 @@ def test_walk_before_arming_is_not_feasible_and_says_how_it_arms(
     fw_edge.state.projected_gravity[:] = [0.0, 0.6, -0.8]
     monkeypatch.setattr(_drive, "ARM_TIMEOUT_S", 0.3)
     typed = answer("y\n")
-    assert main(["walk", "--vx", "0.1", "--duration", "1"]) == 3
+    assert main(["balance"]) == 3
     err = capsys.readouterr().err
     assert err.startswith("Not feasible: lab is in STAND, not armed. The robot is tilted 37 deg")
     assert err.rstrip().endswith("Run the command again once `menlo status` shows it armed.")
@@ -487,7 +556,7 @@ def test_walk_checks_again_after_the_answer_and_sends_nothing_if_it_changed(
     fw_edge, at_edge, answer, capsys
 ):
     at_edge(fw_edge)
-    _armed_stand(fw_edge)
+    _balancing(fw_edge)
     fw_edge.received.clear()
 
     def the_robot_falls_while_you_read() -> None:
@@ -497,7 +566,7 @@ def test_walk_checks_again_after_the_answer_and_sends_nothing_if_it_changed(
     answer("y\n", then=the_robot_falls_while_you_read)
     assert main(["walk", "--vx", "0.2", "--duration", "1"]) == 3
     captured = capsys.readouterr()
-    assert "STAND, armed" in captured.out and "Proceed?" in captured.out
+    assert "MOVE" in captured.out and "Proceed?" in captured.out
     assert "Not feasible: lab is in DAMP, faulted" in captured.err
     assert fw_edge.received == []
 
@@ -506,7 +575,7 @@ def test_stand_that_never_reaches_stand_is_not_ready(edge, at_edge, monkeypatch,
     at_edge(edge)  # this edge never changes robot mode
     monkeypatch.setattr(_drive, "STAND_TIMEOUT_S", 0.3)
     assert main(["stand", "--yes"]) == 3
-    assert "STAND was not reported" in capsys.readouterr().err
+    assert "sent STAND, but the robot was not armed" in capsys.readouterr().err
 
 
 def test_walk_needs_a_bounded_duration(capsys):
@@ -522,7 +591,7 @@ def test_ctrl_c_during_a_walk_stops_the_robot(fw_edge, at_edge, monkeypatch):
     at_edge(fw_edge)
     fw_edge.set_mode("move")
 
-    def interrupted(self, done, duration):
+    def interrupted(self, done, duration, sent):
         time.sleep(0.2)
         raise KeyboardInterrupt
 
@@ -534,51 +603,63 @@ def test_ctrl_c_during_a_walk_stops_the_robot(fw_edge, at_edge, monkeypatch):
 
 def test_a_fault_during_a_walk_is_reported_and_is_not_done(fw_edge, at_edge, capsys):
     at_edge(fw_edge)
-    _armed_stand(fw_edge)
-    fw_edge.move_entered_at = None
-
-    def fall_once_walking() -> None:
-        deadline = time.monotonic() + 5.0
-        while fw_edge.move_entered_at is None and time.monotonic() < deadline:
-            time.sleep(0.01)
-        time.sleep(0.3)
-        fw_edge.fault()
-
-    fall = threading.Thread(target=fall_once_walking, daemon=True)
-    fall.start()
+    _balancing(fw_edge)
+    fw_edge.received.clear()
+    started = time.monotonic()
+    fall = _once_walking(fw_edge, fw_edge.fault)
     code = main(["walk", "--vx", "0.2", "--duration", "3", "--yes"])
     fall.join()
     assert code == 3
-    assert fw_edge.move_entered_at is not None
-    assert time.monotonic() - fw_edge.move_entered_at < 2.5  # the fault ended it, not 3 s
+    assert time.monotonic() - started < 2.5  # the fault ended it, not 3 s
     captured = capsys.readouterr()
-    assert "Stopped." not in captured.out
+    assert "Walk done." not in captured.out
     assert "menlo walk: the walk ended after" in captured.err
     assert "the firmware latched DAMP (FALL_DETECTED)" in captured.err
     assert "until the firmware restarts" in captured.err
 
 
-def test_stop_repeats_the_zero_only_while_the_robot_is_still_in_move(edge, at_edge, monkeypatch):
+def test_a_fault_during_a_walk_is_a_RobotFaultedError_that_carries_what_was_sent(fw_edge, at_edge):
+    """A NotReadyError means nothing was sent; a fault after the velocity went out is the
+    subclass, with the state that showed it and the command that was in force."""
+    at_edge(fw_edge)
+    _balancing(fw_edge)
+    fall = _once_walking(fw_edge, fw_edge.fault)
+    args = build_parser().parse_args(["walk", "--vx", "0.2", "--duration", "3", "--yes"])
+    with pytest.raises(RobotFaultedError) as exc:
+        _drive.walk(args)
+    fall.join()
+    assert exc.value.state.faulted and exc.value.action == "move"
+    assert exc.value.sent is not None and exc.value.sent.name == "set_velocity"
+
+
+def test_balance_repeats_the_zero_only_while_the_robot_is_still_in_move(edge, at_edge, monkeypatch):
     at_edge(edge)
     edge.set_mode("move")
-    real = Robot.stop
+    real = Robot.balance
 
-    def stop_then_another_controller_stands(self):
-        sent = real(self)
+    def balance_then_another_controller_stands(self, **kw):
+        sent = real(self, **kw)
         edge.set_mode("stand")  # e.g. the Cockpit takes over and stands the robot
         return sent
 
-    monkeypatch.setattr(Robot, "stop", stop_then_another_controller_stands)
-    assert main(["stop"]) == 0
+    monkeypatch.setattr(Robot, "balance", balance_then_another_controller_stands)
+    assert main(["balance"]) == 0
     time.sleep(0.2)
     assert edge.velocities() == [(0.0, 0.0, 0.0)]
 
 
-def test_stop_never_asks_and_sends_zero_only_in_move(edge, at_edge, capsys):
-    at_edge(edge)  # no terminal and no --yes: stop still runs
-    assert main(["stop"]) == 0
-    assert "nothing to stop" in capsys.readouterr().out and edge.received == []
+def test_balance_in_move_never_asks_and_sends_zero_at_once(edge, at_edge, capsys):
+    at_edge(edge)  # no terminal and no --yes: balance in MOVE still runs
     edge.set_mode("move")
-    assert main(["stop"]) == 0
+    assert main(["balance"]) == 0
+    assert "balancing in place" in capsys.readouterr().out
     assert edge.wait_for(lambda rx: len(rx) >= 2)
     assert set(edge.velocities()) == {(0.0, 0.0, 0.0)}
+
+
+def test_balance_from_stand_with_no_terminal_and_no_yes_sends_nothing(fw_edge, at_edge, capsys):
+    at_edge(fw_edge)
+    _armed_stand(fw_edge)
+    fw_edge.received.clear()
+    assert main(["balance"]) == 2
+    assert "pass --yes" in capsys.readouterr().err and fw_edge.received == []

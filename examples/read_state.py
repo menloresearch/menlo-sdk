@@ -33,12 +33,12 @@ with Robot().connect() as robot:
     robot.on_alert = on_alert
 
     # region main
-    # robot.state is the latest sample the robot sent. It is a snapshot: read it again
+    # robot.get_state() is the latest sample the robot sent. It is a snapshot: read it again
     # for newer values. A field the robot does not report is None, never a guess.
-    s = robot.state
+    s = robot.get_state()
 
-    # Robot mode: DAMP (limp), STAND (stiff standing pose, no balance) or MOVE (the walking
-    # policy balances the robot, at zero or any velocity).
+    # Robot mode: DAMP (no actuator holds a position), STAND (a held standing pose, no
+    # balance) or MOVE (the walking policy balances the robot, at zero or any velocity).
     print(f"robot mode   {s.mode.name}")
 
     # Armed: the firmware accepts MOVE only after STAND has been held upright for 0.5 s.
@@ -92,7 +92,7 @@ with Robot().connect() as robot:
     # The same fields as a stream, a few times a second.
     for _ in range(STREAM_LINES):
         time.sleep(STREAM_PERIOD_S)
-        s = robot.state
+        s = robot.get_state()
         now = time.monotonic()
         rate = sum(1 for t in tuple(arrivals) if now - t <= 1.0)
         battery = f"{s.battery.soc_percent:.0f} %" if s.battery else "n/a"
