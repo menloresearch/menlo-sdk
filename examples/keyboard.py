@@ -107,7 +107,7 @@ def balance(robot: Robot) -> str:
     """In MOVE, zero velocity; from STAND, into MOVE. The robot balances in place."""
     try:
         robot.balance()  # from STAND, returns once the robot reports MOVE
-    except NotReadyError as exc:  # nothing was sent: DAMP, a fault, a low battery
+    except NotReadyError as exc:  # refused (DAMP, a fault, a low battery) or faulted after sending
         hint = ", press t to stand" if robot.get_state().mode is Mode.DAMP else ""
         return f"not ready to balance: {exc.problems[0].code}{hint}"
     except WaitTimeoutError:
@@ -137,7 +137,7 @@ def stand(robot: Robot) -> str:
     """STAND, when the robot is ready for it. Returns once the robot is armed."""
     try:
         robot.stand()
-    except NotReadyError as exc:  # nothing was sent: from MOVE, a fault, a low battery
+    except NotReadyError as exc:  # refused (MOVE, a fault, a low battery) or faulted after sending
         return f"not ready to stand: {exc.problems[0].code}"
     except WaitTimeoutError:
         return "stood, but not armed in time"

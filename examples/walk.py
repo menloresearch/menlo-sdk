@@ -21,7 +21,7 @@ with Robot().connect() as robot:
         # Checks the robot first: it must be in MOVE. Held and re-sent at 10 Hz for
         # DURATION_S, then zero velocity; returns after that.
         sent = robot.set_velocity(vx=VX, vy=VY, vyaw=VYAW, duration=DURATION_S)
-    except NotReadyError as exc:  # nothing was sent
+    except NotReadyError as exc:  # nothing was sent, or (RobotFaultedError) a fault ended it
         print(exc)
         sys.exit(1)
     if sent.clamped:

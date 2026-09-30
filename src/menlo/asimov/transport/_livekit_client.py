@@ -248,7 +248,6 @@ class _LiveKitClient:
             # packet Robot.close() just queued and the room.disconnect() with it. Leave
             # asynchronously instead, and let that task stop the loop once it is done.
             self._loop, self._thread = None, None
-            self._source = None
             self._send_error = None
             self._identity = None
             self._set_tracks(set())  # the same "gone" the other path reports
@@ -262,7 +261,7 @@ class _LiveKitClient:
             return
         if loop is not None:
             with contextlib.suppress(Exception):
-                self._await(self._leave(), 3 * LEAVE_DRAIN_S + 1.0)
+                self._await(self._leave(), 4 * LEAVE_DRAIN_S + 1.0)
         self._stop_loop()
         self._room = None
         self._source = None
@@ -383,6 +382,13 @@ class _LiveKitClient:
         pending = [asyncio.wrap_future(f) for f in tuple(self._publishes)]
         if pending:
             await asyncio.wait(pending, timeout=LEAVE_DRAIN_S)
+        # Audio handed to the speaker track sits in LiveKit's queue (up to a second) after
+        # capture_frame() returns: it plays out before the room is left, for at most
+        # LEAVE_DRAIN_S.
+        source, self._source = self._source, None
+        if source is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(source.wait_for_playout(), LEAVE_DRAIN_S)
         for task in tuple(self._tasks):
             task.cancel()
         self._data_track_readers.clear()

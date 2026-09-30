@@ -161,7 +161,7 @@ with Robot().connect() as robot:
         robot.stand()  # DAMP -> STAND; returns once armed. Refused in MOVE
         robot.balance()  # STAND -> MOVE; returns once MOVE is reported
         robot.set_velocity(vx=0.3, duration=3.0)  # 0.3 m/s for 3 s, then zero
-    except NotReadyError as exc:  # nothing was sent; the message says why and what fixes it
+    except NotReadyError as exc:  # refused with nothing sent, or a fault ended the walk
         raise SystemExit(str(exc)) from None
     robot.balance()  # MOVE at zero velocity: the robot balances in place
     # Do not call robot.stand() here: it would stiffen a balancing robot and tip it over.

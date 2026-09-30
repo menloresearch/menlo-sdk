@@ -156,6 +156,12 @@ class _Stream[T]:
         """The Robot switched transports: attach again on first use, forget the old items."""
         with self._cv:
             self._attached = False
+        self._reset()
+
+    def _reset(self) -> None:
+        """A new session begins: forget the items the previous one delivered. The
+        subscription to the transport stays, so a reopen does not attach twice."""
+        with self._cv:
             self._latest = None
 
     def _require(self) -> None:
@@ -310,8 +316,8 @@ class Microphone(_Stream[AudioChunk]):
     def _attach(self, tx: Transport) -> None:
         tx.subscribe_audio(self._sink(tx))
 
-    def _rebind(self) -> None:
-        super()._rebind()
+    def _reset(self) -> None:
+        super()._reset()
         with self._cv:  # the previous session's audio must not replay into the next one
             self._queue.clear()
             self.dropped = 0

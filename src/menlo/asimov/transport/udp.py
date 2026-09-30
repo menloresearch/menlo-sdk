@@ -115,9 +115,13 @@ class UdpTransport:
             ) from exc
         sock.settimeout(0.2)
         self._sock = sock
-        self._stop.clear()
+        # One stop flag per open, handed to its reader with its socket: close() may run on
+        # the reader thread (a state callback that reconnects), and an open() that cleared a
+        # shared flag would revive that reader on a closed socket beside the new one.
+        stop = threading.Event()
+        self._stop = stop
         self._reader = threading.Thread(
-            target=self._read_states, name="menlo-sdk-udp-state", daemon=True
+            target=self._read_states, args=(sock, stop), name="menlo-sdk-udp-state", daemon=True
         )
         self._reader.start()
 
@@ -144,16 +148,15 @@ class UdpTransport:
         self._on_controller.append(callback)
 
     # ── in ───────────────────────────────────────────────────────────────────
-    def _read_states(self) -> None:
+    def _read_states(self, sock: socket.socket, stop: threading.Event) -> None:
         _, _, st = _pb()
-        sock = self._sock
-        while sock is not None and not self._stop.is_set():
+        while not stop.is_set():
             try:
                 data, sender = sock.recvfrom(65535)
             except TimeoutError:
                 continue
             except OSError:
-                if self._stop.is_set():
+                if stop.is_set():
                     return
                 continue
             if self._state_source_ip is not None and sender[0] != self._state_source_ip:

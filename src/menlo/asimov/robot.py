@@ -10,7 +10,7 @@
             robot.balance()                        # STAND -> MOVE: balancing in place
             robot.set_velocity(vx=0.25, duration=4.0)  # walk, then zero velocity
             robot.balance()                        # stay in MOVE, balancing in place
-        except NotReadyError as exc:               # nothing was sent
+        except NotReadyError as exc:               # nothing sent, or a fault ended it
             print(exc)                             # every problem, and what fixes it
         # The robot stays in MOVE at zero velocity, where the walking policy keeps
         # balancing it: that is how a free-standing biped stands still. Do not ask for
@@ -255,6 +255,7 @@ class Robot:
         self._subscribed = False
         self._refusals: collections.deque[Refused] = collections.deque(maxlen=256)
         self._closed = True
+        self._opening = False  # a connect() or open() is running (see _reserve_open)
         # open() sets these before the transport starts delivering: whether samples that
         # arrive before open() returns may complete the handshake themselves (a session
         # that did not wait for the robot), and whether this Robot is taking samples at all.
@@ -369,23 +370,22 @@ class Robot:
                 "connect(persist=True) needs a ManagerConfig in the livekit slot: the store "
                 "keeps a manager URL and a credential, and this config has no manager"
             )
-        with self._lock:
-            if not self._closed:
-                raise RuntimeError("this Robot is already connected; close() it first")
-        tx = config.transport_for(
-            mode, media_timeout=media_timeout, connect_timeout=connect_timeout
-        )
-        with self._lock:  # a second connect() racing this one must not swap the transport twice
-            if not self._closed:
-                raise RuntimeError("this Robot is already connected; close() it first")
-            self._transport = tx
-            self._subscribed = False  # the new transport has not heard our callbacks
-            self._derived_caps = frozenset()  # the previous robot's battery is not this one's
-        self._camera._rebind()
-        self._microphone._rebind()
-        self.open(
-            timeout=timeout, allow_version_skew=allow_version_skew, require_state=require_state
-        )
+        self._reserve_open("connected")
+        try:
+            tx = config.transport_for(
+                mode, media_timeout=media_timeout, connect_timeout=connect_timeout
+            )
+            with self._lock:
+                self._transport = tx
+                self._subscribed = False  # the new transport has not heard our callbacks
+                self._derived_caps = frozenset()  # the previous robot's battery is not this one's
+            self._camera._rebind()
+            self._microphone._rebind()
+            self._open(
+                timeout=timeout, allow_version_skew=allow_version_skew, require_state=require_state
+            )
+        finally:
+            self._opening = False
         if persist:
             # The session is open by now. A store that cannot be written (read-only or full
             # $MENLO_HOME, a name that belongs to another manager) must not leave it open
@@ -407,8 +407,28 @@ class Robot:
     ) -> None:
         """Attach the transport this Robot was built over. See :meth:`connect` for
         ``timeout``, ``allow_version_skew`` and ``require_state``."""
-        if not self._closed:
-            raise RuntimeError("this Robot is already open")
+        self._reserve_open("open")
+        try:
+            self._open(
+                timeout=timeout, allow_version_skew=allow_version_skew, require_state=require_state
+            )
+        finally:
+            self._opening = False
+
+    def _reserve_open(self, state: str) -> None:
+        """Claim the one session open that may run at a time: a second connect() or open()
+        while one is running, or on an open session, is a ``RuntimeError``, so two openers
+        never share (and leak) a transport and a keepalive."""
+        with self._lock:
+            if self._opening:
+                raise RuntimeError(
+                    "another connect() or open() on this Robot is still running; wait for it"
+                )
+            if not self._closed:
+                raise RuntimeError(f"this Robot is already {state}; close() it first")
+            self._opening = True
+
+    def _open(self, *, timeout: float, allow_version_skew: bool, require_state: bool) -> None:
         if self._transport is None:
             raise NotConnectedError(
                 "this Robot is bound to a ConnectionConfig: call connect(mode) instead of open()"
@@ -433,6 +453,8 @@ class Robot:
             self._last_mode = None
             self._pending.clear()
             self._refusals.clear()
+        self._camera._reset()  # nor its frames and audio, on the same transport or a new one
+        self._microphone._reset()
         # Armed BEFORE the transport opens: a LiveKit open() waits for media for seconds,
         # and state that arrives meanwhile must be handshaken (or dropped), not stored raw.
         self._late = not require_state
@@ -774,7 +796,9 @@ class Robot:
         until ``duration`` if given: a
         control loop sends a short ``duration`` on every tick, so the robot stops when the
         loop does. The next verb (or ``close()``, so the end of a ``with`` block) cuts a
-        hold short. A zero velocity with ``wait=True`` simply blocks for ``duration``.
+        hold short. A zero velocity with ``wait=True`` blocks for ``duration``, and ends
+        early as a hold's wait does: another verb returns it, a fault-DAMP raises
+        :class:`RobotFaultedError`, a lost link or ``close()`` raises their errors.
 
         ``hold=False`` is for a loop that clocks its own velocity commands: it sends exactly
         one velocity packet now and nothing in the background, and ends any hold that was
@@ -832,9 +856,12 @@ class Robot:
             self._end_hold()
             self._latched = None if v.is_zero or not hold else v
             self._streamed = not hold and not v.is_zero
-            if duration is not None and not v.is_zero:
-                self._latch_deadline = time.monotonic() + duration
+            if duration is not None:
+                # A zero has nothing to re-send, but its event still tells a waiting caller
+                # that another verb, close() or a lost link ended the time.
                 self._hold_done = threading.Event()
+                if not v.is_zero:
+                    self._latch_deadline = time.monotonic() + duration
             self._last_mode = None  # a new drive supersedes whatever posture change preceded it
             return self._send(name, v, gen, clamped=(v != asked)), self._hold_done
 
@@ -848,14 +875,46 @@ class Robot:
             done.set()
 
     def _await_hold(self, done: threading.Event | None, duration: float, sent: Sent) -> None:
-        if done is None:  # a zero velocity: nothing is held, the robot stands for the time
-            time.sleep(duration)
-            return
-        # The keepalive ticks at KEEPALIVE_HZ, so the zero leaves within a tick of the
-        # deadline; the rest of the budget is slack for a loaded machine. The event is set
-        # on every path that ends a hold, so running out of it means the keepalive is gone.
+        assert done is not None
         started = time.monotonic()
-        done.wait(duration + 2.0 / KEEPALIVE_HZ + 1.0)
+        if isinstance(sent.command, Velocity) and sent.command.is_zero:
+            # Nothing is held: the robot balances for `duration`, and the wait watches the
+            # session and the robot's report as a hold's wait does.
+            end = started + duration
+            while not done.wait(max(0.0, min(READY_POLL_S, end - time.monotonic()))):
+                if self._closed or self._link_lost is not None:
+                    break
+                s = self._state
+                if s is not None and s.faulted and s.mode in _DOWN:
+                    raise self._walk_faulted(s, started, duration, sent)
+                if time.monotonic() >= end:
+                    return
+        else:
+            # The keepalive ticks at KEEPALIVE_HZ, so the zero leaves within a tick of the
+            # deadline; the rest of the budget is slack for a loaded machine. The event is
+            # set on every path that ends a hold, so running out of it means the keepalive
+            # is stalled or gone: the hold is ended and its zero sent from here.
+            budget = duration + 2.0 / KEEPALIVE_HZ + 1.0
+            if not done.wait(budget):
+                with self._lock:
+                    stalled = self._hold_done is done
+                    if stalled:
+                        self._generation += 1
+                        gen = self._generation
+                        self._end_hold()
+                # Not stalled: the keepalive already sent the expiry zero and is releasing
+                # the wait, so the hold ran its course.
+                if stalled:
+                    # Past the recording hook: the stalled keepalive may be holding the
+                    # recording's lock, and this zero must not wait for it.
+                    self._send("set_velocity", Velocity(), gen, hook=False)
+                    raise WaitTimeoutError(
+                        f"the {duration:.1f} s hold had not ended after {budget:.1f} s: the "
+                        "SDK's keepalive thread stalled (a recording write that blocks, for "
+                        "example). The hold is ended here and a zero velocity was sent",
+                        last=self._state,
+                        sent=sent,
+                    )
         with self._lock:
             lost, closed, faulted = self._link_lost, self._closed, self._faulted_hold
             if faulted is not None and faulted[0] is done:
@@ -863,21 +922,25 @@ class Robot:
         if lost is not None:
             raise lost
         if faulted is not None and faulted[0] is done:
-            s = faulted[1]
-            names = ", ".join(fault_names(s)) or f"robot mode {s.mode.name}"
-            check = self.preflight("move")
-            raise RobotFaultedError(
-                f"the walk ended after {time.monotonic() - started:.1f} s of {duration:.1f} s: "
-                f"the firmware latched DAMP ({names}); it stays latched until the firmware "
-                "restarts, and nothing the SDK sends clears it",
-                state=s,
-                action="move",
-                preflight=check,
-                problems=check.blocking,
-                sent=sent,
-            )
+            raise self._walk_faulted(faulted[1], started, duration, sent)
         if closed:
             raise NotConnectedError("this Robot was closed before the hold ended")
+
+    def _walk_faulted(
+        self, s: State, started: float, duration: float, sent: Sent
+    ) -> RobotFaultedError:
+        names = ", ".join(fault_names(s)) or f"robot mode {s.mode.name}"
+        check = self.preflight("move")
+        return RobotFaultedError(
+            f"the walk ended after {time.monotonic() - started:.1f} s of {duration:.1f} s: "
+            f"the firmware latched DAMP ({names}); it stays latched until the firmware "
+            "restarts, and nothing the SDK sends clears it",
+            state=s,
+            action="move",
+            preflight=check,
+            problems=check.blocking,
+            sent=sent,
+        )
 
     def balance(self, *, timeout: float = BALANCE_TIMEOUT_S, wait: bool = True) -> Sent:
         """Balance in place: the robot is in MOVE at zero velocity, and the walking policy
@@ -895,14 +958,26 @@ class Robot:
 
         In DAMP (or FAULT_DAMP, or an unknown robot mode): raises :class:`NotReadyError`
         (``stand()`` it first) or :class:`RobotFaultedError` for a latched fault, and sends
-        nothing."""
+        nothing.
+
+        The robot mode decides, not what this session sent before: outside MOVE a velocity
+        hold still in force ends at once (nothing more is re-sent) and the check runs."""
         _nonnegative_finite("timeout", timeout)
         deadline = time.monotonic() + timeout
         self._usable()
-        s = self._state
-        if self._latched is not None or self._streamed or (s is not None and s.mode is Mode.MOVE):
-            return self._drive("balance", Velocity(), None)[0]
+        with self._lock:
+            s = self._state
+            if s is not None and s.mode is Mode.MOVE:
+                return self._drive("balance", Velocity(), None)[0]
         _no_wait_in_callback("balance", wait)
+        with self._lock:
+            # Not in MOVE: a velocity sent earlier does not make this call a MOVE-at-zero.
+            # Its hold ends here, so the keepalive does not re-send it while the check runs;
+            # close() still owes the robot a zero for it if the check refuses.
+            self._generation += 1
+            owed = self._latched is not None or self._streamed
+            self._end_hold()
+            self._streamed = owed
         check = self._ready("move", timeout)
         if check.state is not None and check.state.mode is Mode.MOVE:
             return self._drive("balance", Velocity(), None)[0]
@@ -958,7 +1033,7 @@ class Robot:
         if wait:
             try:
                 self._wait(
-                    lambda s: s.mode in (Mode.STAND, Mode.MOVE) and self.armed is not False,
+                    lambda s: s.mode is Mode.STAND and self.armed is not False,
                     timeout=max(0.0, deadline - time.monotonic()),
                     action="stand",
                     sent=sent,
@@ -1125,6 +1200,9 @@ class Robot:
             a = 10 * t**3 - 15 * t**4 + 6 * t**5  # minimum jerk, 0→1
             return tuple(s0 + (s1 - s0) * a for s0, s1 in zip(start, target, strict=True))
 
+        # Built before anything changes hands: a gain it rejects (ValueError) leaves the
+        # velocity or motion in force untouched, and close() still zeroes a held velocity.
+        opening = Trajectory(blend(1), kp_t, kd_t)
         with self._lock:
             # Bump, send the first setpoint and record the generation in ONE lock hold: a
             # verb landing between them would otherwise leave this motion running under the
@@ -1132,7 +1210,7 @@ class Robot:
             self._generation += 1
             gen = self._generation
             self._end_hold()
-            first = self._send("trajectory", Trajectory(blend(1), kp_t, kd_t), gen)
+            first = self._send("trajectory", opening, gen)
             self._last_mode = first
 
         def run() -> None:
@@ -1291,7 +1369,11 @@ class Robot:
             self._last_mode = sent
             return sent
 
-    def _send(self, name: str, command: Command, gen: int, *, clamped: bool = False) -> Sent:
+    def _send(
+        self, name: str, command: Command, gen: int, *, clamped: bool = False, hook: bool = True
+    ) -> Sent:
+        """Send ``command`` unless ``gen`` was superseded. ``hook=False`` skips the recording
+        hook, for a send that must not wait on it."""
         lost: LinkLostError | None = None
         with self._lock:
             # Checked under the lock so a close() racing on another thread cannot slip a
@@ -1327,13 +1409,13 @@ class Robot:
                 self._pending[seq] = sent
                 while len(self._pending) > 512:
                     self._pending.popitem(last=False)
-                hook = self._on_sent
+                on_sent = self._on_sent if hook else None
         if lost is not None:
             # Outside the lock: on_link_lost may block on things that need a verb.
             self._mark_link_lost(lost)
             raise lost
-        if hook is not None:
-            self._call(hook, sent)
+        if on_sent is not None:
+            self._call(on_sent, sent)
         return sent
 
     def _keepalive_loop(self, stop: threading.Event) -> None:
@@ -1484,7 +1566,8 @@ class Robot:
         # UDP reorders and duplicates. An OLDER sample must never overwrite a newer one,
         # or the caller reads the robot going backwards in time. Half-range compare: a
         # counter that wrapped to 0 is NEWER (difference > 2**31); an unstamped stream (all
-        # zeros) differs by 0.
+        # zeros) differs by 0 and is accepted. A duplicate (same sequence and firmware
+        # clock) is dropped: it would refresh the sample's age with nothing observed.
         # But a counter that RESTARTED (the firmware rebooted while Asimov Edge and this
         # session stayed up) is behind by thousands, and dropping until it climbed past
         # the old value would freeze robot.get_state() for minutes. Behind by more than the reorder
@@ -1493,7 +1576,7 @@ class Robot:
         restarted = False
         if prev is not None:
             verdict = self._classify_sample(prev, state)
-            if verdict == "stale":
+            if verdict in ("stale", "duplicate"):
                 return
             restarted = verdict == "restart"
         if state.joints and not state.joints[0].name:
@@ -1560,11 +1643,21 @@ class Robot:
             )
 
     @staticmethod
-    def _classify_sample(prev: State, state: State) -> Literal["newer", "stale", "restart"]:
-        """Where ``state`` stands relative to ``prev``: ``"newer"`` (or a duplicate, or an
-        unstamped stream: accept), ``"stale"`` (a reordered datagram from BEHIND: drop) or
-        ``"restart"`` (the first sample of a restarted stream: accept, and know it)."""
+    def _classify_sample(
+        prev: State, state: State
+    ) -> Literal["newer", "duplicate", "stale", "restart"]:
+        """Where ``state`` stands relative to ``prev``: ``"newer"`` (or an unstamped stream:
+        accept), ``"duplicate"`` (the same stamped sample again: drop, it observes nothing
+        new and must not refresh freshness or arming), ``"stale"`` (a reordered datagram
+        from BEHIND: drop) or ``"restart"`` (the first sample of a restarted stream: accept,
+        and know it)."""
         back = (prev.sequence - state.sequence) % 2**32
+        if (
+            back == 0
+            and state.fw_timestamp_us == prev.fw_timestamp_us
+            and (state.sequence or state.fw_timestamp_us)
+        ):
+            return "duplicate"
         if not 0 < back < 2**31:
             return "newer"
         if back > STATE_REORDER_WINDOW:
@@ -1617,13 +1710,16 @@ class Robot:
 
     @staticmethod
     def _call(cb: Callable[..., None], *args: object) -> None:
+        # Restored, not cleared: a callback nests another (a verb in on_alert reaches the
+        # recording hook), and the outer one is still on the thread that delivers state.
+        outer = _in_callback()
         _CALLBACK.active = True
         try:
             cb(*args)
         except Exception:
             log.exception("%s raised", getattr(cb, "__name__", "callback"))
         finally:
-            _CALLBACK.active = False
+            _CALLBACK.active = outer
 
     def _on_outcome(self, outcome: Applied | Refused) -> None:
         with self._lock:

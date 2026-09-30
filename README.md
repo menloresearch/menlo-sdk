@@ -52,9 +52,10 @@ with Robot(config).connect() as robot:
     robot.balance()
 ```
 
-Walk: in MOVE the robot follows the velocity you send, here 0.3 m/s forward for 3 s.
-`set_velocity()` returns once the 3 s are over and zero velocity is sent. `balance()` keeps
-the robot in MOVE at zero velocity, balancing in place:
+Walk: in MOVE the robot follows the velocity you send, here 0.3 m/s forward for 3 s. A walk
+needs 2 m of clear floor ahead, and Asimov Manager open at the E-Stop. `set_velocity()`
+returns once the 3 s are over and zero velocity is sent. `balance()` keeps the robot in MOVE
+at zero velocity, balancing in place:
 
 ```python
 with Robot(config).connect() as robot:

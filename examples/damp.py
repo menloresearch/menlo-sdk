@@ -8,7 +8,7 @@ Run: python examples/damp.py
 
 import sys
 
-from menlo.asimov import Robot
+from menlo.asimov import Robot, WaitTimeoutError
 
 YES = False  # True: damp without asking
 
@@ -21,6 +21,10 @@ with Robot().connect() as robot:
         if input(question).strip().lower() not in ("y", "yes"):
             print("nothing sent")
             sys.exit(0)
-    robot.damp()  # returns once the robot reports DAMP
+    try:
+        robot.damp()  # returns once the robot reports DAMP
+    except WaitTimeoutError as exc:  # sent, but DAMP was not reported: the message says what next
+        print(exc)
+        sys.exit(1)
     print(f"robot mode {robot.get_state().mode.name}")
     # endregion

@@ -22,9 +22,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a joint passes an angle, mid-move), `stream_velocity.py` (a 50 Hz velocity loop),
   `record_audio.py` (the microphone to a WAV file) and `play_audio.py` (a WAV file on the
   speaker).
-- `Mode.FAULT_DAMP`: robot mode 5, the firmware's latched emergency damping (asimov.io
-  protocol v1.3.0). `state.faulted` is true in it, `preflight()` reports `faulted`, a held
-  velocity is released, waits raise `RobotFaultedError`, and `robot.armed` is `False`.
+- `Mode.FAULT_DAMP`: robot mode 5, the firmware's latched emergency damping. `state.faulted`
+  is true in it, `preflight()` reports `faulted`, a held velocity is released, waits raise
+  `RobotFaultedError`, and `robot.armed` is `False`.
 - `Preflight.explain()`: the blocking problems in one sentence each, with what fixes them.
 - `NotReadyError.action`, `.problems` and `.has(code)`; `RobotFaultedError.sent`;
   `WaitTimeoutError.sent`.
@@ -78,6 +78,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   documentation.
 
 ### Fixed
+- `balance()` that refuses outside MOVE after a nonzero velocity leaves `close()` the zero it
+  owes for that velocity; the refusal itself still sends nothing.
 - `damp()` called from a state callback (`on_state`, `on_alert`, `on_mode_change`) sends DAMP
   and returns at once. It used to wait on the thread that delivers state, which held up
   every sample for up to 5 s. The other verbs that wait, and `wait_until()`, raise
@@ -90,6 +92,52 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   when one was: with nothing held, nothing is sent.
 - `menlo stand` on a robot already in STAND waits for the new session to see it armed
   before it says "armed" or "not armed"; an armed robot was reported "not armed".
+- `balance()` outside MOVE runs its check whatever this session sent before. After a
+  `set_velocity(wait=False)` or `hold=False`, a robot another controller put in DAMP or STAND
+  got a MOVE-at-zero with no check; now the hold ends, nothing more is re-sent, and the check
+  raises `NotReadyError` when the robot cannot enter MOVE.
+- `set_joints()` with gains it rejects (`ValueError`: a lone `kp` or `kd`, or a wrong
+  length) leaves the velocity or motion in force untouched. It used to end a held velocity
+  first, so `close()` no longer sent its zero.
+- A state sample repeated with the same sequence and firmware clock is dropped. Each copy
+  used to count as a fresh observation: it refreshed `age_s`, the checks and the waits, and
+  counted toward arming, with nothing new observed. A stream with no stamps at all is still
+  followed sample by sample.
+- `set_velocity(duration=..., wait=True)` at zero velocity ends early as a walk's wait
+  does: another verb returns it, a fault-DAMP raises `RobotFaultedError`, a lost link
+  `LinkLostError`, `close()` `NotConnectedError`. It used to sleep out the duration and
+  return a `Sent` whatever happened.
+- `set_velocity(duration=..., wait=True)` whose keepalive thread stalls (a recording write
+  that blocks) raises `WaitTimeoutError` once its time budget is spent, after ending the
+  hold and sending the zero itself, past the recording hook so a blocked write does not
+  hold it up. It used to return as if the hold had ended, with the
+  velocity still held and no zero sent.
+- A `connect()` or `open()` while another is still opening the same `Robot` raises
+  `RuntimeError`. Two racing connects both used to succeed, and `close()` left the first
+  transport open and its keepalive thread running.
+- A `UdpTransport` reopened from its own state callback (`close()` then `open()` in
+  `on_state`) ends the old reader thread. The old reader used to keep running on the
+  closed socket, retrying failed reads in a busy loop beside the new one.
+- `stand(wait=True)` returns only once the robot reports STAND and is armed, as documented.
+  A MOVE reported after the STAND went out (another controller's) used to count as
+  standing; now the wait runs to `WaitTimeoutError`, which names the robot mode it saw.
+- `close()` then `open()` on the same transport starts with no camera frame and no queued
+  microphone audio. The previous session's last frame and unread audio used to come back
+  as the new session's, until new media arrived.
+- Leaving a LiveKit room waits, up to 2 s, for audio already handed to the speaker to play
+  out. The last second of `speaker.play_pcm()` audio (LiveKit's queue) used to be cut off
+  when a script closed the robot right after it, as `play_audio.py` and
+  `camera_and_audio.py` do.
+- A verb called from a state callback while a recording runs leaves that callback marked
+  as one: a wait later in the same callback raises `RuntimeError`. The recording hook's own
+  callback used to clear the mark, so the wait blocked the thread that delivers state.
+- `play_audio.py` plays a one-second 440 Hz tone when there is no `hello.wav` in the
+  directory it runs in, instead of failing with `FileNotFoundError`.
+- `move_joints.py` and `wait_until.py` refuse, send nothing and exit 1 unless the robot
+  reports STAND. They used to run in MOVE too, where the robot usually stands free and a
+  trajectory turns the walking policy off, so it falls.
+- `damp.py` prints the `WaitTimeoutError` message, which names the E-Stop in Asimov Manager,
+  and exits 1 when DAMP is not reported in time. It used to end in a traceback.
 
 ### Removed
 - `Robot.stop()`: `balance()` replaces it. `menlo stop`: `menlo balance` replaces it.

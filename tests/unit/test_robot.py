@@ -335,7 +335,7 @@ def test_with_block_closes_and_the_state_names_joints(edge):
 # ── concurrency, liveness, and trust in the state stream ─────────────────────
 
 
-def test_damp_is_never_dropped_by_a_racing_set_velocity(edge, robot, wait=False):
+def test_damp_is_never_dropped_by_a_racing_set_velocity(edge, robot):
     """A verb the caller issued must go out even while another thread drives. The
     generation fence is for the keepalive's re-sends only."""
     import sys

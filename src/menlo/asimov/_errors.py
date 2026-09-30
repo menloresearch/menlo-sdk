@@ -93,7 +93,9 @@ class LinkLostError(MenloError):
 
 
 class NotReadyError(MenloError):
-    """The robot cannot do the command now, so nothing was sent.
+    """The robot cannot do the command now, so nothing was sent. The one exception is its
+    subclass :class:`RobotFaultedError` raised by a wait: a fault that ended the command
+    after it went out, with ``sent`` set.
 
     Raised by ``stand()``, ``balance()``, ``set_velocity()``, ``trajectory()`` and ``set_joints()``
     when their readiness check fails: at once for a problem that does not clear on its own, or after

@@ -520,7 +520,7 @@ MenloError
 ├── LinkLostError
 ├── UnsupportedError
 ├── NotReadyError            the check before sending failed; nothing was sent
-│   └── RobotFaultedError    the firmware latched DAMP
+│   └── RobotFaultedError    the firmware latched DAMP (before sending, or during a wait: .sent)
 ├── WaitTimeoutError         sent, but the robot did not get there in time (also TimeoutError)
 │   └── StateStaleError      the state stream went quiet during a wait
 ├── CommandRefusedError

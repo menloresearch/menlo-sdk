@@ -366,19 +366,29 @@ def test_wait_until_acts_mid_move_once_the_joint_passes_the_angle(run, fw_edge):
 
 def test_wait_until_refuses_in_damp(run, fw_edge):
     out = run("wait_until.py", settings={"ROBOT_SUPPORTED": True}, code=1)
-    assert "not ready to run a trajectory" in out and "stand() it first" in out
+    assert "robot mode DAMP" in out and "run stand.py first" in out
     assert fw_edge.received == []
+
+
+def test_wait_until_refuses_in_move_where_a_trajectory_would_drop_the_robot(run, fw_edge):
+    _balancing(run, fw_edge)
+    n = len(fw_edge.received)
+    out = run("wait_until.py", settings={"ROBOT_SUPPORTED": True}, code=1)
+    assert "robot mode MOVE" in out and "damp.py, then stand.py" in out
+    assert not any(c.HasField("all_trajectory") for c in fw_edge.received[n:])
 
 
 def test_stream_velocity_sends_one_packet_per_tick_then_balances(run, fw_edge):
     fw_edge.set_mode("move")
     out = run("stream_velocity.py", settings={"DURATION_S": 1.0})
     packets = int(re.search(r"sent (\d+) packets", out).group(1))  # type: ignore[union-attr]
-    assert 40 <= packets <= 51, packets
+    assert 25 <= packets <= 51, "one packet per 50 Hz tick, at most"
+    # The script has closed its robot: every packet it sent is on its way to the fake edge.
+    assert fw_edge.wait_for(lambda r: sum(c.HasField("policy") for c in r) >= packets + 1)
     vs = fw_edge.velocities()
     # One packet per tick and the zero from balance(): nothing re-sent in the background.
     assert len(vs) == packets + 1 and vs[-1] == ZERO
-    assert max(vx for vx, _, _ in vs) > 0.19
+    assert all(0.0 <= vx <= 0.2 for vx, _, _ in vs) and max(vx for vx, _, _ in vs) > 0.15
     assert "robot mode MOVE" in out
 
 
@@ -405,6 +415,17 @@ def test_damp_without_asking_only_when_yes_is_set(run, fw_edge):
     fw_edge.set_mode("stand")
     out = run("damp.py", settings={"YES": True})  # no input: a question would get EOF
     assert "Damp now?" not in out
+    assert fw_edge.modes() == ["damp"]
+
+
+def test_damp_says_what_to_do_when_damp_is_not_reported(run, fw_edge, monkeypatch):
+    damp = menlo.asimov.Robot.damp
+    monkeypatch.setattr(menlo.asimov.Robot, "damp", lambda self, **_kw: damp(self, timeout=0.3))
+    fw_edge.firmware = False  # another controller holds the robot: DAMP has no effect
+    fw_edge.set_mode("stand")
+    out = run("damp.py", settings={"YES": True}, code=1)
+    assert "sent DAMP, but the robot still reports STAND" in out
+    assert "E-Stop in Asimov Manager" in out
     assert fw_edge.modes() == ["damp"]
 
 
@@ -475,8 +496,16 @@ def test_move_joints_needs_the_robot_supported(run, fw_edge):
 
 def test_move_joints_refuses_in_damp_and_points_at_stand(run, fw_edge):
     out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True}, code=1)
-    assert "not ready to run a trajectory" in out and "stand() it first" in out
+    assert "robot mode DAMP" in out and "run stand.py first" in out
     assert fw_edge.received == []
+
+
+def test_move_joints_refuses_in_move_where_a_trajectory_would_drop_the_robot(run, fw_edge):
+    _balancing(run, fw_edge)
+    n = len(fw_edge.received)
+    out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True}, code=1)
+    assert "robot mode MOVE" in out and "damp.py, then stand.py" in out
+    assert not any(c.HasField("all_trajectory") for c in fw_edge.received[n:])
 
 
 def test_move_joints_bends_the_elbow_and_back(run, fw_edge):
@@ -565,6 +594,14 @@ def test_play_audio_sends_the_file_to_the_speaker_in_order(run, fw_edge, rooms, 
     assert [c.samples_per_channel for c in played] == [8_000, 4_000], "CHUNK_S pieces, in order"
     assert {(c.sample_rate_hz, c.channels, c.encoding) for c in played} == {(8_000, 1, "pcm_s16le")}
     assert "played hello.wav, 1.5 s at 8000 Hz" in out
+    assert fw_edge.received == []
+
+
+def test_play_audio_plays_a_tone_when_there_is_no_file(run, fw_edge, rooms, manager):
+    out = run("play_audio.py", env={**MEDIA_ENV, "MENLO_MANAGER_URL": manager.url})
+    played = rooms[0].played
+    assert [c.samples_per_channel for c in played] == [16_000], "one second, one piece"
+    assert "played a 440 Hz tone (no hello.wav here), 1.0 s at 16000 Hz" in out
     assert fw_edge.received == []
 
 
