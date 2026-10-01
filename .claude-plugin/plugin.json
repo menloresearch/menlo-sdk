@@ -1,0 +1,11 @@
+{
+  "name": "menlo-sdk",
+  "description": "The menlo-sdk usage guide as an agent skill: write and run Python scripts that drive a Menlo Asimov robot.",
+  "homepage": "https://docs.menlo.ai/sdk",
+  "repository": "https://github.com/menloresearch/menlo-sdk",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Menlo Research",
+    "url": "https://menlo.ai"
+  }
+}

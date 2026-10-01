@@ -1,0 +1,15 @@
+{
+  "name": "menlo",
+  "owner": {
+    "name": "Menlo Research",
+    "url": "https://menlo.ai"
+  },
+  "description": "Agent skills for Menlo robots.",
+  "plugins": [
+    {
+      "name": "menlo-sdk",
+      "source": "./",
+      "description": "The menlo-sdk usage guide as an agent skill: write and run Python scripts that drive a Menlo Asimov robot."
+    }
+  ]
+}

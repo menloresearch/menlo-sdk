@@ -3,6 +3,20 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+- The usage guide is an agent skill, `skills/menlo-sdk/SKILL.md`, in the Agent Skills format.
+  Claude Code installs it from this repository's marketplace
+  (`/plugin marketplace add menloresearch/menlo-sdk`, then `/plugin install menlo-sdk@menlo`);
+  Codex, pi and other agents that read Agent Skills install it with
+  `npx skills add menloresearch/menlo-sdk`. It links the documentation and
+  https://docs.menlo.ai/llms.txt.
+
+### Changed
+- The skill moved from `docs/SKILL.md` to `skills/menlo-sdk/SKILL.md`, and its links to the
+  examples point at GitHub so they work wherever the skill is installed.
+
 ## 0.1.0rc8 — 2026-10-01
 
 ### Added

@@ -81,11 +81,28 @@ with Robot(config).connect() as robot:
         print(exc)  # not ready to move: the robot is in STAND; balance() it first (wrong_mode)
 ```
 
+## Agent Skill
+
+The usage guide is also an agent skill, so a coding agent writes scripts the way this SDK
+expects. In Claude Code:
+
+```text
+/plugin marketplace add menloresearch/menlo-sdk
+/plugin install menlo-sdk@menlo
+```
+
+In Codex, pi and other agents that read Agent Skills:
+
+```bash
+npx skills add menloresearch/menlo-sdk
+```
+
 ## Documentation
 
 - [Python SDK on Asimov 1](https://docs.menlo.ai/asimov/1/program/sdk): installing the SDK and running the examples on Asimov 1.
 - [Python SDK guide](https://docs.menlo.ai/sdk): the full documentation.
 - [Safety](https://docs.menlo.ai/sdk/safety): what to check before a script moves the robot.
+- [llms.txt](https://docs.menlo.ai/llms.txt): an index of the documentation for AI agents; [llms-full.txt](https://docs.menlo.ai/llms-full.txt) has every page in full.
 - [Examples](https://github.com/menloresearch/menlo-sdk/tree/main/examples): demos of the SDK's features.
 - [Changelog](https://github.com/menloresearch/menlo-sdk/blob/main/CHANGELOG.md): the changes in each release.
 

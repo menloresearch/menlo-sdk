@@ -1,8 +1,27 @@
+---
+name: menlo-sdk
+description: How to write and run Python scripts that drive a Menlo Asimov robot with menlo-sdk (`import menlo.asimov`). Use when code connects to an Asimov over udp, hybrid or livekit, checks readiness, stands, balances, walks with set_velocity, moves joints, reads robot state, uses the camera, microphone or speaker, or when a script must follow the robot's safety rules.
+license: Apache-2.0
+---
+
 # Driving an Asimov robot with `menlo.asimov`
 
 You are writing a Python script that drives an Asimov biped through `menlo.asimov`. This page
 holds what the script needs: connection, readiness checks, verbs, waits, the safety model and
 media. Python 3.12+.
+
+## Documentation
+
+This page is the short form. The full documentation is at https://docs.menlo.ai/sdk, and two
+files there are meant for agents:
+
+- https://docs.menlo.ai/llms.txt: every docs page, one line each; the SDK pages are under
+  "Python SDK".
+- https://docs.menlo.ai/llms-full.txt: the full text of every docs page in one file.
+
+Read https://docs.menlo.ai/sdk/safety before a script moves the robot. Every class, argument
+and error is in https://docs.menlo.ai/sdk/reference, and what each error means and what to do
+about it is in https://docs.menlo.ai/sdk/troubleshooting.
 
 ## Install and connect
 
@@ -102,7 +121,7 @@ It raises typed errors when the answer cannot come: `WaitTimeoutError` (a `Timeo
 `.last` = last state), `StateStaleError` (stream went quiet), `RobotFaultedError` (the
 firmware latched DAMP; checked before your predicate, so a fall is never read as success).
 `stand()`, `balance()`, `damp()` and `set_joints(wait=True)` raise the same errors, with
-`.sent` set. [examples/wait_until.py](../examples/wait_until.py) acts the moment an elbow
+`.sent` set. [examples/wait_until.py](https://github.com/menloresearch/menlo-sdk/blob/main/examples/wait_until.py) acts the moment an elbow
 passes an angle, while `set_joints(wait=False)` is still moving it.
 
 `robot.get_state()` is the latest sample: `.mode` (`Mode.DAMP|STAND|MOVE`), `.upright`, `.faulted`,
@@ -167,8 +186,8 @@ with Robot().connect() as robot:
     # Do not call robot.stand() here: it would stiffen a balancing robot and tip it over.
 ```
 
-The same steps, split up, are [examples/stand.py](../examples/stand.py),
-[examples/balance.py](../examples/balance.py) and [examples/walk.py](../examples/walk.py).
+The same steps, split up, are [examples/stand.py](https://github.com/menloresearch/menlo-sdk/blob/main/examples/stand.py),
+[examples/balance.py](https://github.com/menloresearch/menlo-sdk/blob/main/examples/balance.py) and [examples/walk.py](https://github.com/menloresearch/menlo-sdk/blob/main/examples/walk.py).
 Run from a robot already in MOVE, drop the `stand()`: it raises `NotReadyError` there.
 
 ## Example 2: turn 180° and verify from the IMU
@@ -199,7 +218,7 @@ with Robot().connect() as robot:
 anything, and both differences are wrapped with `math.remainder(..., math.tau)`: a 190° turn
 reads as `turned = -170°`, and the wrapped residual is then -10° (turn back), not +350°.
 
-More: [examples/README.md](../examples/README.md).
+More: [examples/README.md](https://github.com/menloresearch/menlo-sdk/blob/main/examples/README.md).
 
 ## Gotchas
 

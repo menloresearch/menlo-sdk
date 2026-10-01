@@ -1,6 +1,6 @@
 # menlo-sdk reference
 
-The long form of the [README](../README.md): every connection mode, every verb, the safety model, the errors, and how to develop the SDK itself. An agent writing scripts against the SDK starts from [SKILL.md](SKILL.md). Runnable scripts are in [examples/](../examples/README.md).
+The long form of the [README](../README.md): every connection mode, every verb, the safety model, the errors, and how to develop the SDK itself. An agent writing scripts against the SDK starts from the [menlo-sdk skill](../skills/menlo-sdk/SKILL.md). Runnable scripts are in [examples/](../examples/README.md).
 
 ## Connection
 
@@ -612,5 +612,5 @@ src/menlo/asimov/   the Asimov biped
                     _wire.py (the protobufs every connection mode shares) and
                     _livekit_client.py (the one module that imports livekit, lazily)
 examples/           runnable scripts and livekit_raw/; indexed in examples/README.md
-docs/SKILL.md       the two-page reference for an agent writing a script against this SDK
+skills/menlo-sdk/   the usage guide as an agent skill (SKILL.md), and .claude-plugin/ to install it
 ```
