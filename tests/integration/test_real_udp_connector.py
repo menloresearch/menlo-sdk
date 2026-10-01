@@ -38,11 +38,11 @@ def test_the_edge_admits_our_velocity_as_a_udp_source():
     from edge.connectors.udp_connector import UdpConnector
     from edge.control_source import ControlSource
     from edge.topic_registry import TopicRegistry
-    from edge.topics import COMMAND_TOPIC
+    from edge.topics import ROBOT_COMMAND_TOPIC
 
     cmd_port, state_port = _free_port(), _free_port()
     topics = TopicRegistry()
-    sub = topics.subscribe(COMMAND_TOPIC)
+    sub = topics.subscribe(ROBOT_COMMAND_TOPIC)
     conn = UdpConnector(
         topics,
         command_host="127.0.0.1",
@@ -82,7 +82,7 @@ def test_the_edge_forwards_robot_state_to_our_bound_port():
     from edge.connectors.udp_connector import UdpConnector
     from edge.messages import RobotStateMessage
     from edge.topic_registry import TopicRegistry
-    from edge.topics import STATE_TOPIC
+    from edge.topics import ROBOT_STATE_TOPIC
 
     cmd_port, state_port = _free_port(), _free_port()
     topics = TopicRegistry()
@@ -102,7 +102,7 @@ def test_the_edge_forwards_robot_state_to_our_bound_port():
         tx.open()
         msg = st_pb.RobotState(current_mode=1, protocol_version=1)
         msg.joint_pos.extend([0.5] * 25)
-        topics.publish(STATE_TOPIC, RobotStateMessage(msg))
+        topics.publish(ROBOT_STATE_TOPIC, RobotStateMessage(msg))
         deadline = time.monotonic() + 2
         while not seen and time.monotonic() < deadline:
             await asyncio.sleep(0.02)
@@ -111,4 +111,7 @@ def test_the_edge_forwards_robot_state_to_our_bound_port():
 
     asyncio.run(main())
     assert seen, "no RobotState reached the SDK's state port"
-    assert seen[0].mode.name == "STAND" and seen[0].joint("L_Knee").pos == pytest.approx(0.5)
+    # UdpTransport has no RobotInfo handshake, so this low-level transport state
+    # intentionally carries positional joints without robot-specific names.
+    assert seen[0].mode.name == "STAND"
+    assert seen[0].joints[3].pos == pytest.approx(0.5)
