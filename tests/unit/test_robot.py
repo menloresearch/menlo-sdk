@@ -879,3 +879,51 @@ def test_wait_until_keeps_a_stale_stream_as_StateStaleError(edge, robot):
     time.sleep(0.4)
     with pytest.raises(StateStaleError):
         robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=2.0, stale_after=0.3)
+
+
+def _policies(edge) -> int:
+    return sum(c.HasField("policy") for c in edge.received)
+
+
+@pytest.mark.parametrize("verb", ["set_joints", "trajectory"])
+def test_a_joint_command_takes_over_a_held_velocity(edge, robot, verb):
+    put_in(robot, edge, "move")
+    robot.set_velocity(vx=0.3, wait=False)  # no duration: held until something ends it
+    assert edge.wait_for(lambda _: _policies(edge) >= 2), "the keepalive is re-sending"
+    pose = robot.get_state().joint_pos
+    if verb == "set_joints":
+        robot.set_joints(pose, duration=0.2, wait=False)
+    else:
+        robot.trajectory(pose)
+    n = _policies(edge)
+    time.sleep(5 / KEEPALIVE_HZ)
+    assert _policies(edge) == n, "the velocity is not re-sent once a joint command took over"
+    assert any(c.HasField("all_trajectory") for c in edge.received)
+
+
+def test_ctrl_c_in_a_with_block_zeroes_a_held_velocity(edge, robot):
+    put_in(robot, edge, "move")
+    with pytest.raises(KeyboardInterrupt), robot:
+        robot.set_velocity(vx=0.3, wait=False)
+        assert edge.wait_for(lambda _: _policies(edge) >= 2)
+        raise KeyboardInterrupt
+    assert edge.wait_for(lambda _: edge.velocities()[-1] == (0.0, 0.0, 0.0))
+    n = len(edge.received)
+    time.sleep(3 / KEEPALIVE_HZ)
+    assert len(edge.received) == n, "and nothing is re-sent after the zero"
+
+
+def test_ctrl_c_during_a_waited_walk_zeroes_the_velocity(edge, robot):
+    import os
+    import signal
+
+    put_in(robot, edge, "move")
+    threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGINT)).start()  # Ctrl-C
+    started = time.monotonic()
+    with pytest.raises(KeyboardInterrupt), robot:
+        robot.set_velocity(vx=0.3, duration=10.0)  # wait=True: blocked in the walk
+    assert time.monotonic() - started < 2.0, "Ctrl-C ends the wait, not the duration"
+    assert edge.wait_for(lambda _: edge.velocities()[-1] == (0.0, 0.0, 0.0))
+    n = len(edge.received)
+    time.sleep(3 / KEEPALIVE_HZ)
+    assert len(edge.received) == n, "and nothing is re-sent after the zero"
