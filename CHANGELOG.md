@@ -3,7 +3,7 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.1.0rc8 — 2026-10-01
 
 ### Added
 - `balance(timeout=5.0, wait=True)`: MOVE at zero velocity, where the walking policy balances
