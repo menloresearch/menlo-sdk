@@ -6,11 +6,14 @@ Three rules, all load-bearing for callers:
   bugs stay builtins (a non-finite velocity is a ``ValueError``, an unknown joint name a
   ``KeyError``) because those are programming errors, not robot conditions, and the
   standard library already has the right names for them.
-* A motion command checks the robot before it sends anything. ``stand()``,
-  ``balance()`` (from STAND or DAMP), ``set_velocity()``, ``trajectory()`` and ``set_joints()``
-  raise :class:`NotReadyError` (or its subclass :class:`RobotFaultedError`) when the robot
-  cannot do it now, and then nothing was sent. ``balance()`` in MOVE and ``damp()`` are
-  never checked.
+* A motion command refuses only without live state. ``stand()``, ``balance()`` (outside
+  MOVE), ``set_velocity()``, ``trajectory()`` and ``set_joints()`` raise
+  :class:`NotReadyError` when no fresh state sample came within their ``timeout``, and
+  then nothing was sent. A closed Robot raises :class:`NotConnectedError`, a lost link
+  :class:`LinkLostError` and a robot on another protocol version
+  :class:`ProtocolMismatchError`, at once. What the robot reports (its mode, a fault, an alert, a
+  temperature, the battery) never refuses a command: a guard on it is the caller's.
+  ``balance()`` in MOVE and ``damp()`` are sent at once.
 * Once a command is sent, the robot's own state says whether it took effect. A command
   that waits for that raises :class:`WaitTimeoutError` when it does not come in time.
   Asimov Edge's per-command verdict is an outcome (see :mod:`menlo.asimov._outcome`) and
@@ -24,8 +27,8 @@ Three rules, all load-bearing for callers:
     ├── NotConnectedError
     ├── LinkLostError
     ├── UnsupportedError
-    ├── NotReadyError               the check before sending failed; nothing was sent
-    │   └── RobotFaultedError       the firmware latched DAMP (before or after sending)
+    ├── NotReadyError               no live state to send against; nothing was sent
+    │   └── RobotFaultedError       a wait saw the firmware latch DAMP
     ├── WaitTimeoutError            sent, but the robot did not get there in time
     │   └── StateStaleError         the state stream went quiet during a wait
     ├── CommandRefusedError
@@ -89,20 +92,22 @@ class LinkLostError(MenloError):
     """
 
 
-# ── commands: the check before sending, and the wait after ───────────────────
+# ── commands: the live-state check before sending, and the wait after ────────
 
 
 class NotReadyError(MenloError):
-    """The robot cannot do the command now, so nothing was sent. The one exception is its
-    subclass :class:`RobotFaultedError` raised by a wait: a fault that ended the command
-    after it went out, with ``sent`` set.
+    """There is no live state to send against, so nothing was sent. Its subclass
+    :class:`RobotFaultedError` is raised by a wait, after the command went out.
 
-    Raised by ``stand()``, ``balance()``, ``set_velocity()``, ``trajectory()`` and ``set_joints()``
-    when their readiness check fails: at once for a problem that does not clear on its own, or after
-    the command's ``timeout`` for one that could have (``not_armed``, ``stale_state``).
-    ``action`` is what was checked (``"stand"``, ``"move"`` or ``"trajectory"``),
-    ``preflight`` the last check and ``problems`` its blocking problems, each with a stable
-    ``code``. The message names every problem and what fixes it."""
+    Raised by ``stand()``, ``balance()``, ``set_velocity()``, ``trajectory()`` and
+    ``set_joints()`` when no fresh state sample came within the command's ``timeout``
+    (``no_state``, ``stale_state``), including a ``require_state=False`` session whose
+    first sample did not come. A closed Robot, a lost link and a protocol mismatch are not
+    this error: they raise :class:`NotConnectedError`, :class:`LinkLostError` and
+    :class:`ProtocolMismatchError` at once. ``action`` is what was checked (``"stand"``,
+    ``"move"`` or ``"trajectory"``), ``preflight`` the last check and ``problems`` its
+    blocking problems, each with a stable ``code``. The message names every problem and
+    what fixes it."""
 
     def __init__(
         self,
@@ -124,16 +129,15 @@ class NotReadyError(MenloError):
 
 
 class RobotFaultedError(NotReadyError):
-    """The firmware latched DAMP (a fall, a critical alert, robot mode FAULT_DAMP), before
-    a command was sent or while one was being waited for. The latch holds until the
-    firmware restarts; retrying will not help. ``state`` is the sample that showed it.
+    """A wait saw the firmware's latched DAMP (a fall, a critical alert, robot mode
+    FAULT_DAMP). The command was sent; the latch holds until the firmware restarts, and
+    retrying will not help. ``state`` is the sample that showed it; ``problems`` holds the
+    ``faulted`` fact.
 
-    A subclass of :class:`NotReadyError`, so ``except NotReadyError`` catches every "the
-    robot cannot do that now"; catch this one first to tell the fault apart. ``sent`` is
-    the command that went out when the fault came during a wait for it (``stand()``,
-    ``balance()``, ``set_joints()``, ``set_velocity(wait=True)``), and ``None`` when the
-    check refused before anything was sent. ``action`` and ``preflight`` are ``None`` when
-    it comes from ``wait_until``, which has no action."""
+    A subclass of :class:`NotReadyError`; catch this one first to tell the fault apart.
+    ``sent`` is the command whose wait saw it (``stand()``, ``balance()``, ``set_joints()``,
+    ``set_velocity(wait=True)``). ``action`` and ``preflight`` are ``None`` when it comes
+    from ``wait_until``, which has no action."""
 
     def __init__(
         self,

@@ -14,16 +14,18 @@ robot: everything that speaks the Asimov wire lives in `menlo.asimov`; the top l
 
 - **Verbs are the wire's verbs.** `stand`, `damp`, `set_velocity`, `trajectory`: the names
   the edge, the protocol and the robot's other controllers already use. `balance` (a zero
-  velocity, the one way into MOVE) and `set_joints` (a managed stream of trajectory
+  velocity: MOVE, balancing in place) and `set_joints` (a managed stream of trajectory
   setpoints) are the two the SDK adds. Do not invent synonyms.
-- **One synchronous refusal: the SDK's own readiness check.** `stand`, `balance` from
-  STAND or DAMP, `set_velocity`, `trajectory` and `set_joints` run `preflight` before they
-  send: they wait up to their `timeout` for the codes in `_preflight.TRANSIENT`, and raise
-  `NotReadyError` (a latched fault: `RobotFaultedError`) with nothing sent for any other
-  blocking problem. `set_velocity` works in MOVE only. When the robot is ready the check
-  reads one cached sample and adds no delay. `balance` in MOVE and `damp` are never
-  checked. Nothing else refuses synchronously: a sent command returns a `Sent`, Asimov
-  Edge's verdict arrives as an `Outcome`, and `Unknown` is never success and never refusal.
+- **The SDK reports facts; it refuses only without live state.** Safety lives in the
+  firmware, command handling in Asimov Edge, and guards in user code. `stand`, `balance`
+  outside MOVE, `set_velocity`, `trajectory` and `set_joints` wait up to their `timeout` for
+  a live state stream (`_preflight.TRANSIENT`) and raise `NotReadyError` with nothing sent
+  when none comes; that is the only synchronous refusal. Every mode change is sent: what
+  the robot reports (its mode, a fault, an alert, a temperature, the battery) never refuses
+  a command. Do not add state-based refusals or thresholds to the SDK: a guard belongs in
+  the user's script (`examples/guard.py`), and `preflight` stays a report. A sent command
+  returns a `Sent`, Asimov Edge's verdict arrives as an `Outcome`, and `Unknown` is never
+  success and never refusal.
 - **State is the truth about effect.** Waits read `robot.get_state()`, never infer from what was
   sent. Every wait refuses to succeed on a stale stream, and a fault is reported before a
   predicate is evaluated.

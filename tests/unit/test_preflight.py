@@ -1,5 +1,5 @@
-"""Readiness: robot.preflight(action), robot.armed, and the check each motion command runs
-before it sends.
+"""Facts, not refusals: robot.preflight(action), robot.armed, and the one check each motion
+command runs before it sends (live state).
 
 The fake edge runs with ``firmware=True`` here, so its robot mode follows the commands the
 way the firmware does, including the MOVE gate: a velocity is held in STAND until STAND
@@ -81,35 +81,54 @@ def test_each_action_reads_as_a_sentence():
     assert str(evaluate("stand", _state(Mode.DAMP, battery=GOOD_BATTERY), armed=False)) == (
         "ready to stand"
     )
-    check = evaluate("trajectory", _state(Mode.DAMP, battery=GOOD_BATTERY), armed=False)
-    assert str(check).startswith("not ready to run a trajectory:\n  - wrong_mode: ")
+    stale = _state(Mode.DAMP, battery=GOOD_BATTERY, received_at=time.monotonic() - 3.0)
+    check = evaluate("trajectory", stale, armed=False)
+    assert str(check).startswith("not ready to run a trajectory:\n  - stale_state: ")
 
 
-def test_unknown_fields_are_warnings_never_guesses():
+def test_a_field_the_robot_does_not_report_is_no_problem():
     check = evaluate("move", _state(temp=None), armed=True)
-    assert check.ok
-    assert _codes(check) == {"unknown_battery", "unknown_joint_temp"}
-    assert all(not p.blocking for p in check.problems)
-    assert "(warning)" in str(check)
+    assert check.ok and check.problems == ()
+
+
+@pytest.mark.parametrize(
+    ("state", "armed"),
+    [
+        (lambda: _state(Mode.DAMP), False),
+        (lambda: _state(Mode.UNKNOWN), None),
+        (lambda: _state(Mode.MOVE), True),
+        (lambda: _state(battery=LOW_BATTERY), True),
+        (lambda: _state(battery=PROTECTING), True),
+        (lambda: _state(temp=95.0), True),
+    ],
+)  # fmt: skip
+@pytest.mark.parametrize("action", ["stand", "move", "trajectory"])
+def test_no_robot_mode_battery_or_temperature_blocks(state, armed, action):
+    """The SDK holds no thresholds and no mode rules: these are the caller's guards."""
+    check = evaluate(action, state(), armed=armed)
+    assert check.ok and check.problems == (), str(check)
 
 
 @pytest.mark.parametrize(
     ("state", "armed", "code"),
     [
-        (_state(Mode.DAMP), False, "wrong_mode"),
-        (_state(Mode.UNKNOWN), None, "wrong_mode"),
-        (_state(Mode.STAND), False, "not_armed"),
-        (_state(Mode.STAND, gravity=(0.0, 0.6, -0.8)), False, "not_armed"),
-        (_state(Mode.DAMP, error_flags=1 | 1 << 8), False, "faulted"),
-        (_state(battery=LOW_BATTERY), True, "battery_low"),
-        (_state(battery=PROTECTING), True, "battery_protecting"),
-        (_state(temp=61.0), True, "joint_hot"),
-        (_state(received_at=time.monotonic() - 3.0), True, "stale_state"),
+        (lambda: _state(Mode.STAND), False, "not_armed"),
+        (lambda: _state(Mode.STAND, gravity=(0.0, 0.6, -0.8)), False, "not_armed"),
+        (lambda: _state(Mode.DAMP, error_flags=1 | 1 << 8), False, "faulted"),
+        (lambda: _state(alerts=(Alert(17, 1, 61.0, 60.0, 3),)), True, "alerts"),
     ],
 )  # fmt: skip
-def test_each_blocking_problem_has_its_code(state, armed, code):
-    check = evaluate("move", state, armed=armed)
-    assert not check.ok and code in {p.code for p in check.blocking}, str(check)
+def test_faults_alerts_and_arming_are_facts_not_blocks(state, armed, code):
+    check = evaluate("move", state(), armed=armed)
+    assert check.ok and check.has(code), str(check)
+    assert all(not p.blocking for p in check.problems) and "(information)" in str(check)
+
+
+def test_only_missing_live_state_blocks():
+    stale = evaluate("move", _state(received_at=time.monotonic() - 3.0), armed=True)
+    assert not stale.ok and [p.code for p in stale.blocking] == ["stale_state"]
+    none = evaluate("stand", None, armed=None)
+    assert not none.ok and [p.code for p in none.blocking] == ["no_state"]
 
 
 def test_a_fault_names_the_alerts_from_error_flags():
@@ -117,8 +136,7 @@ def test_a_fault_names_the_alerts_from_error_flags():
     fault = next(p for p in check.problems if p.code == "faulted")
     assert "FALL_DETECTED" in fault.message and "MOTOR_OVERTEMP" in fault.message
     assert "until the firmware restarts" in fault.message
-    # Not also "stand() it first": a latched fault is not cleared by standing.
-    assert "wrong_mode" not in _codes(check)
+    assert not fault.blocking and check.ok
 
 
 def test_a_tilted_stand_says_how_far():
@@ -126,20 +144,16 @@ def test_a_tilted_stand_says_how_far():
     assert "tilted 45 deg" in next(p.message for p in check.problems if p.code == "not_armed")
 
 
-def test_stand_is_refused_from_move_and_allowed_from_damp_and_stand():
-    assert "wrong_mode" in _codes(evaluate("stand", _state(Mode.MOVE), armed=True))
-    assert evaluate("stand", _state(Mode.DAMP), armed=False).ok
-    assert evaluate("stand", _state(Mode.STAND), armed=False).ok
+def test_an_active_alert_is_named():
+    check = evaluate("stand", _state(alerts=(Alert(17, 1, 61.0, 60.0, 3),)), armed=True)
+    assert next(p for p in check.problems if p.code == "alerts").message == (
+        "the firmware reports MOTOR_TEMP_HIGH"
+    )
 
 
-def test_trajectory_needs_what_move_needs():
-    assert "wrong_mode" in _codes(evaluate("trajectory", _state(Mode.DAMP), armed=False))
-    assert evaluate("trajectory", _state(Mode.MOVE), armed=True).ok
-
-
-def test_no_gravity_in_stand_is_a_warning_not_a_guess():
+def test_no_gravity_in_stand_is_not_a_guess():
     check = evaluate("move", _state(gravity=None), armed=None)
-    assert check.ok and "unknown_gravity" in _codes(check)
+    assert check.ok and check.problems == ()
 
 
 def test_an_unknown_action_is_a_caller_bug():
@@ -148,7 +162,10 @@ def test_an_unknown_action_is_a_caller_bug():
 
 
 def test_problem_reads_well():
-    assert str(Problem("battery_low", "battery at 12 %", True)) == "battery_low: battery at 12 %"
+    assert str(Problem("stale_state", "1.0 s old", True)) == "stale_state: 1.0 s old"
+    assert str(Problem("alerts", "the firmware reports X", False)) == (
+        "alerts: the firmware reports X (information)"
+    )
 
 
 # ── against the fake firmware ────────────────────────────────────────────────
@@ -195,14 +212,20 @@ def test_stand_returns_once_the_robot_is_armed(fw_edge):
         assert fw_edge.velocities() == [(0.0, 0.0, 0.0)], "balance() is sent once"
 
 
-def test_balance_right_after_a_stand_waits_until_the_robot_is_armed(fw_edge):
-    """What the check exists to prevent: a zero velocity sent before the firmware arms
-    leaves the robot in STAND, and balance() would wait for a MOVE that never comes."""
+def test_balance_right_after_a_stand_waits_for_the_stand_report_only(fw_edge):
+    """balance() waits for the STAND it follows to be reported, then sends at once: it does
+    not wait for arming. A zero velocity that arrives before the firmware arms leaves the
+    robot in STAND, and the wait says so and what to do."""
     with _robot(fw_edge) as robot:
         robot.stand(wait=False)  # returns before STAND is even reported
-        robot.balance()
-        assert fw_edge.armed_at is not None and fw_edge.first_velocity_at is not None
-        assert fw_edge.first_velocity_at >= fw_edge.armed_at, "a velocity went out unarmed"
+        with pytest.raises(WaitTimeoutError) as info:
+            robot.balance(timeout=1.0)
+        assert fw_edge.first_velocity_at is not None
+        assert fw_edge.armed_at is None or fw_edge.first_velocity_at < fw_edge.armed_at
+        assert "was not armed" in str(info.value) and "robot.armed" in str(info.value)
+        assert fw_edge.modes() == ["stand"], "the STAND went out before the zero velocity"
+        robot.wait_until(lambda s: robot.armed is True, timeout=2.0)
+        robot.balance()  # armed now: MOVE
         assert robot.get_state().mode is Mode.MOVE
 
 
@@ -232,21 +255,24 @@ def test_balance_that_never_reaches_move_times_out_naming_the_robot_mode(edge):
 
 
 @pytest.mark.parametrize("fault", [False, True])
-def test_balance_refuses_in_damp_and_sends_nothing(fw_edge, fault):
+def test_balance_in_damp_is_sent_and_says_stand_first(fw_edge, fault):
     with _robot(fw_edge) as robot:
         if fault:
             fw_edge.fault(7)
             time.sleep(0.1)
         started = time.monotonic()
-        with pytest.raises(NotReadyError) as info:
+        with pytest.raises(NotReadyError if fault else WaitTimeoutError) as info:
             robot.balance()
-        assert time.monotonic() - started < 0.2, "DAMP does not clear by waiting"
+        assert time.monotonic() - started < 0.3, "no wait from DAMP can succeed"
         if fault:
             assert isinstance(info.value, RobotFaultedError) and "FALL_DETECTED" in str(info.value)
+            assert info.value.has("faulted") and info.value.sent is not None
         else:
-            assert info.value.has("wrong_mode") and "stand() it first" in str(info.value)
-        time.sleep(0.1)
-        assert fw_edge.received == [], "a refused balance() sends nothing"
+            assert "the robot is in DAMP: stand() first" in str(info.value)
+        assert fw_edge.wait_for(lambda rx: fw_edge.velocities() == [(0.0, 0.0, 0.0)]), (
+            "the zero velocity is sent: the firmware decides"
+        )
+        assert robot.get_state().mode is Mode.DAMP
 
 
 def test_balance_in_move_is_never_checked(fw_edge):
@@ -281,18 +307,13 @@ def test_balance_from_another_thread_ends_a_hold_without_duration(fw_edge):
         assert robot.get_state().mode is Mode.MOVE
 
 
-def test_set_velocity_in_stand_refuses_and_points_at_balance(fw_edge):
+def test_set_velocity_in_stand_is_sent_and_an_armed_robot_enters_move(fw_edge):
     with _robot(fw_edge) as robot:
         robot.stand()
-        started = time.monotonic()
-        with pytest.raises(NotReadyError) as info:
-            robot.set_velocity(vx=0.2, duration=1.0, timeout=5.0)
-        assert time.monotonic() - started < 0.2, "STAND does not become MOVE by waiting"
-        assert info.value.action == "move" and info.value.has("wrong_mode")
-        assert "the robot is in STAND; balance() it first" in str(info.value)
-        assert not info.value.has("not_armed")
-        time.sleep(0.2)
-        assert fw_edge.velocities() == [] and robot.get_state().mode is Mode.STAND
+        robot.set_velocity(vx=0.2, duration=0.3, timeout=5.0)
+        assert (0.2, 0.0, 0.0) in fw_edge.velocities()
+        assert fw_edge.move_entered_at is not None
+        assert robot.get_state().mode is Mode.MOVE
 
 
 def test_set_velocity_waits_by_default_and_needs_a_duration(fw_edge):
@@ -338,13 +359,11 @@ def test_set_velocity_hold_false_ends_a_running_hold(fw_edge):
         assert fw_edge.velocities()[-1] == (0.1, 0.0, 0.0)
 
 
-def test_set_velocity_hold_false_refuses_at_once_when_not_ready(fw_edge):
+def test_set_velocity_hold_false_refuses_at_once_on_a_stale_stream(fw_edge):
     with _robot(fw_edge) as robot:
         robot.stand()
-        started = time.monotonic()
-        with pytest.raises(NotReadyError) as info:
-            robot.set_velocity(vx=0.1, hold=False)  # STAND: balance() first
-        assert info.value.has("wrong_mode")
+        robot.set_velocity(vx=0.05, hold=False)  # STAND: sent, the firmware decides
+        assert fw_edge.wait_for(lambda rx: (0.05, 0.0, 0.0) in fw_edge.velocities())
         robot.balance()
         fw_edge.pushing = False
         time.sleep(0.6)
@@ -387,23 +406,18 @@ def test_move_to_stand_stays_armed(fw_edge):
         assert robot.armed is True and robot.preflight("move").ok
 
 
-def test_stand_is_refused_in_move_and_sends_nothing(fw_edge):
+def test_stand_in_move_sends_stand(fw_edge):
     with _robot(fw_edge) as robot:
         robot.stand()
         robot.balance()
         stands = fw_edge.modes().count("stand")
-        started = time.monotonic()
-        with pytest.raises(NotReadyError) as info:
-            robot.stand()
-        assert time.monotonic() - started < 0.2, "a robot mode that is wrong does not clear"
-        assert info.value.action == "stand" and info.value.has("wrong_mode")
-        assert "balance()" in str(info.value), "the message says what to do instead"
-        time.sleep(0.1)
-        assert fw_edge.modes().count("stand") == stands
+        robot.stand()
+        assert fw_edge.modes().count("stand") == stands + 1
+        assert robot.get_state().mode is Mode.STAND and robot.armed is True
 
 
 @pytest.mark.parametrize("verb", ["set_velocity", "trajectory", "set_joints"])
-def test_in_damp_a_motion_command_refuses_at_once_and_sends_nothing(fw_edge, verb):
+def test_in_damp_a_motion_command_is_sent_at_once(fw_edge, verb):
     with _robot(fw_edge) as robot:
         pose = list(robot.get_state().joint_pos)
         call = {
@@ -412,14 +426,12 @@ def test_in_damp_a_motion_command_refuses_at_once_and_sends_nothing(fw_edge, ver
             "set_joints": lambda: robot.set_joints(pose, duration=0.2, wait=False),
         }[verb]
         started = time.monotonic()
-        with pytest.raises(NotReadyError) as info:
-            call()
+        call()
         assert time.monotonic() - started < 0.2
-        assert info.value.action == ("move" if verb == "set_velocity" else "trajectory")
-        assert info.value.has("wrong_mode") and "stand() it first" in str(info.value)
-        assert info.value.preflight is not None and not info.value.preflight.ok
-        time.sleep(0.1)
-        assert fw_edge.received == [], "a refused command sends nothing"
+        assert fw_edge.wait_for(
+            lambda rx: any(c.HasField("policy") or c.HasField("all_trajectory") for c in rx)
+        ), "the command is sent: the firmware decides"
+        robot.damp()
 
 
 def test_a_tilted_robot_never_arms(fw_edge):
@@ -431,39 +443,51 @@ def test_a_tilted_robot_never_arms(fw_edge):
         assert time.monotonic() - started >= 0.75
         assert "has not armed" in str(timed_out.value) and timed_out.value.sent is not None
         assert robot.get_state().mode is Mode.STAND
+        check = robot.preflight("move")
+        assert check.ok and check.has("not_armed") and "tilted" in str(check)
 
-        with pytest.raises(NotReadyError) as info:
+        with pytest.raises(WaitTimeoutError) as info:
             robot.balance(timeout=0.3)
-        assert info.value.has("not_armed") and "tilted" in str(info.value)
-        assert "waited 0.3 s" in str(info.value)
+        assert "was not armed" in str(info.value) and info.value.sent is not None
         assert robot.armed is False and not fw_edge.armed
-        assert fw_edge.velocities() == []
+        assert fw_edge.velocities() == [(0.0, 0.0, 0.0)], "sent; the firmware stays in STAND"
 
 
 @pytest.mark.parametrize("verb", ["stand", "balance", "set_velocity", "trajectory", "set_joints"])
-def test_a_latched_fault_refuses_every_motion_command_at_once(fw_edge, verb):
+def test_a_latched_fault_never_refuses_a_command(fw_edge, verb):
     with _robot(fw_edge) as robot:
         fw_edge.fault(7)
         robot.wait_until(lambda s: True, timeout=1.0)
         time.sleep(0.05)
         pose = list(robot.get_state().joint_pos)
+        before = len(fw_edge.received)
         call = {
-            "stand": lambda: robot.stand(timeout=5.0),
-            "balance": lambda: robot.balance(timeout=5.0),
+            "stand": lambda: robot.stand(wait=False),
+            "balance": lambda: robot.balance(wait=False),
             "set_velocity": lambda: robot.set_velocity(vx=0.2, timeout=5.0, wait=False),
             "trajectory": lambda: robot.trajectory(pose, timeout=5.0),
             "set_joints": lambda: robot.set_joints(pose, duration=0.2, wait=False, timeout=5.0),
         }[verb]
+        call()
+        assert fw_edge.wait_for(lambda rx: len(rx) > before), "sent: the firmware keeps the fault"
+        assert robot.preflight("move").has("faulted")
+        robot.damp()
+
+
+@pytest.mark.parametrize("verb", ["stand", "balance"])
+def test_a_latched_fault_is_raised_by_the_wait_after_sending(fw_edge, verb):
+    with _robot(fw_edge) as robot:
+        fw_edge.fault(7)
+        robot.wait_until(lambda s: True, timeout=1.0)
+        time.sleep(0.05)
         started = time.monotonic()
         with pytest.raises(RobotFaultedError) as info:
-            call()
+            getattr(robot, verb)(timeout=5.0)
         assert time.monotonic() - started < 0.5, "a latched fault does not clear by waiting"
-        assert isinstance(info.value, NotReadyError), "except NotReadyError catches a fault"
         assert info.value.has("faulted") and "FALL_DETECTED" in str(info.value)
         assert "until the firmware restarts" in str(info.value)
-        assert info.value.sent is None and info.value.state.faulted
-        time.sleep(0.1)
-        assert _no_motion(fw_edge)
+        assert info.value.sent is not None and info.value.sent.name == verb
+        assert info.value.state.faulted
 
 
 def test_a_fault_while_standing_is_raised_by_stand(fw_edge):
@@ -479,8 +503,8 @@ def test_damp_is_never_checked(fw_edge):
     with _robot(fw_edge) as robot:
         fw_edge.fault(7)
         time.sleep(0.1)
-        assert not robot.preflight("move").ok and not robot.preflight("stand").ok
-        robot.damp()  # returns: a fault-DAMPed robot is limp, which is what damp asks for
+        assert robot.preflight("move").has("faulted") and robot.preflight("stand").has("faulted")
+        robot.damp()  # returns: no actuator of a fault-DAMPed robot holds a position
         assert fw_edge.wait_for(lambda rx: fw_edge.modes().count("damp") == 1)
 
         fw_edge.pushing = False  # and a stale stream does not hold it back either
@@ -569,28 +593,28 @@ def test_fault_damp_is_a_latched_fault(fw_edge):
         time.sleep(0.15)
         assert robot._latched is None, "FAULT_DAMP releases a held velocity"
         check = robot.preflight("move")
-        assert check.has("faulted") and not check.has("wrong_mode")
+        assert check.has("faulted") and check.ok
         assert "FAULT_DAMP" in next(p.message for p in check.problems if p.code == "faulted")
         with pytest.raises(RobotFaultedError, match="FAULT_DAMP"):
             robot.stand()
         with pytest.raises(RobotFaultedError, match="FAULT_DAMP"):
             robot.wait_until(lambda s: False, timeout=1.0)
-        robot.damp()  # limp already: returns
+        robot.damp()  # DAMPed already: returns
 
 
 def test_fault_damp_alone_is_reported_as_the_fault():
     check = evaluate("stand", _state(Mode.FAULT_DAMP), armed=False)
-    assert not check.ok and _codes(check) >= {"faulted"} and "wrong_mode" not in _codes(check)
+    assert check.ok and _codes(check) == {"faulted"}
     assert "robot mode FAULT_DAMP" in check.problems[0].message
     assert Mode.from_wire(5) is Mode.FAULT_DAMP
 
 
-def test_a_refusal_names_every_problem_and_its_fix():
-    check = evaluate("move", _state(battery=LOW_BATTERY, temp=61.0), armed=True)
-    text = check.explain()
+def test_a_refusal_names_the_problem_and_its_fix():
+    stale = _state(battery=LOW_BATTERY, temp=61.0, received_at=time.monotonic() - 3.0)
+    text = evaluate("move", stale, armed=True).explain()
     assert text.startswith("not ready to move: ")
-    assert "(battery_low); charge the battery" in text
-    assert "(joint_hot); let the actuators cool" in text
+    assert "(stale_state); check the network link to the robot" in text
+    assert "battery" not in text and "joint" not in text
 
 
 def test_a_closed_robot_is_not_connected(fw_edge):
@@ -609,7 +633,7 @@ def test_without_gravity_stand_returns_at_stand_and_arming_is_unknown(fw_edge):
     with _robot(fw_edge) as robot:
         robot.stand(timeout=2.0)
         assert robot.get_state().mode is Mode.STAND and robot.armed is None
-        assert robot.preflight("move").has("unknown_gravity")
+        assert robot.preflight("move").problems == ()
 
 
 def _tracked(samples: list[tuple[float, tuple[float, float, float] | None]]) -> bool:

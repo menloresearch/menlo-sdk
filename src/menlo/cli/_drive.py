@@ -2,13 +2,11 @@
 
 Each command connects the way a script does (``Robot(config).connect(mode)``) and leaves
 through ``with``, so ``close()`` always runs. ``stand``, ``walk``, ``damp`` and
-``balance`` from STAND print a plan and ask before they send anything (``go_ahead``).
-``stand``, ``balance`` from STAND and ``walk`` first check ``robot.preflight(action)`` and
-stop with ``Not feasible:`` when it refuses (``feasible``); after the answer,
-``robot.stand()``, ``robot.balance()`` and ``robot.set_velocity()`` check again
-themselves, and a refusal there is reported the same way. ``damp`` is not checked: it
-sends DAMP whatever the robot's state. ``balance`` in MOVE never asks and refuses only a
-stale or lost state stream. ``status`` sends nothing at all.
+``balance`` outside MOVE print the plan with the robot's facts (robot mode, armed,
+faults, active alerts, hottest joint, battery) and ask before they send anything
+(``go_ahead``). The facts are for you to judge: no command refuses because of them. The one
+refusal is no live state (``live``): ``Not feasible:`` and nothing sent. ``balance`` in
+MOVE never asks. ``status`` sends nothing at all.
 """
 
 from __future__ import annotations
@@ -27,14 +25,16 @@ from menlo.asimov import (
     MenloError,
     Mode,
     NotReadyError,
-    Preflight,
     Robot,
     RobotFaultedError,
+    StateStaleError,
     Velocity,
+    WaitTimeoutError,
 )
 from menlo.asimov._preflight import MAX_STATE_AGE_S, fault_names
 from menlo.cli._common import (
     EXIT_CANCELLED,
+    EXIT_NOT_READY,
     EXIT_OK,
     NotFeasible,
     StateRate,
@@ -46,8 +46,11 @@ from menlo.cli._common import (
 MAX_WALK_S = 10.0
 #: How long ``stand`` waits for the robot to report STAND and arm, and ``damp`` for DAMP.
 STAND_TIMEOUT_S = 10.0
-#: How long ``balance`` waits for a robot in STAND to be seen armed before it enters MOVE.
+#: How long ``balance`` and ``walk`` wait for live state and for MOVE.
 ARM_TIMEOUT_S = 5.0
+#: A new session counts the 0.5 s upright hold from its first sample: how long a command
+#: gives a robot in STAND to be seen armed before it reports the fact.
+ARM_SEEN_S = 1.0
 #: How long ``status`` counts state samples before it reports the rate.
 RATE_WINDOW_S = 1.0
 
@@ -55,11 +58,7 @@ RATE_WINDOW_S = 1.0
 def _say(text: str) -> None:
     from menlo.cli._ui import console
 
-    console.print(text)
-
-
-def _refuse(check: Preflight) -> NotReadyError:
-    return NotReadyError(check.explain(), action=check.action, preflight=check)
+    console.print(text, soft_wrap=True)
 
 
 # ── menlo status ─────────────────────────────────────────────────────────────
@@ -79,7 +78,7 @@ def snapshot(robot: Robot, rate: StateRate) -> dict[str, Any]:
     mode = robot.info.transport
     check = robot.preflight("move")
     s = check.state
-    verdict = "READY" if check.ok else "FAULTED" if check.has("faulted") else "NOT READY"
+    verdict = "NOT READY" if not check.ok else "FAULTED" if check.has("faulted") else "READY"
     temps = [j.temp for j in s.joints if j.temp is not None] if s is not None else []
     battery = s.battery if s is not None else None
     return {
@@ -95,6 +94,7 @@ def snapshot(robot: Robot, rate: StateRate) -> dict[str, Any]:
         "armed": robot.armed,
         "battery_percent": battery.soc_percent if battery is not None else None,
         "faults": fault_names(s) if s is not None else [],
+        "alerts": list(dict.fromkeys(a.name for a in s.alerts)) if s is not None else [],
         "error_flags": s.error_flags if s is not None else None,
         "max_joint_temp_c": max(temps) if temps else None,
         "state_rate_hz": round(rate.hz, 1),
@@ -109,10 +109,10 @@ def render(snap: dict[str, Any]) -> Any:
     from rich.text import Text
 
     colour = {"READY": "green", "NOT READY": "yellow", "FAULTED": "red"}[snap["verdict"]]
-    blocking = [p for p in snap["problems"] if p["blocking"]]
+    first = [p for p in snap["problems"] if p["blocking"] or p["code"] == "faulted"]
     body = Text.from_markup(f"[bold reverse {colour}] {snap['verdict']} [/]")
-    if blocking:
-        body.append(f"  {blocking[0]['message']}")
+    if first:
+        body.append(f"  {first[0]['message']}")
     armed = (
         {True: " (armed)", False: " (not armed)", None: " (armed unknown)"}[snap["armed"]]
         if snap["robot_mode"] in ("STAND", "MOVE")
@@ -132,7 +132,8 @@ def render(snap: dict[str, Any]) -> Any:
     lines = [
         f"robot mode [bold]{snap['robot_mode'] or '-'}[/]{armed}   battery {battery}"
         f"   hottest joint {joint}",
-        f"faults {', '.join(snap['faults']) or 'none'}",
+        f"faults {', '.join(snap['faults']) or 'none'}"
+        f"   alerts {', '.join(snap.get('alerts', [])) or 'none'}",
         f"state {snap['state_rate_hz']:.0f} Hz, {'fresh' if snap['fresh'] else 'stale'} ({age})",
     ]
     for line in lines:
@@ -173,110 +174,77 @@ def status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-# ── before anything is sent: feasible, a plan, a yes ─────────────────────────
-#: The fix for a blocking problem, said after its message.
-_FIX = {
-    "battery_low": "Charge the battery.",
-    "joint_hot": "Let the actuators cool.",
-    "not_armed": "Run the command again once `menlo status` shows it armed.",
-}
-#: What to do instead, when the robot mode does not allow the action.
-_WRONG_MODE = {
-    "stand": "`stand` only runs from DAMP; end a walk with `menlo balance`.",
-    "move": "Run `menlo stand` first.",
-    "walk": "Run `menlo balance` first.",
-}
+# ── before anything is sent: live state, the plan and the facts, a yes ───────
 _NO_STATE = ("not_connected", "no_state", "stale_state")
+#: Said before ``stand`` from MOVE: STAND stiffens to a pose with no balance loop.
+SUPPORT_WARNING = (
+    "[bold yellow]Warning:[/] the robot is in MOVE. STAND has no balance loop: hang the "
+    "robot from its gantry hook or seat it on a stool or bench first, or it tips over."
+)
 
 
 def _name(robot: Robot) -> str:
     return robot.config.name or "the robot"
 
 
-def not_feasible(robot: Robot, check: Preflight) -> NotFeasible:
-    """``check``'s blocking problems as one ``Not feasible:`` message: the robot mode,
-    the reason in plain words, and the fix."""
-    s = check.state
+def live(robot: Robot, action: Action) -> None:
+    """Raise :class:`NotFeasible` when there is no live state to send against: the one
+    thing the command line refuses on. Everything else the robot reports is shown in the
+    plan, for you to judge."""
+    check = robot.preflight(action)
     gone = [p for p in check.blocking if p.code in _NO_STATE]
-    if gone or s is None:
+    if gone or check.state is None:
         why = gone[0].message if gone else "no state"
-        return NotFeasible(
+        raise NotFeasible(
             f"Not feasible: no fresh state from {_name(robot)}: {why}. "
             "Check the link with `menlo status`."
         )
-    posture = (
-        "faulted"
-        if s.faulted
-        else {
-            Mode.DAMP: "not balancing",
-            Mode.STAND: "armed" if check.armed else "not armed",
-            Mode.MOVE: "balancing",
-        }.get(s.mode, "robot mode unknown")
-    )
-    # A latched fault is the whole story: nothing else can be fixed until it clears.
-    problems = [p for p in check.blocking if p.code == "faulted"] or check.blocking
-    wrong = (
-        "stand"
-        if check.action == "stand"
-        else "walk"
-        if check.action == "move" and s.mode is Mode.STAND
-        else "move"
-    )
-    reasons = [
-        _WRONG_MODE[wrong]
-        if p.code == "wrong_mode" and s.mode is not Mode.UNKNOWN
-        else f"{p.message[0].upper()}{p.message[1:]}. {_FIX.get(p.code, '')}".strip()
-        for p in problems
-    ]
-    return NotFeasible(
-        f"Not feasible: {_name(robot)} is in {s.mode.name}, {posture}. " + " ".join(reasons)
-    )
 
 
-def feasible(robot: Robot, action: Action, *, in_move: bool = False) -> None:
-    """Raise :class:`NotFeasible` unless ``robot.preflight(action)`` is ok (and, with
-    ``in_move``, the robot is in MOVE). A robot whose only problem is ``not_armed`` gets
-    ``ARM_TIMEOUT_S`` to arm first: a new session counts the 0.5 s upright hold from its
-    first sample, and the plan should show it armed."""
-    if in_move and robot.get_state().mode is Mode.STAND:
-        raise NotFeasible(f"Not feasible: {_name(robot)} is in STAND. {_WRONG_MODE['walk']}")
-    deadline = time.monotonic() + ARM_TIMEOUT_S
-    check = robot.preflight(action)
+def _see_armed(robot: Robot) -> None:
+    """In STAND, give the session ``ARM_SEEN_S`` to see an armed robot as armed."""
+    deadline = time.monotonic() + ARM_SEEN_S
     while (
-        not check.ok
-        and all(p.code == "not_armed" for p in check.blocking)
+        robot.get_state().mode is Mode.STAND
+        and robot.armed is False
         and time.monotonic() < deadline
     ):
         time.sleep(0.05)
-        check = robot.preflight(action)
-    if not check.ok:
-        raise not_feasible(robot, check)
 
 
-def refused(robot: Robot, exc: NotReadyError) -> NotFeasible | NotReadyError:
-    """A command's own check refused: ``Not feasible:``, as before the plan. A fault that
-    came after the command was sent is reported as it is."""
-    if exc.preflight is None or getattr(exc, "sent", None) is not None:
-        return exc
-    return not_feasible(robot, exc.preflight)
+def facts(robot: Robot) -> list[str]:
+    """What the robot reports, in short: robot mode, armed, faults, active alerts, the
+    hottest joint, the battery, and the state's age when it is stale."""
+    _see_armed(robot)
+    s = robot.get_state()
+    out = [s.mode.name]
+    if s.mode in (Mode.STAND, Mode.MOVE):
+        out.append({True: "armed", False: "not armed", None: "armed unknown"}[robot.armed])
+    faults = fault_names(s) if s.faulted else []
+    out.append(f"faults {', '.join(faults) or ('latched' if s.faulted else 'none')}")
+    alerts = list(dict.fromkeys(a.name for a in s.alerts))
+    out.append(f"alerts {', '.join(alerts) or 'none'}")
+    temps = [(j.temp, j.name or f"joint {i}") for i, j in enumerate(s.joints) if j.temp is not None]
+    if temps:
+        hottest, joint = max(temps)
+        out.append(f"hottest joint {hottest:.0f} C ({joint})")
+    else:
+        out.append("joint temperatures not reported")
+    out.append(f"battery {s.battery.soc_percent:.0f} %" if s.battery else "battery not reported")
+    if s.age_s > MAX_STATE_AGE_S:
+        out.append(f"state {s.age_s:.1f} s old")
+    return out
 
 
 def plan(robot: Robot, doing: str) -> str:
-    """One line: which robot and how it is reached, its state, and what will happen."""
-    s = robot.get_state()
-    now = [s.mode.name + (", faulted" if s.faulted else "")]
-    if s.mode is Mode.STAND:
-        now[0] += {True: ", armed", False: ", not armed", None: ", armed unknown"}[robot.armed]
-    now.append(f"battery {s.battery.soc_percent:.0f} %" if s.battery else "battery not reported")
-    if s.age_s > MAX_STATE_AGE_S:
-        now.append(f"state {s.age_s:.1f} s old")
+    """One line: which robot and how it is reached, its facts, and what will happen."""
     where = f"[bold]{_name(robot)}[/] ({robot.info.transport}, {host(robot)})"
-    return f"{where} · {' · '.join(now)} [bold cyan]→[/] {doing}"
+    return f"{where} · {' · '.join(facts(robot))} [bold cyan]→[/] {doing}"
 
 
 def go_ahead(args: argparse.Namespace, robot: Robot, doing: str) -> bool:
-    """Print the plan and ask ``Proceed? [y/N]``; ``--yes`` answers yes. With no terminal
-    to ask on and no ``--yes``, a :class:`UsageError`."""
+    """Print the plan with the robot's facts and ask ``Proceed? [y/N]``; ``--yes`` answers
+    yes. With no terminal to ask on and no ``--yes``, a :class:`UsageError`."""
     from menlo.cli import _ui
 
     _ui.console.print(plan(robot, doing), soft_wrap=True)
@@ -293,23 +261,42 @@ def go_ahead(args: argparse.Namespace, robot: Robot, doing: str) -> bool:
 # ── menlo stand ──────────────────────────────────────────────────────────────
 def stand(args: argparse.Namespace) -> int:
     with connected(args) as robot:
-        feasible(robot, "stand")
-        if robot.get_state().mode is Mode.STAND:
-            # A new session counts the 0.5 s upright hold from its first sample: give an
-            # armed robot the time to be seen armed before saying it is not.
-            deadline = time.monotonic() + ARM_TIMEOUT_S
-            while robot.armed is False and time.monotonic() < deadline:
-                time.sleep(0.05)
-            armed = "armed" if robot.armed else "not armed"
-            _say(f"{_name(robot)} is already in STAND ({armed}); nothing sent.")
+        live(robot, "stand")
+        mode = robot.get_state().mode
+        if mode is Mode.STAND:
+            _see_armed(robot)
+            if robot.armed is not False:  # armed, or the robot does not report gravity
+                armed = "armed" if robot.armed else "armed unknown"
+                _say(f"{_name(robot)} is already in STAND ({armed}); nothing sent.")
+                return EXIT_OK
+            _say(
+                f"{_name(robot)} is already in STAND (not armed); nothing sent. Waiting for "
+                "the robot to arm (0.5 s upright)..."
+            )
+            try:
+                robot.wait_until(
+                    lambda s: s.mode is Mode.STAND and robot.armed is not False,
+                    timeout=STAND_TIMEOUT_S,
+                )
+            except StateStaleError:
+                raise
+            except WaitTimeoutError as exc:
+                last = exc.last
+                now = last.mode.name if last is not None else "no state"
+                raise WaitTimeoutError(
+                    f"the robot was not armed in STAND within {STAND_TIMEOUT_S:.1f} s (robot "
+                    f"mode {now}): the firmware arms once STAND has been held upright (tilt "
+                    "under 30 deg) for 0.5 s. Check that the robot is upright",
+                    last=last,
+                ) from None
+            _say("[green]Armed[/]: ready to balance, [bold]menlo balance[/]")
             return EXIT_OK
+        if mode is Mode.MOVE:
+            _say(SUPPORT_WARNING)
         if not go_ahead(args, robot, "stand, then wait until armed"):
             return EXIT_CANCELLED
         _say("Standing. Waiting for the robot to arm (0.5 s upright)...")
-        try:  # the robot may have changed while you read the plan: stand() checks again
-            robot.stand(timeout=STAND_TIMEOUT_S)
-        except NotReadyError as exc:
-            raise refused(robot, exc) from None
+        robot.stand(timeout=STAND_TIMEOUT_S)
         _say("[green]Armed[/]: ready to balance, [bold]menlo balance[/]")
     return EXIT_OK
 
@@ -324,7 +311,7 @@ def walk(args: argparse.Namespace) -> int:
     if not 0 < args.duration <= MAX_WALK_S:
         raise UsageError(f"--duration must be more than 0 and at most {MAX_WALK_S:.0f} s")
     with connected(args) as robot:
-        feasible(robot, "move", in_move=True)
+        live(robot, "move")
         going = Velocity(*speeds).clamped(robot.limits)
         parts = [
             f"{label} {sent:.2f} {unit}" + (f" (asked {asked:.2f})" if sent != asked else "")
@@ -341,12 +328,12 @@ def walk(args: argparse.Namespace) -> int:
             return EXIT_CANCELLED
         _say("Walking. Ctrl-C ends the walk.")
         started = time.monotonic()
-        try:  # the robot may have changed while you read the plan: set_velocity checks again
+        try:
             sent = robot.set_velocity(
                 *speeds, duration=args.duration, wait=True, timeout=ARM_TIMEOUT_S
             )
-        except NotReadyError as exc:  # the check refused: nothing was sent
-            raise refused(robot, exc) from None
+        except NotReadyError:  # no live state (nothing sent), or a fault ended the walk
+            raise
         except BaseException:
             with contextlib.suppress(MenloError):
                 robot.balance()
@@ -372,6 +359,12 @@ def walk(args: argparse.Namespace) -> int:
                 action="move",
                 preflight=robot.preflight("move"),
             )
+        if s.mode is not Mode.MOVE:
+            _say(
+                f"Sent the walk, but the robot reports {s.mode.name}: the firmware walks in "
+                "MOVE only. Run `menlo balance` first."
+            )
+            return EXIT_NOT_READY
         _say(f"Walk done. Robot mode {s.mode.name}, balancing in place.")
     return EXIT_OK
 
@@ -379,19 +372,12 @@ def walk(args: argparse.Namespace) -> int:
 # ── menlo balance ────────────────────────────────────────────────────────────
 def balance(args: argparse.Namespace) -> int:
     with connected(args) as robot:
-        check = robot.preflight("move")
-        stale = [p for p in check.blocking if p.code in ("stale_state", "not_connected")]
-        if stale:
-            raise _refuse(check)
+        live(robot, "move")
         if robot.get_state().mode is not Mode.MOVE:
-            feasible(robot, "move")  # from STAND once armed; DAMP needs `menlo stand`
             doing = "balance: MOVE at zero velocity, the walking policy balances the robot"
             if not go_ahead(args, robot, doing):
                 return EXIT_CANCELLED
-            try:  # the robot may have changed while you read the plan: balance() checks again
-                robot.balance(timeout=ARM_TIMEOUT_S)  # returns once MOVE is reported
-            except NotReadyError as exc:
-                raise refused(robot, exc) from None
+            robot.balance(timeout=ARM_TIMEOUT_S)  # returns once MOVE is reported
             _say(
                 "[green]Balancing[/] in MOVE: ready to walk, e.g. "
                 "[bold]menlo walk --vx 0.3 --duration 3[/]"
@@ -417,8 +403,9 @@ def damp(args: argparse.Namespace) -> int:
     with connected(args) as robot:
         doing = (
             "damp: every actuator stops holding its position and a standing robot falls, "
-            "so the robot must be supported. Not an emergency stop: use the E-Stop in "
-            "Asimov Manager, or cut power at the battery unit."
+            "so hang the robot from its gantry hook or seat it on a stool or bench first. "
+            "Not an emergency stop: use the E-Stop in Asimov Manager, or cut power at the "
+            "battery unit."
         )
         if not go_ahead(args, robot, doing):
             return EXIT_CANCELLED
@@ -435,11 +422,10 @@ def damp(args: argparse.Namespace) -> int:
 __all__ = [
     "balance",
     "damp",
-    "feasible",
+    "facts",
     "go_ahead",
-    "not_feasible",
+    "live",
     "plan",
-    "refused",
     "render",
     "snapshot",
     "stand",

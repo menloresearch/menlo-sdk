@@ -3,7 +3,7 @@
     from menlo.asimov import Robot
 
     with Robot().connect() as robot:                 # the saved robot (`menlo setup`)
-        robot.stand()                                # checks first; returns once armed
+        robot.stand()                                # DAMP -> STAND; returns once armed
         robot.balance()                              # MOVE: balancing in place
         robot.set_velocity(vx=0.25, duration=4.0)    # walk 4 s, then zero velocity
         robot.balance()                              # stays in MOVE, balancing

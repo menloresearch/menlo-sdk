@@ -59,7 +59,7 @@ class FakeEdge:
     armed; a velocity or trajectory while DAMPed is dropped (the edge's DAMP gate); a
     trajectory in MOVE sets the reported joint positions to its targets (after the
     firmware's ankle coupling); and a latched
-    fault (``fault()``, or ``fault_damp()`` for robot mode FAULT_DAMP) holds the robot limp
+    fault (``fault()``, or ``fault_damp()`` for robot mode FAULT_DAMP) holds the robot in DAMP
     and ignores STAND and MOVE.
     """
 
@@ -142,7 +142,7 @@ class FakeEdge:
         with self._fw_lock:
             drive = c.HasField("policy") or c.HasField("all_trajectory")
             if self.state.error_flags or self._mode() == FAULT_DAMP:
-                return  # latched: limp until the firmware restarts
+                return  # latched: DAMP until the firmware restarts
             if drive:
                 mode = self._mode()
                 if mode == pb.CONTROL_MODE_DAMP:

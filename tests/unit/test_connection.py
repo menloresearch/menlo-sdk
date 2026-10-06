@@ -17,6 +17,7 @@ from menlo.asimov import (
     LiveKitConfig,
     ManagerConfig,
     NotConnectedError,
+    NotReadyError,
     Robot,
     UdpConfig,
 )
@@ -394,7 +395,10 @@ def test_connect_without_requiring_state_returns_before_the_robot_reports(edge):
         frame = cfg.clients[-1].push_frame(1)
         assert robot.camera.latest() is frame
         with pytest.raises(NotConnectedError, match="has not reported state"):
-            robot.set_velocity(vx=0.1, wait=False)
+            robot.damp(wait=False)
+        with pytest.raises(NotReadyError) as info:  # a checked verb waits for the first sample
+            robot.set_velocity(vx=0.1, wait=False, timeout=0.05)
+        assert info.value.has("no_state")
     finally:
         robot.close()
 

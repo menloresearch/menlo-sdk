@@ -1,15 +1,18 @@
 """Drive the robot from the keyboard, in small steps that stop when you let go.
 
   w / s   forward / back        a / d   left / right        q / e   turn left / right
-  space   balance in place      t       stand (from DAMP)   b       damp (asks first)
+  space   balance in place      t       stand               b       damp (asks first)
   x       quit (Ctrl-C also quits)
 
 t then space brings the robot from DAMP to STAND, then to MOVE. Each movement key sends a
 short bounded hold (HOLD_S), so the robot stops when you release the key. Holding a key down
-repeats it. The SDK checks the robot before each movement and sends nothing when it is not
-ready; the status line says why. The robot must be on its feet, hanging from its gantry
-hook, with clear floor around it. On exit the script sends zero velocity and closes the
-connection.
+repeats it. Every key is sent in any robot mode and the firmware decides: a movement in DAMP
+does nothing, and the status line says what the robot reports. t from MOVE asks first: STAND
+has no balance loop, so the robot must hang from its gantry hook or sit on a stool or bench.
+guard(robot), from guard.py, stops the script before the first key when the robot reports
+what your rule will not drive through. The robot must be on its feet, hanging from its
+gantry hook, with clear floor around it. On exit the script sends zero velocity and closes
+the connection.
 Run in a terminal: python examples/keyboard.py
 """
 
@@ -18,6 +21,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 
+from guard import guard
 from menlo.asimov import Mode, NotReadyError, Robot, WaitTimeoutError
 
 VX = 0.3  # m/s forward and back; the firmware caps it at 0.4 m/s
@@ -25,7 +29,7 @@ VY = 0.3  # m/s left and right; the firmware caps it at 0.4 m/s
 VYAW = 0.6  # rad/s turning; the firmware caps it at 0.8 rad/s
 HOLD_S = 0.3  # how long one key press keeps the robot moving
 TICK_S = 0.1  # how often the status line is refreshed
-CONFIRM_TIMEOUT_S = 10.0  # a damp question not answered in time is a no
+CONFIRM_TIMEOUT_S = 10.0  # a damp or stand question not answered in time is a no
 
 MOVES = {
     "w": (VX, 0.0, 0.0),
@@ -107,11 +111,11 @@ def balance(robot: Robot) -> str:
     """In MOVE, zero velocity; from STAND, into MOVE. The robot balances in place."""
     try:
         robot.balance()  # from STAND, returns once the robot reports MOVE
-    except NotReadyError as exc:  # refused (DAMP, a fault, a low battery) or faulted after sending
-        hint = ", press t to stand" if robot.get_state().mode is Mode.DAMP else ""
-        return f"not ready to balance: {exc.problems[0].code}{hint}"
+    except NotReadyError as exc:  # no live state (nothing sent), or a latched fault
+        return f"balance: {exc.problems[0].code if exc.problems else exc}"
     except WaitTimeoutError:
-        return "sent balance, but the robot did not report MOVE in time"
+        hint = ", press t to stand" if robot.get_state().mode is Mode.DAMP else ""
+        return f"sent balance, but the robot reports {robot.get_state().mode.name}{hint}"
     return "balance in place"
 
 
@@ -121,7 +125,7 @@ def confirm_and_damp(robot: Robot, next_key: NextKey) -> str:
     print(
         "\nDamp: every actuator stops holding its position and a standing robot falls. "
         "The robot must be "
-        "hanging from its gantry hook or seated on a bench. Damp now? [y/N] ",
+        "hanging from its gantry hook or seated on a stool or bench. Damp now? [y/N] ",
         end="",
         flush=True,
     )
@@ -133,32 +137,43 @@ def confirm_and_damp(robot: Robot, next_key: NextKey) -> str:
     return "damped"
 
 
-def stand(robot: Robot) -> str:
-    """STAND, when the robot is ready for it. Returns once the robot is armed."""
+def stand(robot: Robot, next_key: NextKey) -> str:
+    """STAND from any robot mode; from MOVE, only on y. Returns once the robot is armed."""
+    if robot.get_state().mode is Mode.MOVE:
+        print(
+            "\nStand: STAND has no balance loop, so a free-standing robot tips over. Is the "
+            "robot on its gantry hook or seated on a stool or bench? [y/N] ",
+            end="",
+            flush=True,
+        )
+        answer = next_key(CONFIRM_TIMEOUT_S)
+        print(answer if answer and answer.isprintable() else "")
+        if answer not in ("y", "Y"):
+            return "stand cancelled"
     try:
         robot.stand()
-    except NotReadyError as exc:  # refused (MOVE, a fault, a low battery) or faulted after sending
-        return f"not ready to stand: {exc.problems[0].code}"
+    except NotReadyError as exc:  # no live state (nothing sent), or a latched fault
+        return f"stand: {exc.problems[0].code if exc.problems else exc}"
     except WaitTimeoutError:
         return "stood, but not armed in time"
     return "standing, armed"
 
 
 def move(robot: Robot, key: str) -> str:
-    """One bounded hold for a movement key, when the robot is ready for it."""
+    """One bounded hold for a movement key, sent in any robot mode."""
     vx, vy, vyaw = MOVES[key]
     try:
         # wait=False: the loop goes on reading keys while the hold runs out.
         robot.set_velocity(vx=vx, vy=vy, vyaw=vyaw, duration=HOLD_S, wait=False)
-    except NotReadyError as exc:  # nothing was sent
-        hints = {Mode.DAMP: ", press t to stand", Mode.STAND: ", press space to balance"}
-        hint = hints.get(robot.get_state().mode, "")
-        return f"not ready to move: {exc.problems[0].code}{hint}"
-    return f"{key}: vx {vx:+.2f} vy {vy:+.2f} vyaw {vyaw:+.2f}"
+    except NotReadyError as exc:  # no live state: nothing was sent
+        return f"{key}: {exc.problems[0].code}"
+    hint = ", in DAMP: press t to stand" if robot.get_state().mode is Mode.DAMP else ""
+    return f"{key}: vx {vx:+.2f} vy {vy:+.2f} vyaw {vyaw:+.2f}{hint}"
 
 
 def main(next_key: NextKey) -> None:
     with Robot().connect() as robot:
+        guard(robot)  # your rule, in guard.py; delete this line to drive without it
         print(HELP)
         last = "ready"
         try:
@@ -175,7 +190,7 @@ def main(next_key: NextKey) -> None:
                 elif key == " ":
                     last = balance(robot)
                 elif key == "t":
-                    last = stand(robot)
+                    last = stand(robot, next_key)
                 elif key == "b":
                     last = confirm_and_damp(robot, next_key)
             # endregion

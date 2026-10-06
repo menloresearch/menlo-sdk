@@ -136,7 +136,7 @@ def test_a_fault_damp_during_a_waited_walk_raises_rather_than_returns(edge, robo
     assert len(edge.received) == n, "nothing more went out after the fault"
 
 
-def test_balance_after_a_fault_damp_ends_a_raw_stream_refuses_and_sends_nothing(edge, robot):
+def test_balance_after_a_fault_damp_ends_a_raw_stream_sends_zero_and_raises_the_fault(edge, robot):
     put_in(robot, edge, "move")
     robot.set_velocity(vx=0.2, hold=False)  # one raw packet: nothing is latched
     edge.set_mode("damp")
@@ -144,11 +144,10 @@ def test_balance_after_a_fault_damp_ends_a_raw_stream_refuses_and_sends_nothing(
     a.id, a.severity = 7, 0  # FALL_DETECTED, CRITICAL: a fault-DAMP
     assert edge.wait_for(lambda _: robot.get_state().faulted, 2.0)
     time.sleep(0.1)
-    n = len(edge.received)
-    with pytest.raises(RobotFaultedError):
+    with pytest.raises(RobotFaultedError) as info:
         robot.balance()
-    time.sleep(0.2)
-    assert len(edge.received) == n, "no zero velocity went to the fault-DAMPed robot"
+    assert info.value.sent is not None and info.value.sent.command == Velocity()
+    assert edge.wait_for(lambda _: edge.velocities()[-1] == (0.0, 0.0, 0.0), 2.0)
 
 
 def test_damp_from_a_state_callback_sends_and_does_not_stall_the_state(edge, robot):
@@ -411,17 +410,15 @@ def mem():
 
 @pytest.mark.parametrize("hold", [True, False])
 @pytest.mark.parametrize("mode", [Mode.DAMP, Mode.STAND])
-def test_balance_outside_move_is_checked_whatever_velocity_was_sent(mem, hold, mode):
+def test_balance_outside_move_sends_zero_whatever_velocity_was_sent(mem, hold, mode):
     robot, transport = mem
     robot.set_velocity(vx=0.2, hold=hold, wait=False)
-    low = Battery(40, 0, 5, 30, BatteryProtection(0))  # 5 %: too low to walk
+    low = Battery(40, 0, 5, 30, BatteryProtection(0))  # 5 %: the SDK does not guard on it
     transport.emit(_mem_sample(mode, sequence=11, battery=low))
     n = len(transport.commands)
-    with pytest.raises(NotReadyError):
-        robot.balance(timeout=0)
-    assert len(transport.commands) == n, "no MOVE-at-zero went to a robot outside MOVE"
+    robot.balance(wait=False)
+    assert transport.commands[n:] == [Velocity()], "one zero velocity, in any robot mode"
     assert robot._latched is None, "and the old velocity is not re-sent"
-    assert robot._streamed, "but close() still owes the robot its zero"
 
 
 def test_set_joints_with_bad_gains_leaves_the_held_velocity_for_close_to_zero(mem):
@@ -492,6 +489,54 @@ def test_a_waited_zero_velocity_returns_when_another_verb_takes_over(mem):
     assert time.monotonic() - started < 2.0
 
 
+def test_a_waited_velocity_sent_into_a_reported_fault_raises_it_and_sends_no_zero():
+    transport = _MemoryTransport()
+    transport.state = _mem_sample(Mode.FAULT_DAMP, error_flags=1)  # fresh, before the call
+    with Robot(transport) as robot:
+        robot.open()
+        with pytest.raises(RobotFaultedError) as caught:
+            robot.set_velocity(vx=0.2, duration=0.01)
+        assert caught.value.sent is not None
+        assert caught.value.sent.command == Velocity(0.2, 0.0, 0.0), "this command's Sent"
+        assert robot._latched is None, "the hold ended when it began"
+        # The next sample comes after the hold's deadline and any keepalive tick.
+        transport.emit(_mem_sample(Mode.FAULT_DAMP, sequence=11, error_flags=1))
+        assert transport.commands == [Velocity(0.2, 0.0, 0.0)], "sent once, and no zero"
+
+
+def test_a_later_hold_does_not_erase_the_fault_that_ended_an_earlier_one(mem):
+    robot, transport = mem
+    original = robot._await_hold
+    entered, release = threading.Event(), threading.Event()
+
+    def paused(done, duration, sent) -> None:
+        entered.set()
+        release.wait(5.0)
+        original(done, duration, sent)
+
+    robot._await_hold = paused
+    results: list[object] = []
+
+    def first() -> None:
+        try:
+            results.append(robot.set_velocity(vx=0.2, duration=5.0))
+        except RobotFaultedError as exc:
+            results.append(exc)
+
+    caller = threading.Thread(target=first)
+    caller.start()
+    try:
+        assert entered.wait(5.0)
+        transport.emit(_mem_sample(Mode.FAULT_DAMP, sequence=11, error_flags=1))
+        robot.set_velocity(vx=0.1, duration=1.0, wait=False)  # a second hold, allowed
+        transport.emit(_mem_sample(Mode.FAULT_DAMP, sequence=12, error_flags=1))
+    finally:
+        release.set()
+        caller.join(5.0)
+    assert len(results) == 1 and isinstance(results[0], RobotFaultedError), results
+    assert results[0].sent is not None and results[0].sent.command == Velocity(0.2, 0.0, 0.0)
+
+
 def test_a_waited_hold_whose_keepalive_stalls_raises_and_sends_the_zero(mem):
     robot, transport = mem
     stalled, release = threading.Event(), threading.Event()
@@ -543,9 +588,12 @@ def test_balance_that_refuses_after_a_velocity_leaves_close_its_zero(edge, robot
         robot.set_velocity(vx=0.3, hold=False)
     edge.set_mode("damp")  # another controller's DAMP, no fault
     assert edge.wait_for(lambda _: robot.get_state().mode is Mode.DAMP, 2.0)
+    edge.pushing = False  # and then no live state: the one refusal
+    time.sleep(0.7)
     n = len(edge.received)
-    with pytest.raises(NotReadyError):
-        robot.balance()
+    with pytest.raises(NotReadyError) as info:
+        robot.balance(timeout=0.1)
+    assert info.value.has("stale_state")
     assert len(edge.received) == n, "the refusal sent nothing"
     robot.close()
     assert edge.wait_for(lambda r: len(r) > n, 2.0)
@@ -712,3 +760,50 @@ def test_a_verb_in_a_state_callback_while_recording_still_marks_the_callback(mem
     transport.emit(_mem_sample(Mode.MOVE, sequence=11))
     robot.on_state = None
     assert len(after) == 1 and isinstance(after[0], RuntimeError), after
+
+
+class _Silent(_MemoryTransport):
+    def open(self) -> None:  # the robot has not reported when the session opens
+        pass
+
+
+def test_a_checked_verb_waits_for_the_first_sample_of_a_session_opened_without_state():
+    transport = _Silent()
+    with Robot(transport) as robot:
+        robot.open(require_state=False)
+        original = robot.preflight
+
+        def first_check_then_sample(action="move"):
+            check = original(action)
+            if check.has("no_state"):  # the verb is waiting: the first sample arrives now
+                transport.emit(_mem_sample(Mode.DAMP, received_at=time.monotonic()))
+            return check
+
+        robot.preflight = first_check_then_sample
+        sent = robot.stand(wait=False, timeout=5.0)
+        assert sent.sequence == 1 and len(transport.commands) == 1, "sent once the robot reported"
+
+
+def test_a_checked_verb_without_a_first_sample_raises_no_state_with_nothing_sent():
+    transport = _Silent()
+    with Robot(transport) as robot:
+        robot.open(require_state=False)
+        with pytest.raises(NotReadyError) as info:
+            robot.set_velocity(vx=0.1, wait=False, timeout=0.05)
+        assert info.value.has("no_state") and transport.commands == []
+
+
+@pytest.mark.parametrize("end", ["closed", "lost"])
+def test_a_checked_verb_on_an_ended_session_raises_its_own_error_at_once(mem, end):
+    robot, transport = mem
+    if end == "closed":
+        robot.close()
+    else:
+        robot._mark_link_lost(LinkLostError("the link went quiet"))
+    n = len(transport.commands)
+    expected = NotConnectedError if end == "closed" else LinkLostError
+    started = time.monotonic()
+    with pytest.raises(expected):
+        robot.stand(wait=False, timeout=5.0)
+    assert time.monotonic() - started < 1.0, "at once, not after the timeout"
+    assert len(transport.commands) == n

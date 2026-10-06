@@ -1,23 +1,28 @@
 """Put the robot in STAND: the actuators hold a standing pose, with no balancing.
 
-The robot must hang from its gantry hook with both feet on the floor. stand() returns once
-the robot is in STAND and armed. Sends STAND and nothing else. The robot balances only in
-MOVE: run balance.py next.
+Works from any robot mode. From DAMP, the robot must hang from its gantry hook with both feet
+on the floor. From MOVE, hang it from its gantry hook or seat it on a stool or bench first:
+STAND has no balance loop, and a free-standing robot tips over. stand() returns once the
+robot is in STAND and armed. guard(robot), from guard.py, stops the script first when the
+robot reports what your rule will not stand it with. Sends STAND and nothing else. The robot
+balances only in MOVE: run balance.py next.
 Run: python examples/stand.py
 """
 
 import sys
 
+from guard import guard
 from menlo.asimov import NotReadyError, Robot, WaitTimeoutError
 
 with Robot().connect() as robot:
     # region main
+    guard(robot)  # your rule, in guard.py; delete this line to stand without it
     try:
-        # Checks the robot first. Returns once it reports STAND and has been upright for
-        # 0.5 s (armed): the firmware accepts MOVE only after that.
+        # Returns once the robot reports STAND and has been upright for 0.5 s (armed): the
+        # firmware enters MOVE only after that.
         robot.stand()
-    except (NotReadyError, WaitTimeoutError) as exc:
-        print(exc)  # what is wrong and what fixes it
+    except (NotReadyError, WaitTimeoutError) as exc:  # no live state, a fault, or not armed
+        print(exc)  # what the robot reports and what to do
         sys.exit(1)
     print(f"robot mode {robot.get_state().mode.name}, armed {robot.armed}")
     # endregion

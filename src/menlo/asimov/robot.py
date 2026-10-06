@@ -2,16 +2,16 @@
 
 ::
 
-    from menlo.asimov import NotReadyError, Robot
+    from menlo.asimov import Robot
 
     with Robot().connect() as robot:               # the saved default robot
-        try:
-            robot.stand()                          # DAMP -> STAND; returns once armed
-            robot.balance()                        # STAND -> MOVE: balancing in place
-            robot.set_velocity(vx=0.25, duration=4.0)  # walk, then zero velocity
-            robot.balance()                        # stay in MOVE, balancing in place
-        except NotReadyError as exc:               # nothing sent, or a fault ended it
-            print(exc)                             # every problem, and what fixes it
+        s = robot.get_state()                      # your guard reads the facts
+        if s.faulted or (s.battery and s.battery.soc_percent < 20):
+            raise SystemExit(f"not driving: robot mode {s.mode.name}")
+        robot.stand()                              # DAMP -> STAND; returns once armed
+        robot.balance()                            # STAND -> MOVE: balancing in place
+        robot.set_velocity(vx=0.25, duration=4.0)  # walk, then zero velocity
+        robot.balance()                            # stay in MOVE, balancing in place
         # The robot stays in MOVE at zero velocity, where the walking policy keeps
         # balancing it: that is how a free-standing biped stands still. Do not ask for
         # STAND here: STAND stiffens to a fixed pose with no balance loop, and a robot
@@ -21,13 +21,17 @@ The verbs are the wire's verbs (``stand``, ``balance``, ``set_velocity``, ``damp
 ``trajectory``) and each returns a :class:`~menlo.asimov.Sent`. Three questions are kept
 apart on purpose:
 
-* **Can the robot do it now?** ``stand()``, ``set_velocity()``, ``trajectory()`` and
-  ``set_joints()`` check the robot's latest state first (``robot.preflight(action)``, which a
-  script may also call itself), and so does ``balance()`` from STAND. A problem that
-  clears on its own, such as a robot that has not armed, is waited out up to the
-  command's ``timeout``; any other raises :class:`NotReadyError` (a latched fault:
-  :class:`RobotFaultedError`) and nothing is sent. ``balance()`` in MOVE and ``damp()``
-  are never checked.
+* **Should the robot do it now?** That is your call. Safety is the firmware's job, command
+  handling is Asimov Edge's, and a guard (a joint too hot, a battery too low, a fault you
+  will not drive through) is yours: read ``robot.get_state()`` and ``robot.armed``, or
+  ``robot.preflight(action)`` for the same facts as a list. The SDK does not refuse a
+  command because of what the robot reports. It refuses only without live state:
+  ``stand()``, ``set_velocity()``, ``trajectory()``, ``set_joints()`` and ``balance()``
+  from outside MOVE wait up to their ``timeout`` for a fresh sample and raise
+  :class:`NotReadyError` with nothing sent when none comes. A closed Robot raises
+  :class:`NotConnectedError`, a lost link :class:`LinkLostError` and a robot on another
+  protocol version :class:`ProtocolMismatchError`, at once. ``balance()`` in MOVE and
+  ``damp()`` are sent at once.
 * **Did it take effect?** ``stand()``, ``balance()`` and ``damp()`` wait for the robot to
   report the robot mode they ask for, and ``set_velocity()`` for its ``duration``
   (``wait=False`` returns at once); ``robot.wait_until(pred)`` waits for anything else.
@@ -38,11 +42,11 @@ apart on purpose:
 
 Behaviours worth knowing before the first script:
 
-* **Armed.** The firmware reports STAND at once, but accepts MOVE only once STAND has been
-  held upright for 0.5 s (armed). ``stand()`` returns once the robot is armed, and
-  ``balance()`` waits for it.
-* **Only ``balance()`` leaves STAND for MOVE.** ``set_velocity()`` works in MOVE only:
-  from STAND it raises :class:`NotReadyError` (``wrong_mode``) and sends nothing.
+* **Armed.** The firmware reports STAND at once, but enters MOVE only once STAND has been
+  held upright for 0.5 s (armed). ``stand()`` returns once the robot is armed. A velocity
+  (``balance()`` or ``set_velocity()``) sent in STAND puts an armed robot in MOVE; one
+  that arrives before the robot arms leaves it in STAND. In DAMP the firmware does not enter MOVE:
+  ``balance()`` says so (``stand()`` first).
 * **A velocity is held.** ``set_velocity`` latches and a background thread re-sends it
   at 10 Hz. On ``udp`` and ``hybrid``, Asimov Edge zeroes a velocity 2 s after the last one
   it received; on ``livekit`` it stops a held velocity when the SDK sends zero or leaves
@@ -58,8 +62,8 @@ Behaviours worth knowing before the first script:
   the walking policy, balancing in place. STAND is a different thing: it stiffens every
   joint to a fixed pose and runs **no balance loop**, so a free-standing biped asked to
   stiffen after walking tips over. ``stand()`` is for bringing a robot out of DAMP, or for
-  one hanging from its gantry hook or seated on a bench, never for finishing a walk; from
-  MOVE it raises :class:`NotReadyError` and sends nothing.
+  one hanging from its gantry hook or seated on a stool or bench, never for finishing a
+  walk. From MOVE it sends STAND as asked: support the robot first.
 * **Your own setpoint loop owns the robot; ``set_joints()`` does not.** The firmware obeys
   whichever command arrived last. A ``set_joints()`` is fenced: any verb from any thread
   (``damp()``, ``stand()``, a velocity) bumps the generation and the set_joints thread stops
@@ -155,20 +159,20 @@ DEFAULT_LINK_TIMEOUT_S = 2.0
 #: How long a firmware alert block is carried forward over frames that omit it (the firmware
 #: sends it every 20th frame, 100 ms apart at 200 Hz).
 ALERT_HOLD_S = 0.3
-#: How long set_velocity(), trajectory() and set_joints() wait, by default, for a problem that
-#: clears on its own (``TRANSIENT``) before they raise NotReadyError.
+#: How long set_velocity() and set_joints() wait, by default, for live state (``TRANSIENT``)
+#: before they raise NotReadyError.
 READY_TIMEOUT_S = 5.0
-#: How long stand() may take by default, from its check to an armed STAND: the firmware
+#: How long stand() may take by default, from the call to an armed STAND: the firmware
 #: reports STAND at once and arms after 0.5 s upright.
 STAND_TIMEOUT_S = 10.0
 #: How long damp() waits by default for DAMP to be reported.
 DAMP_TIMEOUT_S = 5.0
-#: How long balance() may take by default from STAND, from its check to MOVE reported.
+#: How long balance() may take by default from STAND, from the call to MOVE reported.
 BALANCE_TIMEOUT_S = 5.0
 #: A STAND sent this recently may still be on its way back (one livekit sample is 0.1 s), so a
-#: command that finds the robot still in DAMP waits for it instead of refusing at once.
+#: command that finds the robot still in DAMP waits for the report before it sends.
 STAND_REPORT_S = 1.0
-#: How often a command re-reads the state while it waits to be ready.
+#: How often a command re-reads the state while it waits for live state.
 READY_POLL_S = 0.02
 #: Robot modes in which a latched fault means the robot is down and a wait cannot succeed.
 _DOWN = (Mode.DAMP, Mode.FAULT_DAMP, Mode.UNKNOWN)
@@ -242,9 +246,13 @@ class Robot:
         self._latched: Velocity | None = None
         self._latch_deadline: float | None = None
         self._hold_done: threading.Event | None = None  # set when a bounded hold has ended
-        # The bounded hold a fault-DAMP ended, and the sample that showed it: the caller
-        # blocked in set_velocity(wait=True) on that hold raises instead of returning.
-        self._faulted_hold: tuple[threading.Event, State] | None = None
+        # Each bounded hold a fault-DAMP ended, by its event, with the sample that showed
+        # it: the caller blocked in set_velocity(wait=True) on that hold raises instead of
+        # returning. One entry per hold, so a later hold never erases an earlier one's
+        # reason; an entry goes when its waiter takes it or nobody holds its event.
+        self._faulted_holds: weakref.WeakKeyDictionary[threading.Event, State] = (
+            weakref.WeakKeyDictionary()
+        )
         # The last velocity went out once (hold=False) and was not zero: close() zeroes it.
         self._streamed = False
         self._generation = 0
@@ -550,8 +558,8 @@ class Robot:
             return NotConnectedError("not connected: no state received")
         return NotConnectedError(
             "the robot has not reported state (this session did not wait for it: "
-            "require_state=False). Media works now; robot.get_state(), robot.info and the motion "
-            "verbs need the firmware's state stream"
+            "require_state=False). Media works now; robot.get_state(), robot.info and damp() "
+            "need the firmware's state stream"
         )
 
     def _only_from[**P](self, tx: Transport, handler: Callable[P, None]) -> Callable[P, None]:
@@ -681,7 +689,8 @@ class Robot:
         30 degrees) for 0.5 s since STAND began; ``False`` in DAMP and before that; ``None``
         with no state, in an unknown robot mode, or in STAND when the robot reports no
         gravity vector or the Robot is closed. A velocity sent before the robot is armed is
-        neither refused nor reported: the firmware holds it in STAND until it arms."""
+        neither refused nor reported: the robot stays in STAND. A held velocity is re-sent,
+        so the robot enters MOVE once it arms; a one-shot ``balance()`` is not."""
         s = self._state
         if s is None or self._closed or self._handshake_error is not None:
             return None
@@ -694,12 +703,15 @@ class Robot:
         return False if s.mode in (Mode.DAMP, Mode.FAULT_DAMP) else None
 
     def preflight(self, action: Action = "move") -> Preflight:
-        """Check the robot's latest state for ``action`` (``"stand"``, ``"move"`` for
-        ``set_velocity``, or ``"trajectory"`` for ``trajectory``/``set_joints``). Sends nothing,
-        never waits and never raises for a robot condition: every reason not to go ahead is
-        a :class:`Problem` in the result. The commands run the same check themselves; this
-        is for a script or a display that wants to decide. See
-        :mod:`menlo.asimov._preflight` for the codes."""
+        """Report what the robot's latest state says about ``action`` (``"stand"``,
+        ``"move"`` for ``balance``/``set_velocity``, or ``"trajectory"`` for
+        ``trajectory``/``set_joints``). Sends nothing, never waits and never raises for a
+        robot condition. Information: blocking problems are the ones a command refuses on
+        (``no_state`` and ``stale_state`` after its ``timeout``, with :class:`NotReadyError`;
+        for ``not_connected`` a command raises :class:`NotConnectedError`,
+        :class:`LinkLostError` or :class:`ProtocolMismatchError` at once); the others
+        (``faulted``, ``alerts``, ``not_armed``) are facts, and nothing in the SDK acts on
+        them. See :mod:`menlo.asimov._preflight` for the codes."""
         no_state: Problem | None = None
         if self._closed:
             no_state = Problem("not_connected", "this Robot is not connected", True)
@@ -711,41 +723,38 @@ class Robot:
         return _evaluate_preflight(action, s, armed=self.armed, no_state=no_state)
 
     def _usable(self) -> None:
-        """Raise what every verb raises on a session that cannot send."""
+        """Raise what a command raises, at once, on a session that cannot send:
+        :class:`NotConnectedError` for a closed Robot, the :class:`LinkLostError` for a lost
+        link, the :class:`ProtocolMismatchError` for a robot this SDK cannot talk to. A
+        session that has not heard the robot is none of these: the command waits for its
+        first sample."""
         if self._closed:
             raise NotConnectedError("this Robot is closed")
         if self._link_lost is not None:
             raise self._link_lost
-        if self._info is None or self._handshake_error is not None:
-            raise self._no_state()
+        if self._handshake_error is not None:
+            raise self._handshake_error
 
-    def _ready(self, action: Action, timeout: float, *, in_move: bool = False) -> Preflight:
-        """The check a motion command runs before it sends. Returns the passing check at
-        once when the robot is ready; waits up to ``timeout`` while every blocking problem
-        is one that clears on its own; raises :class:`RobotFaultedError` for a latched
-        fault and :class:`NotReadyError` for anything else, and then nothing was sent.
-        ``in_move`` also refuses STAND: the command works in MOVE only. From a state
+    def _ready(self, action: Action, timeout: float) -> Preflight:
+        """The one check a command runs before it sends: is there live state to send
+        against? Returns at once when there is; waits up to ``timeout`` for a sample (and,
+        for ``move`` and ``trajectory``, for the report of a STAND sent moments ago); raises
+        :class:`NotReadyError` past it, and then nothing was sent. A closed Robot, a lost
+        link or a protocol mismatch raises its own error at once. What the robot reports
+        (a fault, an alert, a hot joint, the robot mode) never refuses here. From a state
         callback it checks once: waiting there would hold up the state it waits for."""
         deadline = time.monotonic() + (0.0 if _in_callback() else timeout)
         while True:
             self._usable()
             check = self.preflight(action)
-            if in_move and check.state is not None and check.state.mode is Mode.STAND:
-                check = _in_move_only(check)
-            if check.ok:
+            pending = action != "stand" and self._stand_pending()
+            if check.ok and not pending:
                 return check
-            if check.has("faulted"):
-                assert check.state is not None
-                raise RobotFaultedError(
-                    check.explain(), state=check.state, action=action, preflight=check
-                )
-            waiting = all(
-                p.code in TRANSIENT or (p.code == "wrong_mode" and self._stand_pending())
-                for p in check.blocking
-            )
-            if not waiting:
+            if not all(p.code in TRANSIENT for p in check.blocking):
                 raise NotReadyError(check.explain(), action=action, preflight=check)
             if time.monotonic() >= deadline:
+                if check.ok:
+                    return check  # the STAND report did not come: send anyway
                 raise NotReadyError(
                     f"{check.explain()} (waited {timeout:.1f} s)", action=action, preflight=check
                 )
@@ -753,7 +762,7 @@ class Robot:
 
     def _stand_pending(self) -> bool:
         """A STAND went out moments ago and the robot still reports DAMP: the report is on
-        its way, so a command waits for it rather than refusing."""
+        its way, so a command waits for it before it sends."""
         last, s = self._last_mode, self._state
         return (
             last is not None
@@ -775,23 +784,25 @@ class Robot:
         hold: bool = True,
         timeout: float | None = None,
     ) -> Sent:
-        """Walk in MOVE: ``vx`` forward, ``vy`` left (m/s), ``vyaw`` counter-clockwise
+        """Walk: ``vx`` forward, ``vy`` left (m/s), ``vyaw`` counter-clockwise
         (rad/s). Held and re-sent at 10 Hz until another verb, or until ``duration``
         seconds pass (then zero velocity is sent and the robot balances in place). Clamped
         to ``limits``; the returned ``Sent.command`` is what actually went out and
         ``Sent.clamped`` says whether it differs from what you asked.
 
-        The robot must be in MOVE: from STAND this raises :class:`NotReadyError`
-        (``wrong_mode``: ``balance()`` it first), from DAMP the same (``stand()`` it
-        first), and nothing is sent. The rest of ``preflight("move")`` is checked too: a
-        problem that clears on its own (``stale_state``) is waited out up to ``timeout``
-        seconds (default 5 s); any other raises :class:`NotReadyError`
-        (:class:`RobotFaultedError` for a latched fault) with nothing sent.
+        Sent in any robot mode; the firmware decides. In MOVE the robot walks. In STAND an
+        armed robot enters MOVE and walks (before it arms the robot stays in STAND; the hold
+        re-sends the velocity, so it enters MOVE once armed). In DAMP the firmware does not
+        walk. The SDK refuses only without live state: it waits up to ``timeout`` seconds
+        (default 5 s) for a fresh sample and raises :class:`NotReadyError` with nothing sent
+        when none comes. A guard on the robot's report (mode, faults, temperatures, battery)
+        is the caller's: see ``robot.get_state()``.
 
         ``wait`` defaults to ``True``: block until the hold has ended and its zero has gone
         out, or until another verb superseded it. That needs a ``duration``; without one
-        this raises ``ValueError`` with nothing sent. A fault-DAMP during the hold ends it
-        with nothing more sent, and the wait raises :class:`RobotFaultedError`.
+        this raises ``ValueError`` with nothing sent. A fault-DAMP, reported before the
+        velocity went out or during the hold, ends the hold with nothing more sent, and the
+        wait raises :class:`RobotFaultedError`.
         ``wait=False`` returns once sent and keeps the velocity until the next command, or
         until ``duration`` if given: a
         control loop sends a short ``duration`` on every tick, so the robot stops when the
@@ -802,9 +813,9 @@ class Robot:
 
         ``hold=False`` is for a loop that clocks its own velocity commands: it sends exactly
         one velocity packet now and nothing in the background, and ends any hold that was
-        running so an older velocity is never re-sent. The check is made once, as in
-        :meth:`trajectory`: it adds no delay when the robot is ready and raises at once
-        when it is not (pass ``timeout`` to wait that long). There is nothing to wait for
+        running so an older velocity is never re-sent. The live-state check is made once,
+        as in :meth:`trajectory`: it adds no delay on a live stream and raises at once on a
+        stale one (pass ``timeout`` to wait that long). There is nothing to wait for
         and nothing to bound, so ``duration`` or ``wait=True`` with ``hold=False`` is a
         ``ValueError``. If your loop stops, nothing re-sends its last velocity: on ``udp``
         and ``hybrid``, Asimov Edge zeroes velocity 2 s after the last packet and the robot
@@ -823,7 +834,7 @@ class Robot:
                     "leave wait= out"
                 )
             asked = Velocity(vx, vy, vyaw)
-            self._ready("move", _nonnegative_finite("timeout", timeout or 0.0), in_move=True)
+            self._ready("move", _nonnegative_finite("timeout", timeout or 0.0))
             return self._drive("set_velocity", asked, None, hold=False)[0]
         wait = True if wait is None else wait
         _no_wait_in_callback("set_velocity", wait)
@@ -836,7 +847,7 @@ class Robot:
             _positive_finite("duration", duration)
         asked = Velocity(vx, vy, vyaw)  # a non-finite speed is a ValueError before the check
         limit = READY_TIMEOUT_S if timeout is None else _nonnegative_finite("timeout", timeout)
-        self._ready("move", limit, in_move=True)
+        self._ready("move", limit)
         sent, done = self._drive("set_velocity", asked, duration)
         if wait:
             assert duration is not None
@@ -863,7 +874,15 @@ class Robot:
                 if not v.is_zero:
                     self._latch_deadline = time.monotonic() + duration
             self._last_mode = None  # a new drive supersedes whatever posture change preceded it
-            return self._send(name, v, gen, clamped=(v != asked)), self._hold_done
+            done = self._hold_done
+            sent = self._send(name, v, gen, clamped=(v != asked))
+            s = self._state
+            if self._latched is not None and s is not None and s.faulted and s.mode in _DOWN:
+                # The robot reported its fault-DAMP before this hold began, so that sample's
+                # callback found nothing to end. The velocity went out once; the hold ends
+                # here, with no expiry zero, and its waiter raises the fault.
+                self._release_hold("the robot is fault-DAMPed", fence=False, fault=s)
+            return sent, done
 
     def _end_hold(self) -> None:
         """Under the lock: whatever bounded hold was in force is over (superseded, stopped,
@@ -916,13 +935,12 @@ class Robot:
                         sent=sent,
                     )
         with self._lock:
-            lost, closed, faulted = self._link_lost, self._closed, self._faulted_hold
-            if faulted is not None and faulted[0] is done:
-                self._faulted_hold = None
+            lost, closed = self._link_lost, self._closed
+            faulted = self._faulted_holds.pop(done, None)
         if lost is not None:
             raise lost
-        if faulted is not None and faulted[0] is done:
-            raise self._walk_faulted(faulted[1], started, duration, sent)
+        if faulted is not None:
+            raise self._walk_faulted(faulted, started, duration, sent)
         if closed:
             raise NotConnectedError("this Robot was closed before the hold ended")
 
@@ -938,30 +956,30 @@ class Robot:
             state=s,
             action="move",
             preflight=check,
-            problems=check.blocking,
+            problems=_faults(check),
             sent=sent,
         )
 
     def balance(self, *, timeout: float = BALANCE_TIMEOUT_S, wait: bool = True) -> Sent:
         """Balance in place: the robot is in MOVE at zero velocity, and the walking policy
         keeps it upright. For a free-standing robot that IS how it stands still, so a walk
-        ends here. Sent once; not an emergency stop.
+        ends here. Sent once, in any robot mode; not an emergency stop.
 
-        In MOVE: ends any velocity hold and sends zero velocity. Never checked, whatever
-        the robot reports, and callable from any thread while a ``wait=False`` hold runs.
+        In MOVE: ends any velocity hold and sends zero velocity at once, callable from any
+        thread while a ``wait=False`` hold runs.
 
-        In STAND: checked first (``preflight("move")``, waiting up to ``timeout`` for a
-        problem that clears on its own, such as ``not_armed`` right after a stand), then
-        sends zero velocity, which puts the robot in MOVE. With ``wait``, returns once the
-        robot reports MOVE; the whole call takes at most ``timeout`` seconds, past it
-        :class:`WaitTimeoutError`. ``wait=False`` returns once sent.
-
-        In DAMP (or FAULT_DAMP, or an unknown robot mode): raises :class:`NotReadyError`
-        (``stand()`` it first) or :class:`RobotFaultedError` for a latched fault, and sends
-        nothing.
+        Outside MOVE: waits up to ``timeout`` for live state (:class:`NotReadyError`, with
+        nothing sent, when none comes), then sends zero velocity. In STAND an armed robot
+        enters MOVE; a zero velocity that arrives before it arms leaves it in STAND (``stand()``
+        returns once armed, so ``stand()`` then ``balance()`` enters MOVE).
+        With ``wait``, returns once the robot reports MOVE; the whole call takes at most
+        ``timeout`` seconds, past it :class:`WaitTimeoutError`. In DAMP the firmware does not
+        enter MOVE, so the wait fails at once with :class:`WaitTimeoutError` (``stand()``
+        first); a latched fault raises :class:`RobotFaultedError`. The zero velocity was sent
+        either way. ``wait=False`` returns once sent.
 
         The robot mode decides, not what this session sent before: outside MOVE a velocity
-        hold still in force ends at once (nothing more is re-sent) and the check runs."""
+        hold still in force ends at once (nothing more is re-sent)."""
         _nonnegative_finite("timeout", timeout)
         deadline = time.monotonic() + timeout
         self._usable()
@@ -972,35 +990,56 @@ class Robot:
         _no_wait_in_callback("balance", wait)
         with self._lock:
             # Not in MOVE: a velocity sent earlier does not make this call a MOVE-at-zero.
-            # Its hold ends here, so the keepalive does not re-send it while the check runs;
-            # close() still owes the robot a zero for it if the check refuses.
+            # Its hold ends here, so the keepalive does not re-send it while the live-state
+            # check runs; close() still owes the robot a zero for it if the check refuses.
             self._generation += 1
             owed = self._latched is not None or self._streamed
             self._end_hold()
             self._streamed = owed
         check = self._ready("move", timeout)
-        if check.state is not None and check.state.mode is Mode.MOVE:
-            return self._drive("balance", Velocity(), None)[0]
         sent, _ = self._drive("balance", Velocity(), None)
-        if wait:
-            try:
-                self._wait(
-                    lambda st: st.mode is Mode.MOVE,
-                    timeout=max(0.0, deadline - time.monotonic()),
-                    action="move",
-                    sent=sent,
+        if not wait or (check.state is not None and check.state.mode is Mode.MOVE):
+            return sent
+        s = self._state
+        if s is not None and s.mode is Mode.DAMP and not s.faulted:
+            # The firmware enters MOVE from STAND only: no wait can succeed from here.
+            raise WaitTimeoutError(
+                "sent zero velocity, but the robot is in DAMP: stand() first",
+                last=s,
+                sent=sent,
+            )
+        try:
+            self._wait(
+                lambda st: st.mode is Mode.MOVE,
+                timeout=max(0.0, deadline - time.monotonic()),
+                action="move",
+                sent=sent,
+            )
+        except StateStaleError:
+            raise
+        except WaitTimeoutError as exc:
+            last = exc.last
+            if last is not None and last.mode is Mode.DAMP:
+                why = "the robot is in DAMP: stand() first"
+            elif last is not None and last.mode is Mode.STAND and check.armed is not True:
+                why = (
+                    "the robot reports STAND and was not armed when the zero velocity was "
+                    "sent: the firmware enters MOVE once STAND has been held upright (tilt "
+                    "under 30 deg) for 0.5 s, and a velocity that arrives before then leaves "
+                    "it in STAND. Wait until robot.armed is True, then balance() again"
                 )
-            except StateStaleError:
-                raise
-            except WaitTimeoutError as exc:
-                now = exc.last.mode.name if exc.last is not None else "no state"
-                raise WaitTimeoutError(
-                    f"sent zero velocity, but the robot still reports {now} after "
-                    f"{timeout:.1f} s. Another controller may hold it (the Asimov Manager "
-                    "cockpit or a paired gamepad), and a command it outranks has no effect",
-                    last=exc.last,
-                    sent=sent,
-                ) from None
+            else:
+                now = last.mode.name if last is not None else "no state"
+                why = (
+                    f"the robot still reports {now}. Another controller may hold it (the "
+                    "Asimov Manager cockpit or a paired gamepad), and a command it outranks "
+                    "has no effect"
+                )
+            raise WaitTimeoutError(
+                f"sent zero velocity, but the robot was not in MOVE within {timeout:.1f} s: {why}",
+                last=last,
+                sent=sent,
+            ) from None
         return sent
 
     def stand(self, *, timeout: float = STAND_TIMEOUT_S, wait: bool = True) -> Sent:
@@ -1008,23 +1047,25 @@ class Robot:
         default, return once the robot is in STAND and armed, so ``balance()`` can put it
         in MOVE.
 
-        Checks ``preflight("stand")`` first, waiting up to ``timeout`` for a problem that
-        clears on its own; any other raises :class:`NotReadyError` and sends nothing (from
-        MOVE, a battery too low, a latched fault: :class:`RobotFaultedError`). Then sends
-        STAND once and, with ``wait``, returns only when the robot reports STAND and is
-        armed (STAND held upright for 0.5 s), so the next ``balance()`` enters MOVE. The
-        whole call takes at most ``timeout`` seconds: past it, :class:`WaitTimeoutError`; a
-        fault while standing, :class:`RobotFaultedError`. ``wait=False`` returns once sent.
+        Sent from any robot mode. The SDK refuses only without live state: it waits up to
+        ``timeout`` for a fresh sample and raises :class:`NotReadyError`, with nothing sent,
+        when none comes. Then sends STAND once and, with ``wait``, returns only when the
+        robot reports STAND and is armed (STAND held upright for 0.5 s), so the next
+        ``balance()`` enters MOVE. The whole call takes at most ``timeout`` seconds: past it,
+        :class:`WaitTimeoutError`; a latched fault, before or while standing,
+        :class:`RobotFaultedError` (the STAND was sent; the firmware keeps the fault).
+        ``wait=False`` returns once sent.
 
         STAND blends every joint to a fixed pose and holds it there with position gains.
-        There is **no balance loop**: the robot does not catch itself. Use it only to bring
-        the robot out of DAMP (DAMP -> STAND, then ``balance()`` for MOVE), hanging from its
-        gantry hook or seated on a bench. Asking a free-standing biped to stiffen after
-        walking tips it over, and a fall latches a fault-DAMP that lasts until the firmware
-        restarts, so ``stand()`` refuses in MOVE: to stand still after walking, stay in MOVE
-        at zero velocity (``balance()``), where the policy keeps balancing. Joint control
-        (``set_joints``,
-        ``trajectory``) ends with ``damp()``, with the robot still supported."""
+        There is **no balance loop**: the robot does not catch itself. Use it to bring the
+        robot out of DAMP (DAMP -> STAND, then ``balance()`` for MOVE), or from MOVE with the
+        robot hanging from its gantry hook or seated on a stool or bench. Asking a
+        free-standing biped to stiffen after walking tips it over, and a fall latches a
+        fault-DAMP that lasts until the firmware restarts; the SDK sends STAND from MOVE as
+        asked, so support the robot first. To stand still after walking, stay in MOVE at
+        zero velocity (``balance()``), where the policy keeps balancing. Joint control
+        (``set_joints``, ``trajectory``) ends with ``damp()``, with the robot still
+        supported."""
         _nonnegative_finite("timeout", timeout)
         _no_wait_in_callback("stand", wait)
         deadline = time.monotonic() + timeout
@@ -1065,7 +1106,7 @@ class Robot:
 
     def damp(self, *, timeout: float = DAMP_TIMEOUT_S, wait: bool = True) -> Sent:
         """Put the robot in DAMP: every actuator stops holding its position, so a standing
-        robot falls. Never checked first: DAMP is sent whatever the robot's state. With
+        robot falls. Sent at once, whatever the robot's state, with no live-state check. With
         ``wait``, returns once the robot reports DAMP (or FAULT_DAMP, or a latched fault:
         no actuator holds a position either way), and raises :class:`WaitTimeoutError` after
         ``timeout`` seconds. ``wait=False`` returns once sent, and so does a call from a
@@ -1119,11 +1160,10 @@ class Robot:
         ignores a lone gain), or when a biped ankle target
         is outside the pitch and roll the firmware limits it to (it would be clamped).
 
-        Checks ``preflight("trajectory")`` first: the robot must be in MOVE or in an armed
-        STAND. The check reads one cached sample and adds no delay. It is made once: a loop
-        calling this at 50 Hz gets :class:`NotReadyError` at once, with nothing sent, when
-        the robot is not ready, rather than a loop that stalls. Pass ``timeout`` to wait that
-        long for a problem that clears on its own."""
+        Sent in any robot mode; the firmware decides. The SDK checks only for live state:
+        one cached sample, no delay. It is made once: a loop calling this at 50 Hz gets
+        :class:`NotReadyError` at once, with nothing sent, on a stale stream, rather than a
+        loop that stalls. Pass ``timeout`` to wait that long for a fresh sample."""
         pos = tuple(float(p) for p in positions)
         if self._info is not None and len(pos) != self._info.dof:
             raise ValueError(
@@ -1169,10 +1209,11 @@ class Robot:
         target outside the firmware's ankle pitch and roll limits raises ``ValueError``, as
         in :meth:`trajectory`. Returns the ``Sent`` of the first setpoint.
 
-        Checks ``preflight("trajectory")`` before the first setpoint, as :meth:`trajectory`
-        does, and raises :class:`NotReadyError` with nothing sent when the robot is not
-        ready. ``timeout`` bounds the whole call, the check and the wait for the target;
-        left ``None``, the check may wait up to 5 s and the target ``duration + 2`` s.
+        Sent in any robot mode; the firmware decides. Before the first setpoint it waits for
+        live state, as :meth:`trajectory` does, and raises :class:`NotReadyError` with
+        nothing sent when none comes. ``timeout`` bounds the whole call, the live-state
+        check and the wait for the target; left ``None``, the check may wait up to 5 s and
+        the target ``duration + 2`` s.
         """
         target = tuple(float(p) for p in positions)
         _positive_finite("duration", duration)
@@ -1182,7 +1223,7 @@ class Robot:
             _nonnegative_finite("timeout", timeout)
         _no_wait_in_callback("set_joints", wait)
         begun = time.monotonic()
-        # The check also guarantees a fresh pose to plan from: ``stale_state`` is blocking.
+        # The live-state check also guarantees a fresh pose to plan from.
         self._ready("trajectory", READY_TIMEOUT_S if timeout is None else timeout)
         start = self.get_state().joint_pos
         if len(target) != len(start):
@@ -1328,7 +1369,7 @@ class Robot:
                         state=s,
                         action=action,
                         preflight=check,
-                        problems=check.blocking if check is not None else None,
+                        problems=_faults(check) if check is not None else None,
                         sent=sent,
                     )
                 if predicate(s):
@@ -1628,7 +1669,7 @@ class Robot:
                 self._streamed = False
                 return
             if fault is not None and held is not None and self._hold_done is not None:
-                self._faulted_hold = (self._hold_done, fault)
+                self._faulted_holds[self._hold_done] = fault
             self._end_hold()
             if fence or held is not None:
                 self._generation += 1
@@ -1750,12 +1791,9 @@ class Robot:
                 log.exception("on_controller_change raised")
 
 
-def _in_move_only(check: Preflight) -> Preflight:
-    """``check`` for a command that works in MOVE only, on a robot in STAND: STAND is the
-    blocking problem, and arming is ``balance()``'s concern, not this command's."""
-    problem = Problem("wrong_mode", "the robot is in STAND; balance() it first", True)
-    rest = tuple(p for p in check.problems if p.code not in ("not_armed", "unknown_gravity"))
-    return Preflight(check.action, (problem, *rest), check.state, check.armed)
+def _faults(check: Preflight) -> tuple[Problem, ...]:
+    """The ``faulted`` fact of ``check``: the problems a :class:`RobotFaultedError` carries."""
+    return tuple(p for p in check.problems if p.code == "faulted")
 
 
 #: Every Robot with an open session. At interpreter exit each is closed, so a script that

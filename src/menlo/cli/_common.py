@@ -18,7 +18,7 @@ from menlo.asimov import ConnectionConfig, Robot, State
 EXIT_OK = 0
 EXIT_ERROR = 1  # a connection, robot or saved-robots error
 EXIT_USAGE = 2  # a command line that cannot run as given
-EXIT_NOT_READY = 3  # not feasible now, or the robot did not become ready
+EXIT_NOT_READY = 3  # no live state (nothing sent), or the robot did not get there
 EXIT_CANCELLED = 4  # you answered no; nothing was sent
 EXIT_INTERRUPTED = 130  # Ctrl-C
 
@@ -31,7 +31,7 @@ class UsageError(Exception):
 
 
 class NotFeasible(Exception):
-    """The robot cannot do what the command asks now (exit 3). The message starts with
+    """There is no live state to send against (exit 3). The message starts with
     ``Not feasible:`` and says why and what to do."""
 
 

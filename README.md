@@ -23,7 +23,7 @@ pip install menlo-sdk
 Connect with the robot's address:
 
 ```python
-from menlo.asimov import ConnectionConfig, NotReadyError, Robot, UdpConfig
+from menlo.asimov import ConnectionConfig, Robot, UdpConfig
 
 config = ConnectionConfig(udp=UdpConfig(host="192.168.22.32"))
 ```
@@ -36,8 +36,9 @@ with Robot(config).connect() as robot:
 ```
 
 Put the robot in STAND: the actuators hold a standing pose, with no balancing. The robot
-must hang from its gantry hook with both feet on the floor. `stand()` returns once the robot
-is in STAND and armed:
+must hang from its gantry hook with both feet on the floor; from MOVE, hang it from its
+gantry hook or seat it on a stool or bench first. `stand()` returns once the robot is in
+STAND and armed:
 
 ```python
 with Robot(config).connect() as robot:
@@ -64,21 +65,25 @@ with Robot(config).connect() as robot:
 ```
 
 Put the robot in DAMP: every actuator stops holding its position, so a standing robot falls.
-Only do this with the robot supported, hanging from its gantry hook or seated on a bench:
+Only do this with the robot supported, hanging from its gantry hook or seated on a stool or
+bench:
 
 ```python
 with Robot(config).connect() as robot:
     robot.damp()
 ```
 
-When the robot cannot do a command now, the command raises `NotReadyError` and sends nothing:
+The SDK sends what you ask and reports what the robot says; it refuses a command only when
+there is no live state (`NotReadyError` after the command's `timeout`, nothing sent; a
+closed Robot raises `NotConnectedError`, a lost link `LinkLostError`). Safety is the firmware's job, and a guard is yours: read the facts
+and decide before you send ([examples/guard.py](https://github.com/menloresearch/menlo-sdk/blob/main/examples/guard.py) is one to start from):
 
 ```python
 with Robot(config).connect() as robot:
-    try:
-        robot.set_velocity(vx=0.3, duration=3.0)
-    except NotReadyError as exc:
-        print(exc)  # not ready to move: the robot is in STAND; balance() it first (wrong_mode)
+    s = robot.get_state()
+    if s.faulted or any(j.temp is not None and j.temp >= 60 for j in s.joints):
+        raise SystemExit("not walking: a latched fault or a hot actuator")
+    robot.set_velocity(vx=0.3, duration=3.0)
 ```
 
 ## Agent Skill

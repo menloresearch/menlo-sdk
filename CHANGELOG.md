@@ -12,10 +12,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Codex, pi and other agents that read Agent Skills install it with
   `npx skills add menloresearch/menlo-sdk`. It links the documentation and
   https://docs.menlo.ai/llms.txt.
+- Examples `guard.py` (an optional guard on the user's side: joint temperature, battery, a
+  latched fault and active alerts, with limits at the top of the file; it prints what it
+  finds and exits non-zero when the rule fails, and the motion examples call it) and
+  `rest.py` (MOVE, then STAND, then DAMP, after asking whether the robot is on its gantry
+  hook or seated on a stool or bench).
+- `preflight()` reports active firmware alerts by name (`alerts`), and the `menlo stand`,
+  `balance`, `walk` and `damp` plans show the robot's facts: robot mode, armed, faults,
+  active alerts, the hottest joint and the battery. `menlo status --json` has `alerts`.
 
 ### Changed
+- Breaking: guards move to the user side. Safety is the firmware's job and command handling
+  is Asimov Edge's; the SDK reports facts and no longer refuses a command because of what the
+  robot reports. `stand()`, `balance()`, `set_velocity()` (including `hold=False`),
+  `trajectory()` and `set_joints()` are sent in any robot mode and the firmware decides:
+  `stand()` from MOVE sends STAND (support the robot first), `set_velocity()` in STAND is
+  sent and an armed robot enters MOVE, `balance()` sends zero velocity in any mode. The only
+  refusal left is no live state: `no_state` and `stale_state` past the command's `timeout`,
+  raising `NotReadyError` with nothing sent. A closed Robot raises `NotConnectedError`, a
+  lost link `LinkLostError` and a protocol mismatch `ProtocolMismatchError`, at once. In a
+  `require_state=False` session these verbs wait for the first sample up to their
+  `timeout`, where they raised `NotConnectedError` at once.
+- Breaking: a latched fault no longer refuses a command before it is sent. The command is
+  sent, and the wait that sees the fault raises `RobotFaultedError` with `.sent` set.
+- Breaking: `balance()` sends as soon as there is live state; it no longer waits for the
+  robot to arm. From DAMP it raises `WaitTimeoutError` at once ("the robot is in DAMP:
+  stand() first"); from a STAND that was not armed it times out saying so.
+- Breaking: `preflight()` is a report. Only `not_connected`, `no_state` and `stale_state` are
+  blocking; `faulted`, `alerts` and `not_armed` are information, and `Preflight.ok` means
+  live state.
+- `menlo stand`, `balance`, `walk` and `damp` ask `Proceed? [y/N]` (unless `--yes`) after
+  showing the facts, and print `Not feasible:` only without live state. `menlo stand` from
+  MOVE warns to hang the robot from its gantry hook or seat it on a stool or bench first.
+  Exit 3 covers no live state and a command that was sent and did not get there.
+- `menlo stand` on a robot already in STAND that has not armed sends nothing, waits up to
+  10 s for it to arm, and exits 3 when it does not; it printed "nothing sent" and exited 0.
+- Migration: catch fewer `NotReadyError`s (only no live state, and `RobotFaultedError` from
+  a wait); a script that relied on the SDK to refuse a hot, faulted or flat robot, or a
+  wrong robot mode, writes that rule itself from `robot.get_state()`; `examples/guard.py`
+  is a starting point.
 - The skill moved from `docs/SKILL.md` to `skills/menlo-sdk/SKILL.md`, and its links to the
   examples point at GitHub so they work wherever the skill is installed.
+
+### Removed
+- The SDK's state-based checks and their codes: `wrong_mode`, `joint_hot`, `battery_low`,
+  `battery_protecting`, `unknown_battery`, `unknown_joint_temp` and `unknown_gravity`, the
+  refusal of a latched fault before sending, and the wait for arming before a velocity.
+- `JOINT_HOT_C` and `BATTERY_LOW_PERCENT` from `menlo.asimov._preflight`: the SDK holds no
+  thresholds.
 
 ## 0.1.0rc8 — 2026-10-01
 

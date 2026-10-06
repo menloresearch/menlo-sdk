@@ -23,6 +23,7 @@ from menlo.asimov import (
     LinkLostError,
     Mode,
     NotConnectedError,
+    NotReadyError,
     ProtocolMismatchError,
     Robot,
     UnsupportedError,
@@ -253,15 +254,17 @@ def test_a_media_only_session_opens_without_state_and_refuses_to_drive(edge):
             _ = robot.get_state()
         with pytest.raises(NotConnectedError, match="has not reported state"):
             _ = robot.info
-        for verb in (
-            robot.stand,
-            robot.damp,
-            robot.balance,
-            lambda: robot.set_velocity(vx=0.1, wait=False),
+        with pytest.raises(NotConnectedError, match="has not reported state"):
+            robot.damp()
+        for verb in (  # the checked verbs wait for the first sample, then refuse
+            lambda: robot.stand(timeout=0.05),
+            lambda: robot.balance(timeout=0.05),
+            lambda: robot.set_velocity(vx=0.1, wait=False, timeout=0.05),
             lambda: robot.trajectory([0.0] * 25),
         ):
-            with pytest.raises(NotConnectedError, match="has not reported state"):
+            with pytest.raises(NotReadyError) as info:
                 verb()
+            assert info.value.has("no_state")
         with pytest.raises(WaitTimeoutError):
             robot.wait_until(lambda s: s.mode is Mode.STAND, timeout=0.2)
         time.sleep(0.8)  # well past link_timeout
@@ -276,8 +279,9 @@ def test_state_arriving_later_completes_the_handshake_and_unlocks_the_verbs(edge
     _client, robot = make_livekit_robot(edge)
     robot.open(timeout=0.2, require_state=False)
     try:
-        with pytest.raises(NotConnectedError):
-            robot.stand()
+        with pytest.raises(NotReadyError) as info:
+            robot.stand(timeout=0.05)
+        assert info.value.has("no_state")
         edge.pushing = True  # and comes up mid-session
         assert robot.wait_until(lambda s: s.mode is Mode.DAMP, timeout=3.0).mode is Mode.DAMP
         assert robot.info.dof == 25 and robot.info.joint_names is not None

@@ -284,13 +284,13 @@ def test_the_wizard_keeps_a_saved_credential_and_asks_about_the_default(manager,
 # ── menlo status ─────────────────────────────────────────────────────────────
 
 
-def test_status_json_reports_readiness_and_sends_nothing(edge, at_edge, capsys):
+def test_status_json_reports_the_facts_and_sends_nothing(edge, at_edge, capsys):
     at_edge(edge)
     assert main(["status", "--json"]) == 0
     snap = json.loads(capsys.readouterr().out)
     assert snap["robot"] == "lab" and snap["mode"] == "udp" and snap["host"] == "127.0.0.1"
-    assert snap["verdict"] == "NOT READY" and snap["robot_mode"] == "DAMP"
-    assert "wrong_mode" in [p["code"] for p in snap["problems"]]
+    assert snap["verdict"] == "READY" and snap["robot_mode"] == "DAMP", "DAMP is a fact"
+    assert snap["problems"] == [] and snap["alerts"] == []
     assert snap["fresh"] is True and snap["state_rate_hz"] > 10 and snap["faults"] == []
     assert edge.received == []
 
@@ -303,7 +303,7 @@ def test_status_shows_a_fault_by_name(edge, at_edge, capsys):
     assert "FAULTED" in out and "FALL_DETECTED" in out and "lab" in out
 
 
-# ── motion: not feasible, a plan, a yes ─────────────────────────────────────
+# ── motion: live state, the plan and the facts, a yes ───────────────────────
 
 
 class Answer(io.StringIO):
@@ -333,6 +333,10 @@ def answer(monkeypatch):
         return typed
 
     return type_
+
+
+#: The plan's joint temperature fact for the fake edge's default state.
+FACTS_TEMP = "joint temperatures not reported"
 
 
 def _armed_stand(edge: FakeEdge) -> None:
@@ -385,9 +389,10 @@ def test_stand_prints_the_plan_asks_and_stands_on_yes(fw_edge, at_edge, answer, 
     assert main(["stand"]) == 0
     out = capsys.readouterr().out
     assert (
-        "lab (udp, 127.0.0.1) · DAMP · battery not reported → stand, then wait until armed" in out
-    )
-    assert "Proceed? [y/N]" in out and "Armed" in out
+        "lab (udp, 127.0.0.1) · DAMP · faults none · alerts none · "
+        f"{FACTS_TEMP} · battery not reported → stand, then wait until armed"
+    ) in out
+    assert "Proceed? [y/N]" in out and "Armed" in out and "gantry" not in out
     assert fw_edge.modes() == ["stand"]
 
 
@@ -400,6 +405,22 @@ def test_stand_on_an_armed_stand_says_armed_and_sends_nothing(fw_edge, at_edge, 
     assert fw_edge.received == []
 
 
+def test_stand_on_a_stand_that_does_not_arm_waits_and_is_not_ready(
+    fw_edge, at_edge, monkeypatch, capsys
+):
+    at_edge(fw_edge)
+    fw_edge.set_mode("stand")
+    fw_edge.state.projected_gravity[:] = [0.0, 0.6, -0.8]  # tilted: the firmware never arms
+    monkeypatch.setattr(_drive, "STAND_TIMEOUT_S", 0.3)
+    fw_edge.received.clear()
+    assert main(["stand"]) == 3
+    captured = capsys.readouterr()
+    assert "lab is already in STAND (not armed); nothing sent." in captured.out
+    assert "Armed" not in captured.out
+    assert "was not armed in STAND within 0.3 s" in captured.err
+    assert fw_edge.received == []
+
+
 @pytest.mark.parametrize("typed", ["n\n", "\n", "", "nope\n"])
 def test_anything_but_yes_cancels_and_sends_nothing(edge, at_edge, answer, capsys, typed):
     at_edge(edge)
@@ -407,7 +428,8 @@ def test_anything_but_yes_cancels_and_sends_nothing(edge, at_edge, answer, capsy
     assert main(["damp"]) == 4
     out = capsys.readouterr().out
     assert "→ damp: every actuator stops holding its position and a standing robot falls" in out
-    assert "the robot must be supported. Not an emergency stop" in out
+    assert "hang the robot from its gantry hook or seat it on a stool or bench first" in out
+    assert "Not an emergency stop" in out
     assert "Cancelled; nothing sent." in out
     assert edge.received == []
 
@@ -431,8 +453,9 @@ def test_walk_plans_the_clamped_speed_and_yes_skips_the_question(fw_edge, at_edg
     assert main(["walk", "--vx", "0.6", "--vyaw", "-0.2", "--duration", "0.4", "--yes"]) == 0
     out = capsys.readouterr().out
     assert (
-        "lab (udp, 127.0.0.1) · MOVE · battery not reported → walk vx 0.40 m/s "
-        "(asked 0.60), vy 0.00 m/s, vyaw -0.20 rad/s for 0.4 s, then balance in place"
+        f"lab (udp, 127.0.0.1) · MOVE · armed · faults none · alerts none · {FACTS_TEMP} · "
+        "battery not reported → walk vx 0.40 m/s (asked 0.60), vy 0.00 m/s, vyaw -0.20 rad/s "
+        "for 0.4 s, then balance in place"
     ) in out
     assert "Proceed?" not in out and "Walk done. Robot mode MOVE, balancing in place" in out
     assert fw_edge.modes() == [], "walk changed the robot mode"
@@ -449,7 +472,7 @@ def test_balance_from_stand_asks_waits_until_armed_and_enters_move(
     answer("yes\n")
     assert main(["balance"]) == 0
     out = capsys.readouterr().out
-    assert "STAND, armed" in out and "→ balance: MOVE at zero velocity" in out
+    assert "STAND · armed" in out and "→ balance: MOVE at zero velocity" in out
     assert "Proceed?" in out and "Balancing" in out
     assert fw_edge.velocities() == [(0.0, 0.0, 0.0)]
     assert fw_edge.state.current_mode == 2  # MOVE
@@ -465,73 +488,97 @@ def test_balance_from_stand_on_no_sends_nothing(fw_edge, at_edge, answer, capsys
 
 
 @pytest.mark.parametrize(
-    ("setup", "argv", "says"),
+    ("setup", "argv", "shows"),
     [
-        (
-            lambda e: None,
-            ["walk", "--vx", "0.2", "--duration", "1"],
-            "Not feasible: lab is in DAMP, not balancing. Run `menlo stand` first.",
-        ),
-        (
-            lambda e: e.set_mode("move"),
-            ["stand"],
-            "Not feasible: lab is in MOVE, balancing. `stand` only runs from DAMP; "
-            "end a walk with `menlo balance`.",
-        ),
-        (
-            lambda e: e.set_mode("stand"),
-            ["walk", "--vx", "0.2", "--duration", "1"],
-            "Not feasible: lab is in STAND. Run `menlo balance` first.",
-        ),
-        (
-            lambda e: None,
-            ["balance"],
-            "Not feasible: lab is in DAMP, not balancing. Run `menlo stand` first.",
-        ),
-        (
-            lambda e: e.fault(),
-            ["balance"],
-            "Not feasible: lab is in DAMP, faulted. The firmware latched DAMP (FALL_DETECTED)",
-        ),
-        (
-            lambda e: e.fault(),
-            ["walk", "--vx", "0.2", "--duration", "1"],
-            "Not feasible: lab is in DAMP, faulted. The firmware latched DAMP (FALL_DETECTED); "
-            "it stays latched until the firmware restarts.",
-        ),
-        (
-            lambda e: e.fault(),
-            ["stand"],
-            "Not feasible: lab is in DAMP, faulted. The firmware latched DAMP (FALL_DETECTED)",
-        ),
+        (lambda e: None, ["walk", "--vx", "0.2", "--duration", "1"], "DAMP · faults none"),
+        (_balancing, ["stand"], "MOVE · armed"),
+        (_armed_stand, ["walk", "--vx", "0.2", "--duration", "1"], "STAND · armed"),
+        (lambda e: None, ["balance"], "DAMP · faults none"),
+        (lambda e: e.fault(), ["balance"], "DAMP · faults FALL_DETECTED"),
+        (lambda e: e.fault(), ["walk", "--vx", "0.2", "--duration", "1"], "faults FALL_DETECTED"),
+        (lambda e: e.fault(), ["stand"], "DAMP · faults FALL_DETECTED"),
     ],
-)
-def test_not_feasible_says_why_and_the_fix_and_never_asks(
-    fw_edge, at_edge, answer, capsys, setup, argv, says
+)  # fmt: skip
+def test_the_facts_never_refuse_they_are_shown_and_asked_about(
+    fw_edge, at_edge, answer, capsys, setup, argv, shows
 ):
     at_edge(fw_edge)
     setup(fw_edge)
-    typed = answer("y\n")
-    assert main(argv) == 3
+    fw_edge.received.clear()
+    typed = answer("n\n")
+    assert main(argv) == 4
     captured = capsys.readouterr()
-    assert says in captured.err
-    assert "Proceed?" not in captured.out and typed.read_at is None
+    assert shows in captured.out and "Proceed?" in captured.out and typed.read_at is not None
+    assert "Not feasible" not in captured.err and "Cancelled; nothing sent." in captured.out
     assert fw_edge.received == []
 
 
-def test_balance_before_arming_is_not_feasible_and_says_how_it_arms(
+def test_the_plan_names_active_alerts_and_the_hottest_joint_and_still_sends(
+    fw_edge, at_edge, capsys
+):
+    at_edge(fw_edge)
+    fw_edge.state.joint_temp.extend([40.0] * len(fw_edge.state.joint_pos))
+    fw_edge.state.joint_temp[2] = 75.0
+    a = fw_edge.state.active_alerts.add()
+    a.id, a.severity = 17, 1  # MOTOR_TEMP_HIGH, a warning
+    assert main(["stand", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "alerts MOTOR_TEMP_HIGH" in out and "hottest joint 75 C" in out
+    assert fw_edge.modes() == ["stand"], "a hot joint is your call, not the SDK's"
+
+
+def test_stand_from_move_warns_to_support_the_robot_then_sends_stand(
+    fw_edge, at_edge, answer, capsys
+):
+    at_edge(fw_edge)
+    _balancing(fw_edge)
+    fw_edge.received.clear()
+    answer("y\n")
+    assert main(["stand"]) == 0
+    out = capsys.readouterr().out
+    assert "STAND has no balance loop" in out
+    assert "gantry hook or seat it on a stool or bench first" in out
+    assert out.index("gantry") < out.index("Proceed?")
+    assert fw_edge.modes() == ["stand"] and fw_edge.state.current_mode == 1  # STAND
+
+
+def test_walk_from_an_armed_stand_is_sent_and_the_robot_enters_move(fw_edge, at_edge, capsys):
+    at_edge(fw_edge)
+    _armed_stand(fw_edge)
+    fw_edge.received.clear()
+    assert main(["walk", "--vx", "0.2", "--duration", "0.4", "--yes"]) == 0
+    assert (0.2, 0.0, 0.0) in fw_edge.velocities()
+    assert fw_edge.state.current_mode == 2 and "Walk done" in capsys.readouterr().out
+
+
+def test_walk_in_damp_is_sent_and_reports_that_the_robot_did_not_walk(fw_edge, at_edge, capsys):
+    at_edge(fw_edge)
+    assert main(["walk", "--vx", "0.2", "--duration", "0.3", "--yes"]) == 3
+    out = capsys.readouterr().out
+    assert "the robot reports DAMP" in out and "Run `menlo balance` first" in out
+    assert (0.2, 0.0, 0.0) in fw_edge.velocities()
+
+
+def test_balance_in_damp_is_sent_and_says_stand_first(fw_edge, at_edge, capsys):
+    at_edge(fw_edge)
+    assert main(["balance", "--yes"]) == 3
+    assert "the robot is in DAMP: stand() first" in capsys.readouterr().err
+    assert fw_edge.velocities() == [(0.0, 0.0, 0.0)]
+
+
+def test_balance_before_arming_is_sent_and_says_how_the_robot_arms(
     fw_edge, at_edge, answer, monkeypatch, capsys
 ):
     at_edge(fw_edge)
     fw_edge.set_mode("stand")
     fw_edge.state.projected_gravity[:] = [0.0, 0.6, -0.8]
     monkeypatch.setattr(_drive, "ARM_TIMEOUT_S", 0.3)
-    typed = answer("y\n")
+    answer("y\n")
     assert main(["balance"]) == 3
-    err = capsys.readouterr().err
-    assert err.startswith("Not feasible: lab is in STAND, not armed. The robot is tilted 37 deg")
-    assert err.rstrip().endswith("Run the command again once `menlo status` shows it armed.")
-    assert typed.read_at is None and fw_edge.received == []
+    captured = capsys.readouterr()
+    assert "STAND · not armed" in captured.out
+    assert "was not armed" in captured.err and "robot.armed" in captured.err
+    assert fw_edge.velocities() == [(0.0, 0.0, 0.0)]
 
 
 def test_stale_state_is_not_feasible(edge, at_edge, answer, monkeypatch, capsys):
@@ -552,7 +599,7 @@ def test_stale_state_is_not_feasible(edge, at_edge, answer, monkeypatch, capsys)
     assert typed.read_at is None and edge.received == []
 
 
-def test_walk_checks_again_after_the_answer_and_sends_nothing_if_it_changed(
+def test_a_fault_while_you_read_the_plan_is_reported_after_the_walk_is_sent(
     fw_edge, at_edge, answer, capsys
 ):
     at_edge(fw_edge)
@@ -564,11 +611,11 @@ def test_walk_checks_again_after_the_answer_and_sends_nothing_if_it_changed(
         time.sleep(0.1)  # a few samples at 200 Hz
 
     answer("y\n", then=the_robot_falls_while_you_read)
-    assert main(["walk", "--vx", "0.2", "--duration", "1"]) == 3
+    assert main(["walk", "--vx", "0.2", "--duration", "0.5"]) == 3
     captured = capsys.readouterr()
     assert "MOVE" in captured.out and "Proceed?" in captured.out
-    assert "Not feasible: lab is in DAMP, faulted" in captured.err
-    assert fw_edge.received == []
+    assert "FALL_DETECTED" in captured.err and "Not feasible" not in captured.err
+    assert (0.2, 0.0, 0.0) in fw_edge.velocities()
 
 
 def test_stand_that_never_reaches_stand_is_not_ready(edge, at_edge, monkeypatch, capsys):

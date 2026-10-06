@@ -1,6 +1,6 @@
 """Put the robot in DAMP: every actuator stops holding its position, so a standing robot falls.
 
-Only do this with the robot supported, hanging from its gantry hook or seated on a bench.
+Only do this with the robot supported, hanging from its gantry hook or seated on a stool or bench.
 damp() is not an emergency stop; for that, use the E-Stop in Asimov Manager, or cut power at
 the battery unit. The script asks before it sends anything, unless YES is True.
 Run: python examples/damp.py

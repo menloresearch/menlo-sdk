@@ -4,25 +4,25 @@
     menlo robots                                    # saved robots, default first
     menlo robots add lab --mode udp --udp 192.168.22.32
     menlo status --watch                            # READY / NOT READY / FAULTED, live
-    menlo stand                                     # DAMP -> STAND, then wait until armed
+    menlo stand                                     # STAND, then wait until armed
     menlo balance                                   # MOVE at zero velocity: balancing
     menlo walk --vx 0.3 --duration 3                # a bounded walk in MOVE, then balance
     menlo damp                                      # every actuator compliant
 
 Every command that talks to the robot connects the way a script does (``Robot().connect()``
 with ``--robot`` and ``--mode`` applied). ``stand``, ``walk``, ``damp`` and ``balance``
-from STAND print one line, the plan (the robot, its state, and what will happen), and ask
-``Proceed? [y/N]``; ``-y``/``--yes`` answers yes. Before the plan, ``stand``, ``balance``
-and ``walk`` check ``robot.preflight()``: a robot that cannot do it now gets
-``Not feasible:`` and no question. After the answer the command itself checks again
-(``robot.stand()``, ``robot.balance()``, ``robot.set_velocity()``) and refuses the same
-way. ``damp`` is never checked. ``balance`` in MOVE never asks. Exit codes:
+outside MOVE print one line, the plan: the robot, its facts (robot mode, armed, faults,
+active alerts, hottest joint, battery) and what will happen, and ask ``Proceed? [y/N]``;
+``-y``/``--yes`` answers yes. The facts are yours to judge: no command refuses because of
+them. The one refusal is no live state: ``Not feasible:``, no question, nothing sent.
+``stand`` from MOVE first warns that STAND has no balance loop: hang the robot from its
+gantry hook or seat it on a stool or bench. ``balance`` in MOVE never asks. Exit codes:
 
     0    done
     1    error: connection, robot, or saved robots
     2    usage: the command line cannot run as given (a missing flag, no terminal to ask on)
-    3    not feasible: the check before the command refused, or the robot did not become
-         ready (not armed in time, or a fault)
+    3    not feasible or not reached: no live state (nothing sent), or the command was sent
+         and the robot did not get there (not armed in time, still in DAMP, a fault)
     4    cancelled: you answered no; nothing was sent
     130  interrupted (Ctrl-C); a walk sends balance() first
 """
@@ -104,8 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="menlo",
         description="Save an Asimov robot, check it, and move it from the shell.",
-        epilog="Exit codes: 0 done, 1 error, 2 usage, 3 not feasible, 4 cancelled, "
-        "130 interrupted.",
+        epilog="Exit codes: 0 done, 1 error, 2 usage, 3 not feasible or not reached, "
+        "4 cancelled, 130 interrupted.",
     )
     p.add_argument("--version", action="version", version=f"menlo-sdk {__version__}")
     _connection_flags(p, default=None)
@@ -161,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     command(
         "stand",
         _run("_drive", "stand"),
-        "stand the robot up from DAMP and wait until armed (asks first)",
+        "put the robot in STAND and wait until armed; from MOVE, support it first (asks first)",
         asks=True,
     )
     command(
@@ -174,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     walk = command(
         "walk",
         _run("_drive", "walk"),
-        "walk in MOVE for a bounded time, then balance in place (asks first)",
+        "walk for a bounded time, then balance in place (asks first)",
         asks=True,
     )
     walk.add_argument("--vx", type=float, default=0.0, help="forward, m/s")

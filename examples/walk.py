@@ -1,14 +1,18 @@
 """Walk: in MOVE the walking policy balances the robot and follows the velocity you send.
 
 Here VX forward for DURATION_S seconds, then zero velocity: the robot stays in MOVE and keeps
-balancing in place. Never changes the robot mode. Run stand.py and balance.py first. The
-robot must hang from its gantry hook, with 2 m of clear floor ahead.
+balancing in place. Never changes the robot mode. Run stand.py and balance.py first: this
+script walks in MOVE only, a rule of its own (the SDK sends a velocity in any robot mode and
+the firmware decides). guard(robot), from guard.py, stops the script first when the robot
+reports what your rule will not drive through. The robot must hang from its gantry hook,
+with 2 m of clear floor ahead.
 Run: python examples/walk.py
 """
 
 import sys
 
-from menlo.asimov import NotReadyError, Robot
+from guard import guard
+from menlo.asimov import Mode, NotReadyError, Robot
 
 VX = 0.3  # m/s forward; the firmware caps it at 0.4 m/s
 VY = 0.0  # m/s to the left
@@ -17,11 +21,15 @@ DURATION_S = 3.0
 
 with Robot().connect() as robot:
     # region main
+    guard(robot)  # your rule, in guard.py; delete this line to walk without it
+    mode = robot.get_state().mode
+    if mode is not Mode.MOVE:  # this script's own rule: walk from MOVE only
+        print(f"robot mode {mode.name}: walk.py walks in MOVE only; run balance.py first")
+        sys.exit(1)
     try:
-        # Checks the robot first: it must be in MOVE. Held and re-sent at 10 Hz for
-        # DURATION_S, then zero velocity; returns after that.
+        # Held and re-sent at 10 Hz for DURATION_S, then zero velocity; returns after that.
         sent = robot.set_velocity(vx=VX, vy=VY, vyaw=VYAW, duration=DURATION_S)
-    except NotReadyError as exc:  # nothing was sent, or (RobotFaultedError) a fault ended it
+    except NotReadyError as exc:  # no live state (nothing sent), or a fault ended the walk
         print(exc)
         sys.exit(1)
     if sent.clamped:

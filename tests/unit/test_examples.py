@@ -9,9 +9,9 @@ ports, and a LiveKit room is the fake client from ``conftest``. The fake edge ru
 script (keyboard.py) takes its key source as the argument of ``main()``; here it is a
 scripted one.
 
-Several tests remove nothing and add nothing to an example: they fail when a safety check
-in it, or in the SDK command it calls, is removed (the check before a walk, a bounded hold
-per key press, a start key).
+Several tests remove nothing and add nothing to an example: they fail when a check of its
+own is removed (guard.py's rule, the MOVE-only rule of a walk, a bounded hold per key press,
+the question before a stand from MOVE or a rest).
 """
 
 from __future__ import annotations
@@ -215,22 +215,83 @@ def _balancing(run: Run, fw_edge: FakeEdge) -> None:
 # ── check ────────────────────────────────────────────────────────────────────
 
 
-def test_check_lists_problems_and_sends_nothing(run, fw_edge):
+def test_check_prints_the_facts_and_sends_nothing(run, fw_edge):
+    a = fw_edge.state.active_alerts.add()
+    a.id, a.severity = 17, 1  # MOTOR_TEMP_HIGH
     out = run("check.py")
-    assert "robot mode DAMP, armed False" in out
-    assert "ready to stand" in out
-    assert "not ready to move:" in out and "wrong_mode" in out and "stand() it first" in out
+    assert "robot mode DAMP, armed False, faulted False" in out
+    assert "alerts MOTOR_TEMP_HIGH" in out and "hottest joint 35 C" in out
+    assert "ready to stand" in out and "ready to move:" in out and "not ready" not in out
+    assert "alerts: the firmware reports MOTOR_TEMP_HIGH (information)" in out
     assert fw_edge.received == []
 
 
-def test_check_sees_a_standing_robot_armed_as_walk_py_does(run, fw_edge):
+def test_check_sees_a_standing_robot_armed(run, fw_edge):
     # The SDK counts the 0.5 s upright hold from its own samples. A snapshot taken at connect
     # says not_armed on a robot that has stood for minutes; check.py waits for it.
     fw_edge.set_mode("stand")
     out = run("check.py")
     assert "robot mode STAND, armed True" in out
-    assert "ready to move" in out and "not ready to move" not in out
+    assert "ready to move" in out and "not_armed" not in out
     assert fw_edge.received == []
+
+
+# ── guard ────────────────────────────────────────────────────────────────────
+
+
+def test_guard_passes_a_healthy_robot_and_sends_nothing(run, fw_edge):
+    out = run("guard.py")
+    assert "guard: hottest joint" in out and "nothing stops this script" in out
+    assert fw_edge.received == []
+
+
+@pytest.mark.parametrize(
+    ("setup", "says"),
+    [
+        (lambda e: e.state.joint_temp.__setitem__(15, 65.0), "L_Elbow is at 65 C"),
+        (lambda e: e.fault(), "the firmware latched DAMP"),
+        (
+            lambda e: setattr(e.state.active_alerts.add(), "id", 17),
+            "active alerts: MOTOR_TEMP_HIGH",
+        ),
+    ],
+)  # fmt: skip
+def test_guard_exits_on_your_rule_and_the_motion_scripts_call_it(run, fw_edge, setup, says):
+    setup(fw_edge)
+    for name in ("guard.py", "stand.py", "balance.py"):
+        out = run(name, code=1)
+        assert says in out and "guard: not going ahead" in out, name
+    assert fw_edge.received == [], "the guard stops a script before it sends anything"
+
+
+def test_guard_rule_is_yours_to_change(run, fw_edge):
+    fw_edge.state.joint_temp[15] = 65.0
+    assert "L_Elbow is at 65 C" in run("guard.py", code=1)
+    out = run("guard.py", settings={"MAX_JOINT_TEMP_C": 70.0, "REFUSE_ON_ALERTS": False})
+    assert "guard: hottest joint L_Elbow 65 C" in out and "nothing stops this script" in out
+
+
+@pytest.mark.parametrize(
+    ("name", "settings"),
+    [
+        ("stand.py", {}),
+        ("balance.py", {}),
+        ("walk.py", {}),
+        ("stream_velocity.py", {}),
+        ("move_joints.py", {"ROBOT_SUPPORTED": True}),
+        ("wait_until.py", {"ROBOT_SUPPORTED": True}),
+        ("keyboard.py", {}),
+    ],
+)
+def test_every_motion_script_stops_on_the_guard_before_it_sends(run, fw_edge, name, settings):
+    # In MOVE, supported where the script asks for it, and with a key pressed: each script
+    # would send motion here, so only its guard(robot) call stops it.
+    fw_edge.set_mode("move")
+    fw_edge.state.joint_temp[15] = 65.0  # above guard.py's MAX_JOINT_TEMP_C
+    keys = Keys(["w", *idle(0.3)]) if name == "keyboard.py" else None
+    out = run(name, settings=settings, keys=keys, code=1)
+    assert "L_Elbow is at 65 C" in out and "guard: not going ahead" in out
+    assert _drives(fw_edge) == [] and fw_edge.received == [], "nothing was sent"
 
 
 # ── connect ──────────────────────────────────────────────────────────────────
@@ -280,26 +341,22 @@ def test_stand_stands_from_damp_and_waits_until_armed(run, fw_edge):
     assert _drives(fw_edge) == []
 
 
-def test_stand_refuses_a_robot_in_move(run, fw_edge):
+def test_stand_stands_from_move(run, fw_edge):
     fw_edge.set_mode("move")
-    out = run("stand.py", code=1)
-    assert "not ready to stand" in out and "wrong_mode" in out
-    assert fw_edge.received == []
+    out = run("stand.py")
+    assert fw_edge.modes() == ["stand"] and "robot mode STAND, armed True" in out
 
 
-def test_walk_refuses_in_damp_and_points_at_stand(run, fw_edge):
-    # Without the check in set_velocity a velocity goes out to a robot in DAMP.
+def test_walk_keeps_its_own_move_only_rule_in_damp(run, fw_edge):
     out = run("walk.py", code=1)
-    assert "not ready to move" in out
-    assert "stand() it first" in out
+    assert "robot mode DAMP: walk.py walks in MOVE only; run balance.py first" in out
     assert fw_edge.received == []
 
 
-def test_walk_refuses_a_latched_fault(run, fw_edge):
+def test_walk_stops_on_a_latched_fault_by_the_guard(run, fw_edge):
     fw_edge.fault()
     out = run("walk.py", code=1)
-    assert "faulted" in out and "until the firmware restarts" in out
-    assert "stand.py" not in out, "standing does not clear a latched fault"
+    assert "the firmware latched DAMP" in out and "guard: not going ahead" in out
     assert fw_edge.received == []
 
 
@@ -307,16 +364,14 @@ def test_balance_enters_move_from_stand_and_waits_for_it(run, fw_edge):
     _armed(run, fw_edge)
     out = run("balance.py")
     assert fw_edge.velocities() == [ZERO], "balance() is one zero velocity"
-    assert fw_edge.first_velocity_at is not None and fw_edge.armed_at is not None
-    assert fw_edge.first_velocity_at >= fw_edge.armed_at
     assert "robot mode MOVE, balancing in place" in out
     assert fw_edge.modes() == ["stand"]
 
 
-def test_balance_refuses_in_damp_and_points_at_stand(run, fw_edge):
+def test_balance_in_damp_is_sent_and_says_stand_first(run, fw_edge):
     out = run("balance.py", code=1)
-    assert "not ready to move" in out and "stand() it first" in out
-    assert fw_edge.received == []
+    assert "the robot is in DAMP: stand() first" in out
+    assert fw_edge.velocities() == [ZERO], "sent: the firmware decides"
 
 
 def test_balance_in_move_sends_zero(run, fw_edge):
@@ -325,11 +380,10 @@ def test_balance_in_move_sends_zero(run, fw_edge):
     assert fw_edge.velocities() == [ZERO] and "robot mode MOVE" in out
 
 
-def test_walk_refuses_in_stand_and_points_at_balance(run, fw_edge):
-    # Without the MOVE-only check a velocity from STAND puts the robot in MOVE and walks.
+def test_walk_keeps_its_own_move_only_rule_in_stand(run, fw_edge):
     _armed(run, fw_edge)
     out = run("walk.py", code=1)
-    assert "the robot is in STAND; balance() it first" in out
+    assert "robot mode STAND: walk.py walks in MOVE only; run balance.py first" in out
     assert fw_edge.velocities() == [] and fw_edge.state.current_mode == 1  # STAND
 
 
@@ -364,18 +418,33 @@ def test_wait_until_acts_mid_move_once_the_joint_passes_the_angle(run, fw_edge):
     assert time.monotonic() - started < 10.0
 
 
-def test_wait_until_refuses_in_damp(run, fw_edge):
+def test_wait_until_in_stand_that_times_out_does_not_blame_damp(run, fw_edge, monkeypatch):
+    fw_edge.set_mode("stand")  # the fake firmware moves joints in MOVE only: the wait times out
+    wait_until = menlo.asimov.Robot.wait_until
+    monkeypatch.setattr(
+        menlo.asimov.Robot, "wait_until", lambda self, p, **kw: wait_until(self, p, timeout=0.3)
+    )
     out = run("wait_until.py", settings={"ROBOT_SUPPORTED": True}, code=1)
-    assert "robot mode DAMP" in out and "run stand.py first" in out
-    assert fw_edge.received == []
+    assert "within 0.3 s" in out
+    assert "DAMP" not in out
 
 
-def test_wait_until_refuses_in_move_where_a_trajectory_would_drop_the_robot(run, fw_edge):
+def test_wait_until_in_damp_sends_and_says_the_robot_did_not_follow(run, fw_edge, monkeypatch):
+    wait_until = menlo.asimov.Robot.wait_until
+    monkeypatch.setattr(
+        menlo.asimov.Robot, "wait_until", lambda self, p, **kw: wait_until(self, p, timeout=0.3)
+    )
+    out = run("wait_until.py", settings={"ROBOT_SUPPORTED": True}, code=1)
+    assert "robot mode DAMP: the joints do not follow in DAMP, run stand.py first" in out
+    assert _drives(fw_edge), "sent: the firmware drops a trajectory in DAMP"
+
+
+def test_wait_until_moves_the_joint_in_move_too(run, fw_edge):
     _balancing(run, fw_edge)
     n = len(fw_edge.received)
-    out = run("wait_until.py", settings={"ROBOT_SUPPORTED": True}, code=1)
-    assert "robot mode MOVE" in out and "damp.py, then stand.py" in out
-    assert not any(c.HasField("all_trajectory") for c in fw_edge.received[n:])
+    out = run("wait_until.py", settings={"ROBOT_SUPPORTED": True, "DURATION_S": 1.0})
+    assert "L_Elbow at" in out and "L_Elbow back at" in out
+    assert any(c.HasField("all_trajectory") for c in fw_edge.received[n:])
 
 
 def test_stream_velocity_sends_one_packet_per_tick_then_balances(run, fw_edge):
@@ -392,10 +461,11 @@ def test_stream_velocity_sends_one_packet_per_tick_then_balances(run, fw_edge):
     assert "robot mode MOVE" in out
 
 
-def test_stream_velocity_refuses_in_stand(run, fw_edge):
+def test_stream_velocity_keeps_its_own_move_only_rule(run, fw_edge):
     _armed(run, fw_edge)
     out = run("stream_velocity.py", code=1)
-    assert "balance() it first" in out and fw_edge.velocities() == []
+    assert "robot mode STAND: this script streams in MOVE only" in out
+    assert fw_edge.velocities() == []
 
 
 def test_damp_asks_and_sends_nothing_on_no(run, fw_edge):
@@ -429,20 +499,44 @@ def test_damp_says_what_to_do_when_damp_is_not_reported(run, fw_edge, monkeypatc
     assert fw_edge.modes() == ["damp"]
 
 
+def test_rest_asks_and_sends_nothing_on_no(run, fw_edge):
+    fw_edge.set_mode("move")
+    out = run("rest.py", stdin="n\n")
+    assert "Is the robot on its gantry hook or seated on a stool or bench? [y/N]" in out
+    assert "nothing sent" in out and fw_edge.received == []
+
+
+def test_rest_asks_then_sends_stand_then_damp(run, fw_edge):
+    _balancing(run, fw_edge)
+    fw_edge.received.clear()
+    out = run("rest.py", stdin="y\n")
+    assert fw_edge.modes() == ["stand", "damp"]
+    assert (
+        out.index("robot mode MOVE") < out.index("robot mode STAND") < out.index("robot mode DAMP")
+    )
+    assert fw_edge.state.current_mode == 0  # DAMP
+
+
+def test_rest_without_asking_only_when_yes_is_set_and_leaves_damp_alone(run, fw_edge):
+    out = run("rest.py")  # DAMP already
+    assert "already at rest; nothing sent" in out and fw_edge.received == []
+    fw_edge.set_mode("move")
+    out = run("rest.py", settings={"YES": True})  # no input: a question would get EOF
+    assert "[y/N]" not in out and fw_edge.modes() == ["stand", "damp"]
+
+
 # ── keyboard ─────────────────────────────────────────────────────────────────
 
 
-def test_keyboard_moves_only_when_ready_and_each_press_is_a_bounded_hold(run, fw_edge):
-    keys = Keys(["w", "t", "w", " ", "w", *idle(1.2)])
+def test_keyboard_sends_in_any_mode_and_each_press_is_a_bounded_hold(run, fw_edge):
+    keys = Keys(["w", "t", " ", "w", *idle(1.2)])
     out = run("keyboard.py", keys=keys)
-    # w in DAMP and in STAND: set_velocity refuses, nothing is sent; t stands; space
+    # w in DAMP is sent and does nothing (the firmware drops it); t stands; space
     # balances (MOVE); w then walks.
-    assert "not ready to move: wrong_mode, press t to stand" in out
-    assert "not ready to move: wrong_mode, press space to balance" in out
-    assert fw_edge.modes()[0] == "stand"
-    assert fw_edge.first_velocity_at is not None and fw_edge.armed_at is not None
-    assert fw_edge.first_velocity_at >= fw_edge.armed_at
-    assert (0.3, 0.0, 0.0) in fw_edge.velocities()
+    assert "w: vx +0.30 vy +0.00 vyaw +0.00, in DAMP: press t to stand" in out
+    assert fw_edge.modes()[0] == "stand" and "standing, armed" in out
+    assert "balance in place" in out
+    assert fw_edge.state.current_mode == 2  # MOVE
     # One press holds for 0.3 s: with no further key the zero follows by itself. An
     # unbounded hold would keep re-sending 0.3 m/s at 10 Hz until quit.
     after_hold = fw_edge.velocities_between(keys.last("w") + 0.3 + 0.2)
@@ -459,11 +553,13 @@ def test_keyboard_keys_map_to_small_velocities(run, fw_edge):
     assert fw_edge.velocities()[-1] == ZERO
 
 
-def test_keyboard_refuses_to_stand_in_move(run, fw_edge):
+def test_keyboard_stand_in_move_asks_about_support_first(run, fw_edge):
     fw_edge.set_mode("move")
-    out = run("keyboard.py", keys=Keys(["t"]))
-    assert "not ready to stand: wrong_mode" in out
-    assert "stand" not in fw_edge.modes()
+    out = run("keyboard.py", keys=Keys(["t", "n"]))
+    assert "gantry hook or seated on a stool or bench? [y/N]" in out
+    assert "stand cancelled" in out and "stand" not in fw_edge.modes()
+    out = run("keyboard.py", keys=Keys(["t", "y"]))
+    assert fw_edge.modes() == ["stand"] and "standing, armed" in out
 
 
 def test_keyboard_damps_only_on_yes(run, fw_edge):
@@ -482,8 +578,8 @@ def test_keyboard_quit_sends_zero_in_move(run, fw_edge):
 
 def test_keyboard_space_in_damp_says_to_stand(run, fw_edge):
     out = run("keyboard.py", keys=Keys([" "]))
-    assert "not ready to balance: wrong_mode, press t to stand" in out
-    assert fw_edge.received == []
+    assert "sent balance, but the robot reports DAMP, press t to stand" in out
+    assert fw_edge.velocities() == [ZERO]
 
 
 # ── joints ───────────────────────────────────────────────────────────────────
@@ -494,18 +590,18 @@ def test_move_joints_needs_the_robot_supported(run, fw_edge):
     assert fw_edge.received == []
 
 
-def test_move_joints_refuses_in_damp_and_points_at_stand(run, fw_edge):
-    out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True}, code=1)
-    assert "robot mode DAMP" in out and "run stand.py first" in out
-    assert fw_edge.received == []
+def test_move_joints_in_damp_sends_and_reports_that_the_joints_did_not_follow(run, fw_edge):
+    out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True, "DURATION_S": 0.1}, code=1)
+    assert "did not come within" in out
+    assert _drives(fw_edge), "sent: the firmware drops a trajectory in DAMP"
 
 
-def test_move_joints_refuses_in_move_where_a_trajectory_would_drop_the_robot(run, fw_edge):
+def test_move_joints_in_move_is_sent(run, fw_edge):
     _balancing(run, fw_edge)
     n = len(fw_edge.received)
-    out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True}, code=1)
-    assert "robot mode MOVE" in out and "damp.py, then stand.py" in out
-    assert not any(c.HasField("all_trajectory") for c in fw_edge.received[n:])
+    out = run("move_joints.py", settings={"ROBOT_SUPPORTED": True, "DURATION_S": 0.5})
+    assert "L_Elbow moved from" in out
+    assert any(c.HasField("all_trajectory") for c in fw_edge.received[n:])
 
 
 def test_move_joints_bends_the_elbow_and_back(run, fw_edge):

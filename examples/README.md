@@ -5,14 +5,16 @@ The scripts connect to the saved robot (`menlo setup`), or to the robot the `MEN
 environment variables describe, for example `MENLO_UDP_HOST=192.168.22.32`. Read the
 docstring at the top of a file before you run it: it says what the robot must be doing.
 
-The SDK checks the robot before `stand()`, `balance()`, `set_velocity()` and `set_joints()`
-send anything. When the robot is not ready, the scripts print what stands in the way and what
-fixes it, and exit with nothing sent. Nothing here is an emergency stop: use the E-Stop in Asimov Manager, or
-cut power at the battery unit.
+The SDK sends what a script asks and reports what the robot says; it refuses a command only
+when there is no live state. A guard is yours: the motion scripts call `guard(robot)` from
+[guard.py](guard.py) before they send anything, and it stops them when the robot reports what
+your rule will not drive through. Edit its limits, or delete the call. Nothing here is an
+emergency stop: use the E-Stop in Asimov Manager, or cut power at the battery unit.
 
-## Check
+## Check and guard
 
-- [check.py](check.py): the same check on its own, for standing, walking and a trajectory; sends nothing.
+- [check.py](check.py): the robot's facts (robot mode, armed, faults, alerts, hottest joint, battery) and `preflight()`; sends nothing.
+- [guard.py](guard.py): your own rule (joint temperature, battery, a latched fault, active alerts); prints what it finds and exits non-zero when the rule fails.
 
 ## Connect
 
@@ -22,13 +24,14 @@ cut power at the battery unit.
 
 - [read_state.py](read_state.py): robot mode, arming, faults, battery, actuator temperatures, IMU, alerts and state rate.
 
-## Stand, balance, walk, damp
+## Stand, balance, walk, rest, damp
 
 Run them in this order. The robot must be on its feet, hanging from its gantry hook.
 
-- [stand.py](stand.py): DAMP to STAND; returns once armed.
+- [stand.py](stand.py): STAND from any robot mode; returns once armed. From MOVE, hang the robot from its gantry hook or seat it on a stool or bench first.
 - [balance.py](balance.py): STAND to MOVE at zero velocity; the walking policy balances the robot in place.
 - [walk.py](walk.py): walk forward for 3 s in MOVE; the robot then balances in place.
+- [rest.py](rest.py): MOVE to STAND to DAMP; asks first whether the robot is on its gantry hook or seated on a stool or bench.
 - [damp.py](damp.py): put the robot in DAMP (every actuator stops holding its position); asks first; the robot must be supported.
 
 ## Waiting on the robot
@@ -41,7 +44,7 @@ Run them in this order. The robot must be on its feet, hanging from its gantry h
 
 ## Keyboard
 
-- [keyboard.py](keyboard.py): drive with w, a, s, d, q and e in short steps that stop when you let go; t stands, space balances, b damps, x quits.
+- [keyboard.py](keyboard.py): drive with w, a, s, d, q and e in short steps that stop when you let go; t stands (asks first in MOVE), space balances, b damps, x quits.
 
 ## Joints
 

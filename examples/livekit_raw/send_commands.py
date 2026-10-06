@@ -1,9 +1,10 @@
 """Send STAND to a robot in DAMP through its LiveKit room, without the SDK.
 
 Uses only livekit and asimov-protocol. The script reads the "state" data track first and sends
-nothing unless the same checks robot.preflight("stand") makes pass: fresh state, the same
-protocol version, no fault or critical alert, battery not protecting and not low, no hot
-actuator, robot mode DAMP. The command is one serialized RobotCommand on the "commands" topic.
+nothing unless its own guard passes: fresh state, the same protocol version, no fault or
+critical alert, battery not protecting and not low, no hot actuator, robot mode DAMP. The
+guard is this script's rule, like examples/guard.py; change it as you need. The command is
+one serialized RobotCommand on the "commands" topic.
 The robot must be on its feet, hanging from its gantry hook. Set MANAGER_URL in manager_token.py.
 Run: MENLO_CREDENTIAL=... python examples/livekit_raw/send_commands.py
 """
@@ -20,8 +21,8 @@ from manager_token import fetch_grant
 
 PROTOCOL_VERSION = 1
 MAX_STATE_AGE_S = 0.5  # decide on a sample at most this old
-BATTERY_LOW_PERCENT = 20.0  # the SDK's preflight threshold
-JOINT_HOT_C = 60.0  # the SDK's preflight threshold; the firmware latches DAMP at 80 °C
+BATTERY_LOW_PERCENT = 20.0  # this script's limit; the firmware warns below 20 %
+JOINT_HOT_C = 60.0  # this script's limit; the firmware warns at 60 °C and latches DAMP at 80 °C
 LISTEN_S = 2.0  # how long to read state before deciding
 
 SEQUENCE = itertools.count(1)
@@ -43,7 +44,7 @@ def why_not_stand(state: Any, received_at: float) -> str | None:
         return f"the robot speaks protocol {state.protocol_version}, not {PROTOCOL_VERSION}"
     if state.error_flags or any(a.severity == 0 for a in state.active_alerts):
         return f"the robot has a critical alert or a fault (error_flags {state.error_flags:#x})"
-    b = state.battery  # absent or all zero: not reported, which the SDK only warns about
+    b = state.battery  # absent or all zero: not reported
     fields = (b.voltage_v, b.current_a, b.soc_percent, b.max_cell_temp_c, b.protection_flags)
     if state.HasField("battery") and any(fields):
         if b.protection_flags:
