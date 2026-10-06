@@ -3,7 +3,7 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.1.0rc9 — 2026-10-06
 
 ### Added
 - The usage guide is an agent skill, `skills/menlo-sdk/SKILL.md`, in the Agent Skills format.
