@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Changed
+- `LICENSE` carries the copyright line, Copyright 2026 Menlo Research Pte. Ltd.
+- CI no longer runs the integration job that needed access to Asimov Edge's source.
 - `examples/guard.py` is an example only: the motion examples no longer call it by default.
   Each carries `from guard import guard` and `guard(robot)` commented out, to uncomment.
   Its `MAX_JOINT_TEMP_C` default is 80 C, where the firmware latches DAMP.

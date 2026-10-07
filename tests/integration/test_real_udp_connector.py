@@ -1,8 +1,8 @@
-"""Drive asimov-edge's REAL `UdpConnector`, in-process, with the SDK's transport.
+"""Drive Asimov Edge's REAL `UdpConnector`, in-process, with the SDK's transport.
 
 The fake edge in conftest is shaped like the connector; this proves the shape. It needs
-an asimov-edge checkout on the path (``ASIMOV_EDGE_SRC``, pinned in ``edge.pin``), so it
-is marked ``integration`` and skips (loudly, by name) when that is missing.
+Asimov Edge's source on the path (``ASIMOV_EDGE_SRC``), so it is marked ``integration``
+and skips (loudly, by name) when that is missing.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.integration
 
 EDGE_SRC = os.environ.get("ASIMOV_EDGE_SRC")
 if not EDGE_SRC:
-    pytest.skip("ASIMOV_EDGE_SRC not set: cannot import asimov-edge", allow_module_level=True)
+    pytest.skip("ASIMOV_EDGE_SRC not set: cannot import Asimov Edge", allow_module_level=True)
 sys.path.insert(0, EDGE_SRC)
 
 

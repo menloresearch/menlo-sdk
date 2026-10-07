@@ -100,8 +100,9 @@ cherry-picked onto it, and the ancestry check and the mirror extended to that br
 ## What a release must satisfy
 
 - The release workflow re-runs lint, mypy strict and the unit tests (3.12, 3.13 and 3.14) on the tagged
-  tree itself. The real-edge integration job runs in this repository's CI when the release
-  commit is mirrored; the `pypi` reviewer checks it passed there before approving.
+  tree itself. The integration tests against Asimov Edge's real `UdpConnector`
+  (`pytest -m integration`) run where Asimov Edge's source is, on every change to the SDK; the
+  `pypi` reviewer checks they passed on the release commit before approving.
 - The `asimov-protocol` floor in `pyproject.toml` names a release that is on PyPI, and
   `menlo.asimov.robots.PROTOCOL_VERSION` matches what the edge speaks.
 - A `## <version> — <date>` heading in `CHANGELOG.md`.

@@ -48,7 +48,7 @@ class FakeEdge:
     """The edge's UDP lane, as the SDK sees it: bare ``RobotCommand`` in, bare
     ``RobotState`` pushed out to a configured host at a configured rate.
 
-    Deliberately shaped like ``asimov-edge``'s ``UdpConnector`` (sender address ignored,
+    Deliberately shaped like Asimov Edge's ``UdpConnector`` (sender address ignored,
     state to ONE destination), so a test that passes here says something about the robot.
     Records every decoded command; the state it pushes is whatever the test sets.
 

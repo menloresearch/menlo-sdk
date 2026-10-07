@@ -165,7 +165,7 @@ def test_damp_from_a_state_callback_sends_and_does_not_stall_the_state(edge, rob
     a.id, a.severity = 3, 1  # a warning: nothing latches, the callback damps
     assert edge.wait_for(lambda _: bool(returned), 2.0)
     assert returned[0] < 0.5, "damp() in a callback returns once sent"
-    assert "damp" in edge.modes()
+    assert edge.wait_for(lambda _: "damp" in edge.modes(), 2.0)  # sent: the datagram follows
     seq = robot.get_state().sequence
     robot.wait_until(lambda s: s.sequence > seq + 5, timeout=2.0)  # state kept flowing
 

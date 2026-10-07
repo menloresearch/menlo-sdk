@@ -16,7 +16,7 @@ typecheck:
 test:            ## unit tests only (no robot, no edge checkout, no livekit)
 	uv run pytest -m "not integration and not live and not livekit"
 
-integration:     ## the real asimov-edge UdpConnector in-process; needs ASIMOV_EDGE_SRC=<edge>/src
+integration:     ## Asimov Edge's real UdpConnector in-process; needs ASIMOV_EDGE_SRC=<edge>/src
 	uv run pytest -m integration
 
 live:            ## a robot; needs MENLO_SDK_LIVE_HOST

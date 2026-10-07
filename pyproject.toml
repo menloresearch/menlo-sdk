@@ -115,7 +115,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider --timeout=60"
 markers = [
-    "integration: needs an asimov-edge checkout (ASIMOV_EDGE_SRC); drives the real UdpConnector in-process",
+    "integration: needs Asimov Edge's source (ASIMOV_EDGE_SRC); drives the real UdpConnector in-process",
     "live: needs a running robot (MENLO_SDK_LIVE_HOST)",
     "livekit: needs a LiveKit server (`livekit-server --dev`, or MENLO_SDK_LIVEKIT_URL)",
 ]
