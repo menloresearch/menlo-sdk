@@ -14,6 +14,8 @@ fakes this seam in forty lines and never needs livekit installed.
 The room convention Asimov Edge speaks:
 
 * data topic ``commands``  -> one bare serialized ``asimov.io.RobotCommand`` per packet
+* data track ``commands``  -> the SDK's own track: one ``asimov.io.RobotCommand`` per frame,
+  for streamed setpoints, when the robot's participant attribute says it reads it
 * data track ``state``     <- one bare serialized ``asimov.io.RobotState`` per frame
 * the robot publishes its camera as a video track and its microphone as an audio track;
   the SDK publishes one audio track back for the speaker.
@@ -119,6 +121,17 @@ class LiveKitClient(Protocol):
         """One reliable data packet. Returns as soon as the packet is queued on the loop;
         it never blocks the caller on the network. ``LinkLostError`` when the room is gone."""
 
+    def push_data_frame(self, name: str, payload: bytes) -> bool:
+        """One frame on this client's own data track ``name``: lossy, never blocks, never
+        retried. The track is published on first use, in the background; ``False`` means
+        this frame did not go out (the track is not published yet, the server refused it,
+        or the push failed) and the caller sends it another way. ``LinkLostError`` when
+        the room is gone, or when an earlier data packet failed."""
+
+    def publisher_attributes(self, track: str) -> dict[str, str]:
+        """The participant attributes of whoever publishes the remote data track called
+        ``track``; empty while nobody does."""
+
     def publish_audio(self, chunk: AudioChunk) -> None:
         """One block of PCM onto the SDK's own audio track, publishing the track on first
         use. Blocks until LiveKit has taken the samples, so chunks keep their order."""
@@ -170,6 +183,14 @@ class _LiveKitClient:
         self._cv = threading.Condition()
         self._data_track_cbs: dict[str, list[DataTrackCallback]] = {}
         self._data_track_readers: dict[str, Future[Any]] = {}  # by track sid
+        # Remote data tracks we read: sid -> (name, publisher identity), and the
+        # attributes of each publisher asked about, kept current by the room's events.
+        self._remote_tracks: dict[str, tuple[str, str]] = {}
+        self._attributes: dict[str, dict[str, str]] = {}
+        # This client's own data tracks: published, being published, or refused.
+        self._local_tracks: dict[str, Any] = {}
+        self._local_pending: set[str] = set()
+        self._local_refused: set[str] = set()
         self._video_cbs: list[FrameCallback] = []
         self._audio_cbs: list[AudioCallback] = []
         self._track_cbs: list[TracksCallback] = []
@@ -298,6 +319,51 @@ class _LiveKitClient:
         future.add_done_callback(self._publishes.discard)
         future.add_done_callback(self._note_publish)
 
+    def push_data_frame(self, name: str, payload: bytes) -> bool:
+        room, loop = self._room, self._loop
+        if room is None or loop is None or not self._connected:
+            raise LinkLostError(f"the LiveKit room {self.endpoint} is not joined")
+        # A packet that failed surfaces on the next send, whichever lane that send takes.
+        failed, self._send_error = self._send_error, None
+        if failed is not None:
+            raise LinkLostError(f"a data packet to {self.endpoint} failed: {failed!r}")
+        track = self._local_tracks.get(name)
+        if track is None:
+            if name not in self._local_pending and name not in self._local_refused:
+                self._local_pending.add(name)
+                self._spawn(self._publish_data_track(name))
+            return False
+        try:
+            track.try_push(_rtc().DataTrackFrame(payload=payload))
+        except Exception as exc:  # a full buffer, or a track the server took away
+            log.debug("a %r data-track frame was not pushed: %s", name, exc)
+            return False
+        return True
+
+    async def _publish_data_track(self, name: str) -> None:
+        try:
+            track = await self._room.local_participant.publish_data_track(name=name)
+        except Exception as exc:  # an observe token may not publish: packets only, then
+            self._local_refused.add(name)
+            log.debug("the %r data track was not published: %s", name, exc)
+        else:
+            self._local_tracks[name] = track
+        finally:
+            self._local_pending.discard(name)
+
+    def publisher_attributes(self, track: str) -> dict[str, str]:
+        identity = next((i for n, i in tuple(self._remote_tracks.values()) if n == track), None)
+        if identity is None:
+            return {}
+        attributes = self._attributes.get(identity)
+        if attributes is None:  # read once from the roster, then kept current by events
+            room = self._room
+            participant = room.remote_participants.get(identity) if room is not None else None
+            if participant is None:
+                return {}
+            attributes = self._attributes[identity] = dict(participant.attributes)
+        return dict(attributes)
+
     def _note_publish(self, future: Future[Any]) -> None:
         with contextlib.suppress(Exception):
             exc = future.exception()
@@ -370,6 +436,7 @@ class _LiveKitClient:
         # after connect, so the robot's state track is found whichever side came first.
         room.on("data_track_published", self._on_data_track_published)
         room.on("data_track_unpublished", self._on_data_track_unpublished)
+        room.on("participant_attributes_changed", self._on_attributes_changed)
         room.on("disconnected", self._on_disconnected)
         await room.connect(self._url, token, options=rtc.RoomOptions(auto_subscribe=True))
         self._room = room
@@ -392,6 +459,7 @@ class _LiveKitClient:
         for task in tuple(self._tasks):
             task.cancel()
         self._data_track_readers.clear()
+        self._forget_tracks()
         room, self._room = self._room, None
         if room is not None:
             with contextlib.suppress(Exception):
@@ -410,7 +478,20 @@ class _LiveKitClient:
 
     def _on_disconnected(self, *_: Any) -> None:
         self._connected = False
+        self._forget_tracks()
         self._set_tracks(set())
+
+    def _forget_tracks(self) -> None:
+        self._remote_tracks.clear()
+        self._attributes.clear()
+        self._local_tracks.clear()
+        self._local_pending.clear()
+        self._local_refused.clear()
+
+    def _on_attributes_changed(self, _changed: Any, participant: Any) -> None:
+        identity = getattr(participant, "identity", "")
+        if identity in self._attributes:
+            self._attributes[identity] = dict(participant.attributes)
 
     def _on_track_subscribed(self, track: Any, *_: Any) -> None:
         rtc = _rtc()
@@ -434,6 +515,11 @@ class _LiveKitClient:
             return  # not a track anyone here asked for
         sid = getattr(track.info, "sid", name)
         self._on_data_track_unpublished(sid)  # a re-publish replaces its reader
+        identity = getattr(track, "publisher_identity", "") or ""
+        self._remote_tracks[sid] = (name, identity)
+        # A re-published track is a publisher that may have restarted as something else:
+        # its attributes are read again, not remembered.
+        self._attributes.pop(identity, None)
         loop = self._loop
         if loop is None:  # pragma: no cover - closed under us
             return
@@ -443,6 +529,7 @@ class _LiveKitClient:
         future.add_done_callback(self._tasks.discard)
 
     def _on_data_track_unpublished(self, sid: str, *_: Any) -> None:
+        self._remote_tracks.pop(sid, None)
         reader = self._data_track_readers.pop(sid, None)
         if reader is not None:
             reader.cancel()

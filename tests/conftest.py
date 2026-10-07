@@ -316,6 +316,12 @@ class FakeLiveKitClient:
 
     ``carry_state=False`` is the hybrid lane's shape: media only, because control and state
     are on the UDP transport beside it.
+
+    ``command_track=True`` is a robot whose Asimov Edge reads the SDK's ``commands`` data
+    track (its participant attribute says so); ``refuse_track=True`` is a session the
+    server will not let publish one. A frame on the track reaches the FakeEdge as the same
+    bytes a packet does, and is recorded in ``frames``. The first frame only starts the
+    track's publication and does not go out, as on a real room.
     """
 
     def __init__(
@@ -325,8 +331,14 @@ class FakeLiveKitClient:
         tracks: tuple[str, ...] = ("camera", "microphone"),
         carry_state: bool = True,
         token: str = "fake-token",
+        command_track: bool = False,
+        refuse_track: bool = False,
     ) -> None:
         self._edge = edge
+        self.command_track = command_track
+        self._refuse_track = refuse_track
+        self.frames: list[tuple[str, bytes]] = []  # (data track name, payload)
+        self._local_tracks: set[str] = set()
         self._room_tracks = frozenset(tracks)
         self._carry_state = carry_state
         self._token = token
@@ -369,6 +381,7 @@ class FakeLiveKitClient:
             self._sock = None
         self.connected = False
         self.identity = None
+        self._local_tracks.clear()
         self._set_tracks(frozenset())
 
     def wait_for_tracks(self, timeout: float) -> frozenset[str]:
@@ -381,6 +394,24 @@ class FakeLiveKitClient:
         out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         out.sendto(payload, ("127.0.0.1", self._edge.command_port))
         out.close()
+
+    def push_data_frame(self, name: str, payload: bytes) -> bool:
+        if not self.connected:
+            raise LinkLostError("the fake room is not joined")
+        if name not in self._local_tracks:
+            if not self._refuse_track:
+                self._local_tracks.add(name)
+            return False
+        self.frames.append((name, payload))
+        out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        out.sendto(payload, ("127.0.0.1", self._edge.command_port))
+        out.close()
+        return True
+
+    def publisher_attributes(self, track: str) -> dict[str, str]:
+        if not (self.connected and self._carry_state and track == "state"):
+            return {}
+        return {"asimov.commands_track": "1"} if self.command_track else {}
 
     def publish_audio(self, chunk) -> None:
         if not self.connected:

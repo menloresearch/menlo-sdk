@@ -10,13 +10,25 @@ robot. Nothing above the transport knows which is in use::
 The wire in the room, as Asimov Edge speaks it::
 
     commands  ->  data topic "commands"   one bare asimov.io.RobotCommand, reliable packets
+    setpoints ->  data track "commands"   the SDK's own track: one bare RobotCommand per
+                                          frame, lossy, for a non-zero velocity or a
+                                          trajectory, when the robot reads it
     state     <-  data track "state"      one bare asimov.io.RobotState per frame, ordered,
                                           user_timestamp = Asimov Edge's receive clock
 
 The same protobufs as over UDP: no envelope, no framing, no type tag; the topic identifies
-the type, as the port does over UDP. Commands land in Asimov Edge's arbiter beside the
-robot's other controllers, at the lowest priority, and pass the same safety layer. On
-``livekit``, Asimov Edge stops a held velocity when the SDK sends zero or leaves the room.
+the type, as the port does over UDP. A reliable packet holds back every packet behind it
+until a lost one is resent, which under loss stalls a stream for seconds; a track
+frame is never held back, and a lost one is replaced by the next. So a streamed setpoint
+goes on the track, and a mode command or a zero velocity, which must arrive, as a packet.
+Asimov Edge orders the two by ``RobotCommand.sequence`` and drops a frame older than a
+command it already took. A robot whose participant attribute ``asimov.commands_track`` is
+not ``"1"`` (an Asimov Edge that does not read the track) gets every command as a packet,
+and so does a session that may not publish a track.
+
+Commands land in Asimov Edge's arbiter beside the robot's other controllers, at the lowest
+priority, and pass the same safety layer. On ``livekit``, Asimov Edge stops a held velocity
+when the SDK sends zero or leaves the room.
 
 Every ``livekit`` import lives in ``_livekit_client``, behind a lazy function; importing
 this module, and driving a robot on ``udp``, never loads it.
@@ -44,10 +56,13 @@ from menlo.asimov._state import State, TransportKind
 from menlo.asimov.transport._livekit_client import LiveKitClient, TokenProvider, _LiveKitClient
 from menlo.asimov.transport._wire import (
     COMMAND_TOPIC,
+    COMMAND_TRACK,
+    COMMAND_TRACK_ATTRIBUTE,
     STATE_TRACK,
     _pb,
     decode_state,
     encode_command,
+    streamed,
 )
 from menlo.asimov.transport.base import (
     AudioCallback,
@@ -240,10 +255,25 @@ class LiveKitTransport(_MediaPlane):
         if not self._lk_open:
             raise NotConnectedError("this LiveKitTransport is not open")
         with self._lock:
-            self._seq = (self._seq + 1) & 0xFFFFFFFF
+            # Never 0: a zero sequence is not on the wire, and Asimov Edge cannot order a
+            # frame without one.
+            self._seq = (self._seq + 1) & 0xFFFFFFFF or 1
             seq = self._seq
-        self._lk.publish_data(encode_command(command, seq), topic=COMMAND_TOPIC)
+            payload = encode_command(command, seq)
+            # Pushed under the lock, so frames leave in sequence order: Asimov Edge drops
+            # one that is older than a command it already took.
+            if (
+                streamed(command)
+                and self._robot_reads_command_track()
+                and self._lk.push_data_frame(COMMAND_TRACK, payload)
+            ):
+                return seq
+        self._lk.publish_data(payload, topic=COMMAND_TOPIC)
         return seq
+
+    def _robot_reads_command_track(self) -> bool:
+        attributes = self._lk.publisher_attributes(STATE_TRACK)
+        return attributes.get(COMMAND_TRACK_ATTRIBUTE) == "1"
 
 
 class HybridTransport(_MediaPlane):

@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- On `livekit`, a non-zero velocity and a trajectory travel as frames on the SDK's own data
+  track `commands` when the robot says its Asimov Edge reads it (participant attribute
+  `asimov.commands_track = "1"`). A lost frame is replaced by the next one instead of holding
+  the stream back behind a resend: at 10 % loss and 50 Hz, the oldest velocity the robot took
+  was 43 ms old on the track and 3 s old as packets. Mode commands and a zero velocity stay
+  reliable packets. A robot without the attribute gets every command as a packet, as before.
+
 ### Changed
 - `LICENSE` carries the copyright line, Copyright 2026 Menlo Research Pte. Ltd.
 - CI no longer runs the integration job that needed access to Asimov Edge's source.

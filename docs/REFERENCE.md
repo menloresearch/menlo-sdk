@@ -61,6 +61,8 @@ module, so `import menlo.asimov` and `connect("udp")` never load it.
 udp / hybrid      commands -> udp/8850            one bare asimov.io.RobotCommand per datagram
                   state    <- udp/8851            one bare asimov.io.RobotState per datagram
 livekit           commands -> data topic "commands"   the SAME RobotCommand bytes, reliable packets
+                  setpoints-> data track "commands"   the SAME RobotCommand bytes, one per frame,
+                                                      lossy; the SDK's own track
                   state    <- data track "state"      the SAME RobotState bytes, one per frame,
                                                       ordered; user_timestamp = Asimov Edge's clock
 hybrid, livekit   camera   <- a video track, decoded to rgb8 Frames
@@ -73,6 +75,16 @@ command carries `protocol_version = 1`, a sequence number and the sender's clock
 `timestamp_us`; neither Asimov Edge nor the firmware checks that clock, and there is no
 timestamp window. The scripts in [livekit_raw/](../examples/livekit_raw) speak this protocol
 with `livekit` and `asimov-protocol` only.
+
+On `livekit`, a non-zero velocity and a trajectory go as frames on the SDK's own data track
+`commands` when the robot's participant attribute `asimov.commands_track` is `"1"`. A
+reliable packet holds back the packets behind it until a lost one is resent, which under
+loss leaves the robot following a setpoint up to seconds old; a lost frame is replaced by the
+next one instead. Mode commands and a zero velocity (a hold ending, `balance()`, `close()`)
+always go as packets. Asimov Edge orders the two by the command's sequence number and drops
+a setpoint older than a command it already took; a mode command or a zero velocity is always
+taken. A robot without the attribute, and a session
+that may not publish a track, get every command as a packet.
 
 The SDK never holds a LiveKit API secret. There is no `api_key`/`api_secret` parameter
 anywhere in it: a caller brings a join token minted by Asimov Manager, or a callable that

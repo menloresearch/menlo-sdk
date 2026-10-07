@@ -812,7 +812,7 @@ class Robot:
         :class:`RobotFaultedError`, a lost link or ``close()`` raises their errors.
 
         ``hold=False`` is for a loop that clocks its own velocity commands: it sends exactly
-        one velocity packet now and nothing in the background, and ends any hold that was
+        one velocity command now and nothing in the background, and ends any hold that was
         running so an older velocity is never re-sent. The live-state check is made once,
         as in :meth:`trajectory`: it adds no delay on a live stream and raises at once on a
         stale one (pass ``timeout`` to wait that long). There is nothing to wait for
@@ -821,17 +821,20 @@ class Robot:
         and ``hybrid``, Asimov Edge zeroes velocity 2 s after the last packet and the robot
         keeps balancing in MOVE; on ``livekit``, Asimov Edge stops it when the SDK sends
         zero or leaves the room. ``balance()``, ``close()`` and the exit hook still send
-        zero after a nonzero packet."""
+        zero after a nonzero packet. On ``livekit``, when the robot reads the SDK's command
+        track, a non-zero velocity sent this way is one lossy frame: a lost one is replaced
+        by your next, so send at a steady rate rather than only on a change, and end with
+        zero, which always goes as a reliable packet."""
         if not hold:
             if duration is not None:
                 raise ValueError(
-                    "set_velocity(hold=False) sends one packet and holds nothing, so it takes "
-                    "no duration=; call it again from your loop, or use hold=True"
+                    "set_velocity(hold=False) sends one velocity command and holds nothing, so "
+                    "it takes no duration=; call it again from your loop, or use hold=True"
                 )
             if wait:
                 raise ValueError(
-                    "set_velocity(hold=False) sends one packet and has nothing to wait for; "
-                    "leave wait= out"
+                    "set_velocity(hold=False) sends one velocity command and has nothing to wait "
+                    "for; leave wait= out"
                 )
             asked = Velocity(vx, vy, vyaw)
             self._ready("move", _nonnegative_finite("timeout", timeout or 0.0))
@@ -1163,7 +1166,9 @@ class Robot:
         Sent in any robot mode; the firmware decides. The SDK checks only for live state:
         one cached sample, no delay. It is made once: a loop calling this at 50 Hz gets
         :class:`NotReadyError` at once, with nothing sent, on a stale stream, rather than a
-        loop that stalls. Pass ``timeout`` to wait that long for a fresh sample."""
+        loop that stalls. Pass ``timeout`` to wait that long for a fresh sample. On
+        ``livekit``, when the robot reads the SDK's command track, each one is a lossy frame:
+        a lost one is replaced by your next."""
         pos = tuple(float(p) for p in positions)
         if self._info is not None and len(pos) != self._info.dof:
             raise ValueError(

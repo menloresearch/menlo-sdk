@@ -2,7 +2,8 @@
 ``asimov.io.RobotState`` in.
 
 Over UDP each datagram is one bare message; through LiveKit the same bare command goes in
-a reliable data packet on the ``commands`` topic and the same bare state in each frame of
+a reliable data packet on the ``commands`` topic, or, for a streamed setpoint, in a frame
+of the SDK's own data track named ``commands``, and the same bare state in each frame of
 a data track named ``state``. There is no envelope and no type tag on either wire: the
 port, the topic or the track name says what the bytes are. So the encoder and the decoder
 live here and neither transport owns them.
@@ -20,6 +21,13 @@ from menlo.asimov._state import Alert, Battery, BatteryProtection, Joint, Mode, 
 
 #: LiveKit data topic carrying one serialized ``asimov.io.RobotCommand`` per packet.
 COMMAND_TOPIC = "commands"
+#: Name of the SDK's own LiveKit data track for streamed setpoints (see :func:`streamed`):
+#: one serialized ``asimov.io.RobotCommand`` per frame, lossy, ordered. Asimov Edge orders
+#: these frames against the packets by ``RobotCommand.sequence`` and drops a stale one.
+COMMAND_TRACK = "commands"
+#: The robot's participant attribute, ``"1"`` when its Asimov Edge reads
+#: :data:`COMMAND_TRACK`; without it every command goes as a packet.
+COMMAND_TRACK_ATTRIBUTE = "asimov.commands_track"
 #: Name of the robot's LiveKit data track; each frame is one serialized
 #: ``asimov.io.RobotState`` (the same bytes Asimov Edge sends over UDP to :8851), and the frame's
 #: ``user_timestamp`` is Asimov Edge's clock (µs since the epoch) when the sample arrived from
@@ -39,6 +47,15 @@ def _pb() -> tuple[Any, Any, Any]:
             '`pip install "asimov-protocol>=1.2.1rc1,<2" "protobuf>=5.29.3"`.'
         ) from exc
     return b.command, b.common, b.state
+
+
+def streamed(command: Command) -> bool:
+    """A setpoint in a stream: a non-zero velocity or a trajectory. A lost one is replaced
+    by the next one, so it may ride a lossy lane. A mode command and a zero
+    velocity (a hold ending, ``balance()``, ``close()``) must arrive, so they never do."""
+    if isinstance(command, Trajectory):
+        return True
+    return isinstance(command, Velocity) and bool(command.vx or command.vy or command.vyaw)
 
 
 def encode_command(command: Command, sequence: int) -> bytes:
