@@ -87,15 +87,15 @@ So a script that must not drive a hot, faulted or flat robot writes that rule it
 
 ```python
 s = robot.get_state()  # one sample; every fact from it
-hot = [j.name for j in s.joints if j.temp is not None and j.temp >= 60]  # warned at 60 C
+hot = [j.name for j in s.joints if j.temp is not None and j.temp >= 80]  # DAMP latched at 80 C
 low = s.battery is not None and s.battery.soc_percent < 20  # warned below 20 %
 if s.faulted or hot or low or any(a.severity <= 1 for a in s.alerts):
     raise SystemExit(f"not driving: {s.mode.name}, faulted {s.faulted}, hot {hot}, low {low}")
 ```
 
 [examples/guard.py](https://github.com/menloresearch/menlo-sdk/blob/main/examples/guard.py) is that guard with
-editable limits; the motion examples call `guard(robot)`. Do not expect the SDK to stop you,
-and do not add such checks to the SDK itself.
+editable limits, an example; the motion examples carry `guard(robot)` commented out, off by
+default. Do not expect the SDK to stop you, and do not add such checks to the SDK itself.
 
 ```python
 robot.preflight("move")  # the same facts as a list: .ok, .problems, .has(code); sends nothing
@@ -207,7 +207,7 @@ from menlo.asimov import NotReadyError, Robot, WaitTimeoutError
 
 with Robot().connect() as robot:
     s = robot.get_state()  # your guard: the SDK does not refuse on what the robot reports
-    if s.faulted or any(j.temp is not None and j.temp >= 60 for j in s.joints):
+    if s.faulted or any(j.temp is not None and j.temp >= 80 for j in s.joints):
         raise SystemExit(f"not walking: robot mode {s.mode.name}, faulted {s.faulted}")
     try:
         robot.stand()  # DAMP -> STAND; returns once armed

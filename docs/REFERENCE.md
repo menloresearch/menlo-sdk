@@ -322,12 +322,12 @@ mode, a latched fault, an alert, an actuator temperature or the battery never st
 `stand()`, `balance()`, `set_velocity()`, `trajectory()` or `set_joints()`, and the firmware
 decides what a command does. The firmware warns at 60 C and latches DAMP at 80 C on an
 actuator, and warns below 20 % battery. A rule of your own reads `robot.get_state()` before
-it sends: [guard.py](../examples/guard.py) is one, with limits you edit, and the motion
-examples call it.
+it sends: [guard.py](../examples/guard.py) is an example, with limits you edit. No other
+example uses it by default: the motion examples carry two commented guard lines to uncomment.
 
 ```python
 s = robot.get_state()  # one sample; every fact from it
-if s.faulted or any(j.temp is not None and j.temp >= 60 for j in s.joints):
+if s.faulted or any(j.temp is not None and j.temp >= 80 for j in s.joints):
     raise SystemExit(f"not driving: robot mode {s.mode.name}, faulted {s.faulted}")
 ```
 

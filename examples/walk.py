@@ -3,15 +3,14 @@
 Here VX forward for DURATION_S seconds, then zero velocity: the robot stays in MOVE and keeps
 balancing in place. Never changes the robot mode. Run stand.py and balance.py first: this
 script walks in MOVE only, a rule of its own (the SDK sends a velocity in any robot mode and
-the firmware decides). guard(robot), from guard.py, stops the script first when the robot
-reports what your rule will not drive through. The robot must hang from its gantry hook,
-with 2 m of clear floor ahead.
+the firmware decides). The robot must hang from its gantry hook, with 2 m of clear floor
+ahead. To stop first on your own rule, uncomment the two guard lines (see guard.py).
 Run: python examples/walk.py
 """
 
 import sys
 
-from guard import guard
+# from guard import guard  # optional: your own rule, see guard.py
 from menlo.asimov import Mode, NotReadyError, Robot
 
 VX = 0.3  # m/s forward; the firmware caps it at 0.4 m/s
@@ -21,7 +20,7 @@ DURATION_S = 3.0
 
 with Robot().connect() as robot:
     # region main
-    guard(robot)  # your rule, in guard.py; delete this line to walk without it
+    # guard(robot)  # optional: uncomment this and the import to stop on your rule
     mode = robot.get_state().mode
     if mode is not Mode.MOVE:  # this script's own rule: walk from MOVE only
         print(f"robot mode {mode.name}: walk.py walks in MOVE only; run balance.py first")

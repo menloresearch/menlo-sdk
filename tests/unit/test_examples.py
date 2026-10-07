@@ -2,7 +2,8 @@
 
 The examples are the code the documentation shows, so each one is executed here as a
 script. A test changes a setting the way a user would, by editing the constant at the top
-of the file (``settings=``). Two seams point the scripts at the fake edge: the ``UdpConfig``
+of the file (``settings=``), or uncomments the two guard lines a motion script carries
+(``guarded=True``). Two seams point the scripts at the fake edge: the ``UdpConfig``
 they build (or the one ``Robot()`` builds from ``MENLO_UDP_HOST``) gets the fake edge's
 ports, and a LiveKit room is the fake client from ``conftest``. The fake edge runs with
 ``firmware=True``, so stand, arming and MOVE behave as on the robot. The interactive
@@ -143,7 +144,8 @@ def manager() -> Iterator[FakeManager]:
 def run(fw_edge, monkeypatch, tmp_path, capsys) -> Run:
     """Run ``examples/<name>`` and return what it printed.
 
-    ``settings`` edits the constants at the top of the file, as a user would. ``keys``
+    ``settings`` edits the constants at the top of the file, as a user would. ``guarded``
+    uncomments the script's two guard lines, as a user would to turn guard.py on. ``keys``
     runs an interactive script's ``main()`` with a scripted key source. ``stdin`` is what
     the user types. The script must end with exit code ``code`` (finishing normally is 0).
     """
@@ -165,6 +167,7 @@ def run(fw_edge, monkeypatch, tmp_path, capsys) -> Run:
         *,
         env: dict[str, str] | None = None,
         settings: dict[str, Any] | None = None,
+        guarded: bool = False,
         keys: Keys | None = None,
         stdin: str = "",
         code: int = 0,
@@ -175,6 +178,10 @@ def run(fw_edge, monkeypatch, tmp_path, capsys) -> Run:
             pattern = rf"^{key}(: [^=]+)? = .*$"
             source, n = re.subn(pattern, f"{key} = {value!r}", source, flags=re.MULTILINE)
             assert n == 1, f"{name} has no setting {key}"
+        if guarded:
+            pattern = r"^(\s*)# (from guard import guard|guard\(robot\))  # optional: .*$"
+            source, n = re.subn(pattern, r"\1\2", source, flags=re.MULTILINE)
+            assert n == 2, f"{name} does not carry the two commented guard lines"
         for key, value in ({"MENLO_UDP_HOST": "127.0.0.1"} if env is None else env).items():
             monkeypatch.setenv(key, value)
         monkeypatch.syspath_prepend(str(path.parent))  # as `python <path>` puts it first
@@ -248,7 +255,7 @@ def test_guard_passes_a_healthy_robot_and_sends_nothing(run, fw_edge):
 @pytest.mark.parametrize(
     ("setup", "says"),
     [
-        (lambda e: e.state.joint_temp.__setitem__(15, 65.0), "L_Elbow is at 65 C"),
+        (lambda e: e.state.joint_temp.__setitem__(15, 85.0), "L_Elbow is at 85 C"),
         (lambda e: e.fault(), "the firmware latched DAMP"),
         (
             lambda e: setattr(e.state.active_alerts.add(), "id", 17),
@@ -256,19 +263,23 @@ def test_guard_passes_a_healthy_robot_and_sends_nothing(run, fw_edge):
         ),
     ],
 )  # fmt: skip
-def test_guard_exits_on_your_rule_and_the_motion_scripts_call_it(run, fw_edge, setup, says):
+def test_guard_exits_on_your_rule_and_a_script_that_turns_it_on(run, fw_edge, setup, says):
     setup(fw_edge)
-    for name in ("guard.py", "stand.py", "balance.py"):
-        out = run(name, code=1)
+    out = run("guard.py", code=1)
+    assert says in out and "guard: not going ahead" in out
+    for name in ("stand.py", "balance.py"):
+        out = run(name, guarded=True, code=1)
         assert says in out and "guard: not going ahead" in out, name
     assert fw_edge.received == [], "the guard stops a script before it sends anything"
 
 
 def test_guard_rule_is_yours_to_change(run, fw_edge):
-    fw_edge.state.joint_temp[15] = 65.0
-    assert "L_Elbow is at 65 C" in run("guard.py", code=1)
-    out = run("guard.py", settings={"MAX_JOINT_TEMP_C": 70.0, "REFUSE_ON_ALERTS": False})
-    assert "guard: hottest joint L_Elbow 65 C" in out and "nothing stops this script" in out
+    fw_edge.state.joint_temp[15] = 79.0  # below the default limit: the firmware latches at 80 C
+    assert "nothing stops this script" in run("guard.py", settings={"REFUSE_ON_ALERTS": False})
+    fw_edge.state.joint_temp[15] = 85.0
+    assert "L_Elbow is at 85 C" in run("guard.py", code=1)
+    out = run("guard.py", settings={"MAX_JOINT_TEMP_C": 90.0, "REFUSE_ON_ALERTS": False})
+    assert "guard: hottest joint L_Elbow 85 C" in out and "nothing stops this script" in out
 
 
 @pytest.mark.parametrize(
@@ -283,15 +294,38 @@ def test_guard_rule_is_yours_to_change(run, fw_edge):
         ("keyboard.py", {}),
     ],
 )
-def test_every_motion_script_stops_on_the_guard_before_it_sends(run, fw_edge, name, settings):
+def test_every_motion_script_stops_on_the_guard_once_uncommented(run, fw_edge, name, settings):
     # In MOVE, supported where the script asks for it, and with a key pressed: each script
     # would send motion here, so only its guard(robot) call stops it.
     fw_edge.set_mode("move")
-    fw_edge.state.joint_temp[15] = 65.0  # above guard.py's MAX_JOINT_TEMP_C
+    fw_edge.state.joint_temp[15] = 85.0  # above guard.py's MAX_JOINT_TEMP_C
     keys = Keys(["w", *idle(0.3)]) if name == "keyboard.py" else None
-    out = run(name, settings=settings, keys=keys, code=1)
-    assert "L_Elbow is at 65 C" in out and "guard: not going ahead" in out
+    out = run(name, settings=settings, guarded=True, keys=keys, code=1)
+    assert "L_Elbow is at 85 C" in out and "guard: not going ahead" in out
     assert _drives(fw_edge) == [] and fw_edge.received == [], "nothing was sent"
+
+
+@pytest.mark.parametrize(
+    ("name", "settings"),
+    [
+        ("stand.py", {}),
+        ("balance.py", {}),
+        ("walk.py", {"DURATION_S": 0.5}),
+        ("stream_velocity.py", {"DURATION_S": 0.5}),
+        ("move_joints.py", {"ROBOT_SUPPORTED": True, "DURATION_S": 0.5}),
+        ("wait_until.py", {"ROBOT_SUPPORTED": True, "DURATION_S": 1.0}),
+        ("keyboard.py", {}),
+    ],
+)
+def test_no_motion_script_uses_the_guard_by_default(run, fw_edge, name, settings):
+    # The same hot joint and the same MOVE: with the guard lines left commented out, the
+    # script sends.
+    fw_edge.set_mode("move")
+    fw_edge.state.joint_temp[15] = 85.0
+    keys = Keys(["w", *idle(0.3)]) if name == "keyboard.py" else None
+    out = run(name, settings=settings, keys=keys)
+    assert "guard:" not in out
+    assert fw_edge.received != [], "the script sent its command"
 
 
 # ── connect ──────────────────────────────────────────────────────────────────
@@ -355,7 +389,7 @@ def test_walk_keeps_its_own_move_only_rule_in_damp(run, fw_edge):
 
 def test_walk_stops_on_a_latched_fault_by_the_guard(run, fw_edge):
     fw_edge.fault()
-    out = run("walk.py", code=1)
+    out = run("walk.py", guarded=True, code=1)
     assert "the firmware latched DAMP" in out and "guard: not going ahead" in out
     assert fw_edge.received == []
 

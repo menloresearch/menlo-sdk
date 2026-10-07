@@ -6,15 +6,16 @@ environment variables describe, for example `MENLO_UDP_HOST=192.168.22.32`. Read
 docstring at the top of a file before you run it: it says what the robot must be doing.
 
 The SDK sends what a script asks and reports what the robot says; it refuses a command only
-when there is no live state. A guard is yours: the motion scripts call `guard(robot)` from
-[guard.py](guard.py) before they send anything, and it stops them when the robot reports what
-your rule will not drive through. Edit its limits, or delete the call. Nothing here is an
+when there is no live state. A guard is yours: [guard.py](guard.py) is an example of one, and
+no script uses it by default. Each motion script carries two commented guard lines;
+uncomment them to stop the script, before it sends anything, when the robot reports what your
+rule will not drive through, and edit the limits in guard.py. Nothing here is an
 emergency stop: use the E-Stop in Asimov Manager, or cut power at the battery unit.
 
 ## Check and guard
 
 - [check.py](check.py): the robot's facts (robot mode, armed, faults, alerts, hottest joint, battery) and `preflight()`; sends nothing.
-- [guard.py](guard.py): your own rule (joint temperature, battery, a latched fault, active alerts); prints what it finds and exits non-zero when the rule fails.
+- [guard.py](guard.py): an example guard, your own rule (joint temperature, battery, a latched fault, active alerts); prints what it finds and exits non-zero when the rule fails. Off by default in the other scripts.
 
 ## Connect
 

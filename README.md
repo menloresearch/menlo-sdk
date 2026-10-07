@@ -81,7 +81,7 @@ and decide before you send ([examples/guard.py](https://github.com/menloresearch
 ```python
 with Robot(config).connect() as robot:
     s = robot.get_state()
-    if s.faulted or any(j.temp is not None and j.temp >= 60 for j in s.joints):
+    if s.faulted or any(j.temp is not None and j.temp >= 80 for j in s.joints):
         raise SystemExit("not walking: a latched fault or a hot actuator")
     robot.set_velocity(vx=0.3, duration=3.0)
 ```

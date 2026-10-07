@@ -9,10 +9,9 @@ short bounded hold (HOLD_S), so the robot stops when you release the key. Holdin
 repeats it. Every key is sent in any robot mode and the firmware decides: a movement in DAMP
 does nothing, and the status line says what the robot reports. t from MOVE asks first: STAND
 has no balance loop, so the robot must hang from its gantry hook or sit on a stool or bench.
-guard(robot), from guard.py, stops the script before the first key when the robot reports
-what your rule will not drive through. The robot must be on its feet, hanging from its
-gantry hook, with clear floor around it. On exit the script sends zero velocity and closes
-the connection.
+The robot must be on its feet, hanging from its gantry hook, with clear floor around it.
+On exit the script sends zero velocity and closes the connection. To stop before the first
+key on your own rule, uncomment the two guard lines (see guard.py).
 Run in a terminal: python examples/keyboard.py
 """
 
@@ -21,7 +20,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 
-from guard import guard
+# from guard import guard  # optional: your own rule, see guard.py
 from menlo.asimov import Mode, NotReadyError, Robot, WaitTimeoutError
 
 VX = 0.3  # m/s forward and back; the firmware caps it at 0.4 m/s
@@ -173,7 +172,7 @@ def move(robot: Robot, key: str) -> str:
 
 def main(next_key: NextKey) -> None:
     with Robot().connect() as robot:
-        guard(robot)  # your rule, in guard.py; delete this line to drive without it
+        # guard(robot)  # optional: uncomment this and the import to stop on your rule
         print(HELP)
         last = "ready"
         try:

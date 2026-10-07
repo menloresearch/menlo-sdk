@@ -3,8 +3,9 @@
 The SDK does not refuse a command because of what the robot reports. Safety is the
 firmware's job (it warns at 60 C and latches DAMP at 80 C on an actuator, and warns below
 20 % battery), command handling is Asimov Edge's job, and a guard is yours. This is one:
-your rule, in plain Python. Change the constants, change guard(), or delete the guard(robot)
-line in a script to drive without it. The motion examples call guard(robot) before they send
+your rule, in plain Python: change the constants, or change guard(). It is an example, and
+no other script uses it by default: the motion examples carry it as two commented lines,
+`from guard import guard` and `guard(robot)`, to uncomment so it runs before they send
 anything. On its own it prints what it finds and sends nothing.
 Run: python examples/guard.py
 """
@@ -13,8 +14,8 @@ import sys
 
 from menlo.asimov import Robot
 
-# Your limits. The defaults stop at the firmware's own warnings, before its latches.
-MAX_JOINT_TEMP_C = 60.0  # the firmware raises MOTOR_TEMP_HIGH at 60 C and latches DAMP at 80 C
+# Your limits.
+MAX_JOINT_TEMP_C = 80.0  # the firmware raises MOTOR_TEMP_HIGH at 60 C and latches DAMP at 80 C
 MIN_BATTERY_PERCENT = 20.0  # the firmware raises BMS_LOW_SOC below 20 %
 REFUSE_WHEN_FAULTED = True  # a latched fault holds the robot in DAMP until the firmware restarts
 REFUSE_ON_ALERTS = True  # an active warning or critical alert; info alerts are printed only

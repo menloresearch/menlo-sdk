@@ -3,16 +3,15 @@
 Run stand.py first: the firmware follows a trajectory from an armed STAND or in MOVE, not in
 DAMP. The robot must stay supported, hanging from its gantry hook or seated on a stool or
 bench: joint control turns the walking policy off, so nothing balances the robot, and a
-free-standing robot falls. guard(robot), from guard.py, stops the script first when the
-robot reports what your rule will not move it with. When the script ends it stops sending
-setpoints, and the robot is put in DAMP 2 s after the last one. Set ROBOT_SUPPORTED to True
-once the robot is supported.
+free-standing robot falls. When the script ends it stops sending setpoints, and the robot
+is put in DAMP 2 s after the last one. Set ROBOT_SUPPORTED to True once the robot is
+supported. To stop first on your own rule, uncomment the two guard lines (see guard.py).
 Run: python examples/move_joints.py
 """
 
 import sys
 
-from guard import guard
+# from guard import guard  # optional: your own rule, see guard.py
 from menlo.asimov import NotReadyError, Robot, WaitTimeoutError
 
 ROBOT_SUPPORTED = False  # True once it hangs from its gantry hook or sits on a stool or bench
@@ -25,7 +24,7 @@ if not ROBOT_SUPPORTED:
 
 with Robot().connect() as robot:
     # region main
-    guard(robot)  # your rule, in guard.py; delete this line to move without it
+    # guard(robot)  # optional: uncomment this and the import to stop on your rule
     state = robot.get_state()  # one sample: the pose to move from and back to
     start = state.joint_pos
     home = state.joint(JOINT).pos
