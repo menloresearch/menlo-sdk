@@ -3,7 +3,7 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.1.0 — 2026-10-09
 
 ### Added
 - `connect()` checks the robot's model and Robot OS version before any control opens: over
