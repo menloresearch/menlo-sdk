@@ -3,6 +3,26 @@
 All notable changes to menlo-sdk. Pre-1.0: minor versions may change the API.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+- `connect()` checks the robot's model and Robot OS version before any control opens: over
+  udp and hybrid from Asimov Edge's `/api/version`, on livekit from Asimov Edge in the room.
+  This SDK supports `asimov_1` on the Robot OS `0.2` line. `UdpConfig(version_port=...,
+  version_timeout=...)` points the check at another port and sets its time budget;
+  `connect(allow_unsupported_target=True)` waives an unsupported model or Robot OS line
+  during development, not a missing or unreadable version.
+- `CompatibilityError`, a `ConnectError` subclass, for a robot whose model or Robot OS
+  facts are malformed or unsupported; failing to fetch them raises `ConnectError`.
+- `menlo setup` and `menlo robots add` record `CompatibilityError` as a failed connection
+  check, so the setup wizard can offer `Save anyway?` and the add command can show its
+  `--no-check` hint.
+
+### Changed
+- Breaking: update the robot to Robot OS 0.2.3 or newer before upgrading the SDK. An older
+  robot has no version endpoint, so `connect()` raises `ConnectError`, and
+  `allow_unsupported_target` does not waive that.
+
 ## 0.1.0rc10 — 2026-10-07
 
 ### Added
@@ -14,13 +34,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reliable packets. A robot without the attribute gets every command as a packet, as before.
 
 ### Changed
-- Malformed or unsupported Robot OS facts raise `CompatibilityError`, a `ConnectError`
-  subclass, before control opens. Failures to acquire those facts remain `ConnectError`.
-  Applications can handle an unsupported robot without the SDK terminating their process.
-  This applies to UDP, hybrid, and LiveKit control.
-- `menlo setup` and `menlo robots add` record `CompatibilityError` as a failed connection
-  check, so the setup wizard can offer `Save anyway?` and the add command can show its
-  `--no-check` hint.
 - `LICENSE` carries the copyright line, Copyright 2026 Menlo Research Pte. Ltd.
 - CI no longer runs the integration job that needed access to Asimov Edge's source.
 - `examples/guard.py` is an example only: the motion examples no longer call it by default.
