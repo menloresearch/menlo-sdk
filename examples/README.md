@@ -19,7 +19,9 @@ emergency stop: use the E-Stop in Asimov Manager, or cut power at the battery un
 
 ## Connect
 
-- [connect.py](connect.py): the udp, hybrid and livekit connection modes side by side; set `MODE`.
+- [connect.py](connect.py): the udp, hybrid and livekit connection modes side by side; set
+  `MODE`. It handles `CompatibilityError` separately from other `ConnectError` failures so
+  an application can distinguish version action from a transient connection retry.
 
 ## State
 

@@ -11,7 +11,7 @@ import time
 from contextlib import suppress
 from http.client import HTTPConnection
 
-from menlo.asimov._errors import ConnectError
+from menlo.asimov._errors import CompatibilityError, ConnectError
 
 SUPPORTED_TARGETS = frozenset({("asimov_1", 0, 2)})
 _MAX_RESPONSE_BYTES = 4096
@@ -43,7 +43,7 @@ def check_target_document(
 ) -> None:
     """Apply the SDK's target policy to facts returned by any transport adapter."""
     if len(document) > _MAX_RESPONSE_BYTES:
-        raise ConnectError(f"robot version at {endpoint} exceeds {_MAX_RESPONSE_BYTES} bytes")
+        raise CompatibilityError(f"robot version at {endpoint} exceeds {_MAX_RESPONSE_BYTES} bytes")
     model, version, major, minor = _parse_target_facts(document, endpoint)
 
     # The override waives SDK support policy only. Fetching and parsing always fail closed.
@@ -54,7 +54,7 @@ def check_target_document(
     if target in SUPPORTED_TARGETS:
         return
 
-    raise ConnectError(
+    raise CompatibilityError(
         f"unsupported robot target {model} Robot OS {version}; supported targets: "
         f"{sorted(SUPPORTED_TARGETS)}. Update the SDK or robot, or explicitly use "
         "allow_unsupported_target=True for development at your own risk."
@@ -151,24 +151,24 @@ def _parse_target_facts(document: bytes, endpoint: str) -> tuple[str, str, int, 
     try:
         payload = json.loads(document, object_pairs_hook=_unique_facts)
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
-        raise ConnectError(f"malformed robot version JSON at {endpoint}") from exc
+        raise CompatibilityError(f"malformed robot version JSON at {endpoint}") from exc
 
     if not isinstance(payload, dict):
-        raise ConnectError(f"robot version at {endpoint} must be a JSON object")
+        raise CompatibilityError(f"robot version at {endpoint} must be a JSON object")
 
     model = payload.get("robot_model")
     if not isinstance(model, str):
-        raise ConnectError(f"invalid robot_model at {endpoint}")
+        raise CompatibilityError(f"invalid robot_model at {endpoint}")
     if not model or model.strip() != model:
-        raise ConnectError(f"invalid robot_model at {endpoint}")
+        raise CompatibilityError(f"invalid robot_model at {endpoint}")
 
     version = payload.get("robot_os_version")
     if not isinstance(version, str):
-        raise ConnectError(f"missing or invalid robot_os_version at {endpoint}")
+        raise CompatibilityError(f"missing or invalid robot_os_version at {endpoint}")
 
     match = _ROBOT_OS_VERSION.fullmatch(version)
     if match is None:
-        raise ConnectError(f"invalid robot_os_version {version!r} at {endpoint}")
+        raise CompatibilityError(f"invalid robot_os_version {version!r} at {endpoint}")
 
     major = int(match["major"])
     minor = int(match["minor"])

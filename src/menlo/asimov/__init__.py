@@ -27,6 +27,7 @@ from menlo import __version__
 from menlo.asimov._command import Command, Limits, ModeCommand, Trajectory, Velocity
 from menlo.asimov._errors import (
     CommandRefusedError,
+    CompatibilityError,
     ConnectError,
     LinkLostError,
     MenloError,
@@ -77,6 +78,7 @@ __all__ = [
     "Clip",
     "Command",
     "CommandRefusedError",
+    "CompatibilityError",
     "ConnectError",
     "ConnectMode",
     "ConnectionConfig",

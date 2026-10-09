@@ -9,7 +9,15 @@ Run: python examples/connect.py
 
 import os
 
-from menlo.asimov import ConnectionConfig, ConnectMode, ManagerConfig, Robot, UdpConfig
+from menlo.asimov import (
+    CompatibilityError,
+    ConnectError,
+    ConnectionConfig,
+    ConnectMode,
+    ManagerConfig,
+    Robot,
+    UdpConfig,
+)
 
 MODE: ConnectMode = "udp"  # "udp", "hybrid" or "livekit"
 ROBOT_ADDRESS = "192.168.22.32"  # udp and hybrid
@@ -31,14 +39,24 @@ livekit = ConnectionConfig(livekit=ManagerConfig(url=MANAGER_URL, credential=CRE
 
 config = {"udp": udp, "hybrid": hybrid, "livekit": livekit}[MODE]
 
-with Robot(config).connect(MODE) as robot:
-    state = robot.get_state()
-    print(f"connected over {MODE} to {robot.info.endpoint}")
-    print(f"robot mode {state.mode.name}, armed {robot.armed}")
-    if state.battery is not None:
-        print(f"battery {state.battery.soc_percent:.0f} %")
-    else:
-        print("battery not reported")
-    capabilities = ("drive", "state", "battery", "camera", "microphone", "speaker")
-    print("capabilities:", ", ".join(c for c in capabilities if robot.has(c)))
+try:
+    with Robot(config).connect(MODE) as robot:
+        state = robot.get_state()
+        print(f"connected over {MODE} to {robot.info.endpoint}")
+        print(f"robot mode {state.mode.name}, armed {robot.armed}")
+        if state.battery is not None:
+            print(f"battery {state.battery.soc_percent:.0f} %")
+        else:
+            print("battery not reported")
+        capabilities = ("drive", "state", "battery", "camera", "microphone", "speaker")
+        print("capabilities:", ", ".join(c for c in capabilities if robot.has(c)))
+except CompatibilityError as exc:
+    # The robot answered, but its model or Robot OS line is not supported.
+    # Updating the SDK or robot is appropriate; blindly retrying is not.
+    print(f"incompatible robot: {exc}")
+except ConnectError as exc:
+    # The connection itself failed: robot, credentials, room or transport.
+    # Check the reported cause; a retry may make sense for a transient failure.
+    print(f"could not connect: {exc}")
+
 # endregion

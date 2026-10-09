@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from menlo.asimov import (
+    CompatibilityError,
     ConnectError,
     ConnectionConfig,
     Limits,
@@ -108,6 +109,8 @@ def check_udp(robot: StoredRobot) -> Check:
                 f"state from {host} after {first:.2f} s, {rate.hz:.0f} Hz, "
                 f"robot mode {r.get_state().mode.name}",
             )
+    except CompatibilityError as exc:
+        return Check("udp", "fail", str(exc))
     except ProtocolMismatchError as exc:
         return Check("udp", "fail", str(exc))
     except ConnectError as exc:
@@ -135,6 +138,8 @@ def check_livekit(robot: StoredRobot, *, state: bool) -> Check:
             rate = StateRate(r)
             time.sleep(RATE_WINDOW_S)
             return Check("livekit", "ok", f"room joined, state {rate.hz:.0f} Hz ({has})")
+    except CompatibilityError as exc:
+        return Check("livekit", "fail", str(exc))
     except ConnectError as exc:
         return Check("livekit", "fail", str(exc))
 

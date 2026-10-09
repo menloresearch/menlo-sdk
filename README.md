@@ -133,9 +133,33 @@ lives in `menlo.asimov._version.SUPPORTED_TARGETS`, not a range inferred from th
 SDK package version; consult that table for supported models and release lines.
 
 The endpoint must return HTTP 200 and a JSON object containing `robot_model` and
-`robot_os_version`. Missing endpoints, network failures, redirects, invalid facts,
-and responses over 4096 bytes raise `ConnectError`; no environment HTTP proxy is
-used. After failure the closed Robot can retry. Older robots need the Edge version
+`robot_os_version`. Missing endpoints, network failures, redirects and other non-200
+responses raise `ConnectError`. Invalid facts and responses over 4096 bytes raise
+`CompatibilityError`. In either case no control transport opens and no environment HTTP
+proxy is used. `CompatibilityError` subclasses `ConnectError`, so an existing
+connection-error handler still catches it, while an application that needs specific
+compatibility guidance can handle it directly:
+
+```python
+from menlo.asimov import CompatibilityError, ConnectError, Robot
+
+try:
+    with Robot(config).connect() as robot:
+        print(robot.get_state().mode.name)
+except CompatibilityError as exc:
+    # The robot answered, but its model or Robot OS line is not supported.
+    # Updating the SDK or robot is appropriate; blindly retrying is not.
+    print(f"Incompatible robot: {exc}")
+except ConnectError as exc:
+    # The connection itself failed: robot, credentials, room or transport.
+    # Check the reported cause; a retry may make sense for a transient failure.
+    print(f"Could not connect: {exc}")
+```
+
+If both cases have the same recovery, catch only `ConnectError`; it also catches
+`CompatibilityError`.
+
+After the exception the closed `Robot` can retry. Older robots need the Edge version
 endpoint before using this SDK's LAN connection. Release and deploy the first
 endpoint-bearing Robot OS as a final `0.2.x` release before releasing the SDK
 that mandates preflight; the SDK supports the `asimov_1` `(0, 2)` line.
@@ -150,9 +174,12 @@ The first-state integer protocol check is independent: `allow_version_skew=True`
 waives only that wire mismatch, not target support; the target override does not
 waive a wire mismatch.
 
-The CLI uses the supported-target policy without a target override. Supported
-development builds connect normally; unsupported CLI targets and an absent version
-endpoint fail closed. There is no endpoint bypass.
+The CLI catches `CompatibilityError` and uses the supported-target policy without a target
+override. Supported development builds connect normally; unsupported CLI targets and an
+absent version endpoint become failed connection checks. `menlo setup` can then offer
+`Save anyway?`; `menlo robots add` refuses to save and reports its existing `--no-check`
+escape hatch.
+There is no endpoint bypass.
 
 Pure LiveKit control connections do not query a LAN address. They join the room, identify
 Edge as the participant that publishes the `state` data track, and call Edge's native

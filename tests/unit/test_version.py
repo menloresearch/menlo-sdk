@@ -6,7 +6,15 @@ import json
 
 import pytest
 
-from menlo.asimov import ConnectError, ConnectionConfig, LiveKitConfig, Robot, UdpConfig, _version
+from menlo.asimov import (
+    CompatibilityError,
+    ConnectError,
+    ConnectionConfig,
+    LiveKitConfig,
+    Robot,
+    UdpConfig,
+    _version,
+)
 from menlo.asimov.transport.udp import UdpTransport
 
 
@@ -56,7 +64,7 @@ def test_target_policy_accepts_only_the_supported_major_minor_line(version, acce
         )
         return
 
-    with pytest.raises(ConnectError, match="unsupported robot target"):
+    with pytest.raises(CompatibilityError, match="unsupported robot target"):
         _version.check_target_document(
             document,
             "test://system-info",
@@ -113,8 +121,10 @@ def test_failed_preflight_opens_no_lane_and_can_retry(
         return original(config, mode, **kwargs)
 
     monkeypatch.setattr(ConnectionConfig, "transport_for", build)
-    with pytest.raises(ConnectError):
+    expected_error = ConnectError if status != 200 or delay else CompatibilityError
+    with pytest.raises(expected_error) as error:
         robot.connect(mode, allow_unsupported_target=override, require_state=False)
+    assert type(error.value) is expected_error
     assert built == [mode]
     assert robot._transport is None and robot._closed and not robot._opening
     assert robot._keepalive is None
@@ -167,7 +177,7 @@ def test_invalid_versions_cannot_use_target_override(target_robot, version):
     """A target override cannot turn malformed clean or dirty versions into valid facts."""
     robot, endpoint = target_robot
     endpoint.body = json.dumps({"robot_model": "asimov_1", "robot_os_version": version}).encode()
-    with pytest.raises(ConnectError, match="invalid robot_os_version"):
+    with pytest.raises(CompatibilityError, match="invalid robot_os_version"):
         robot.connect("udp", allow_unsupported_target=True)
     assert robot._transport is None
 
@@ -184,8 +194,10 @@ def test_unreachable_endpoint_cannot_use_target_override(target_robot):
     """An absent Edge listener cannot become compatibility approval through a target override."""
     robot, endpoint = target_robot
     endpoint.close()
-    with pytest.raises(ConnectError, match="could not read robot version"):
+    with pytest.raises(ConnectError, match="could not read robot version") as error:
         robot.connect("udp", allow_unsupported_target=True)
+    assert type(error.value) is ConnectError
+    assert isinstance(error.value.__cause__, OSError)
     assert robot._transport is None and not robot._opening
 
 
@@ -238,7 +250,7 @@ def test_transport_bound_udp_checks_target_before_opening_socket(
         version_port=edge.version.port,
     )
     robot = Robot(tx)
-    with pytest.raises(ConnectError, match="unsupported robot target"):
+    with pytest.raises(CompatibilityError, match="unsupported robot target"):
         robot.open(require_state=False)
     assert tx._sock is None
     assert edge.received == []
@@ -276,7 +288,7 @@ def test_failed_reconnect_retires_previous_closed_session(target_robot):
     robot.close()
     previous = robot._transport
     endpoint.body = b"{}"
-    with pytest.raises(ConnectError):
+    with pytest.raises(CompatibilityError):
         robot.connect("hybrid")
     assert robot._transport is None and robot._closed and not robot._opening
     assert robot._info is None and robot._state is None
@@ -309,8 +321,9 @@ def test_duplicate_facts_never_authorize_transport(target_robot, key, first, las
     robot, endpoint = target_robot
     other = '"robot_os_version":"0.2.0"' if key == "robot_model" else '"robot_model":"asimov_1"'
     endpoint.body = f'{{{other},"{key}":"{first}","{key}":"{last}"}}'.encode()
-    with pytest.raises(ConnectError, match="malformed"):
+    with pytest.raises(CompatibilityError, match="malformed robot version JSON") as error:
         robot.connect("udp", allow_unsupported_target=override)
+    assert isinstance(error.value.__cause__, ValueError)
     assert robot._transport is None
 
 
@@ -332,8 +345,9 @@ def test_http_response_closed_before_return_or_error(target_robot, monkeypatch, 
     if status == 200:
         robot.connect("udp", timeout=1.0)
     else:
-        with pytest.raises(ConnectError):
+        with pytest.raises(ConnectError) as error:
             robot.connect("udp")
+        assert type(error.value) is ConnectError
     assert len(responses) == 1
     assert responses[0].isclosed()
 
@@ -343,7 +357,7 @@ def test_wire_skew_cannot_bypass_target_policy(target_robot, model, version):
     """A wire override cannot admit an unsupported model or Robot OS line."""
     robot, endpoint = target_robot
     endpoint.body = json.dumps({"robot_model": model, "robot_os_version": version}).encode()
-    with pytest.raises(ConnectError, match="unsupported robot target"):
+    with pytest.raises(CompatibilityError, match="unsupported robot target"):
         robot.connect("udp", allow_version_skew=True)
     assert robot._transport is None
 
@@ -423,6 +437,20 @@ def test_truncated_http_body_cannot_use_target_override(target_robot, monkeypatc
         original(handler, keyword, value)
 
     monkeypatch.setattr(BaseHTTPRequestHandler, "send_header", send_header)
-    with pytest.raises(ConnectError, match="truncated"):
+    with pytest.raises(ConnectError, match="truncated robot version response") as error:
         robot.connect("udp", allow_unsupported_target=True)
+    assert type(error.value) is ConnectError
     assert robot._transport is None and not robot._opening
+
+
+def test_compatibility_failure_is_a_catchable_connection_error():
+    """An application can handle target incompatibility without intercepting process exit."""
+    with pytest.raises(ConnectError) as error:
+        _version.check_target_document(
+            b'{"robot_model":"asimov_1","robot_os_version":"0.3.0"}',
+            "test://system-info",
+            allow_unsupported_target=False,
+        )
+
+    assert type(error.value) is CompatibilityError
+    assert str(error.value).startswith("unsupported robot target asimov_1 Robot OS 0.3.0;")

@@ -20,6 +20,7 @@ import pytest
 
 from menlo.asimov import (
     AudioChunk,
+    CompatibilityError,
     ConnectError,
     Frame,
     LinkLostError,
@@ -70,7 +71,7 @@ def test_livekit_rpc_admits_only_valid_supported_target_facts(edge, document, ov
         assert client.connected
         transport.close()
     else:
-        with pytest.raises(ConnectError):
+        with pytest.raises(CompatibilityError):
             transport.open()
         assert not client.connected
 
@@ -100,7 +101,7 @@ def test_rejected_livekit_target_retires_identity_learned_while_rpc_was_pending(
 
     client.perform_rpc = reject_after_state  # type: ignore[method-assign]
 
-    with pytest.raises(ConnectError, match="unsupported robot target"):
+    with pytest.raises(CompatibilityError, match="unsupported robot target"):
         robot.open(timeout=1.0, require_state=False)
 
     assert robot._info is None and robot._state is None

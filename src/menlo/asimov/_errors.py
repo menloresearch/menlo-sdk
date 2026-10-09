@@ -23,6 +23,7 @@ Three rules, all load-bearing for callers:
 
     MenloError
     ├── ConnectError
+    │   ├── CompatibilityError
     │   └── ProtocolMismatchError
     ├── NotConnectedError
     ├── LinkLostError
@@ -54,6 +55,11 @@ class MenloError(Exception):
 
 class ConnectError(MenloError):
     """No robot answered within the connect timeout, or the transport could not open."""
+
+
+class CompatibilityError(ConnectError):
+    """The robot's reported model or Robot OS version is malformed or not supported by
+    this SDK. No control transport was opened."""
 
 
 class ProtocolMismatchError(ConnectError):

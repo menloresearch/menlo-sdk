@@ -61,6 +61,29 @@ mode (or `MENLO_MODE`), else the mode the config implies (udp only: `udp`; livek
 (hybrid).
 Leaving the `with` block calls `close()`.
 
+`connect()` raises `CompatibilityError` before the block starts when the robot's model or
+Robot OS facts are malformed or unsupported. Failure to acquire those facts raises
+`ConnectError`. `CompatibilityError` subclasses `ConnectError`:
+
+```python
+from menlo.asimov import CompatibilityError, ConnectError, Robot
+
+try:
+    with Robot().connect() as robot:
+        ...
+except CompatibilityError as exc:
+    # The robot answered, but its model or Robot OS line is not supported.
+    # Updating the SDK or robot is appropriate; blindly retrying is not.
+    print(f"Incompatible robot: {exc}")
+except ConnectError as exc:
+    # The connection itself failed: robot, credentials, room or transport.
+    # Check the reported cause; a retry may make sense for a transient failure.
+    print(f"Could not connect: {exc}")
+```
+
+The narrower exception must come first because `CompatibilityError` is a `ConnectError`.
+Catch only `ConnectError` when both cases have the same recovery.
+
 Connection modes: `udp` (control and state over UDP on the robot's network, no camera),
 `hybrid` (control and state over UDP, camera and audio over LiveKit), `livekit`
 (everything through the robot's LiveKit room, wherever Asimov Manager is reachable).
@@ -274,7 +297,8 @@ More: [examples/README.md](https://github.com/menloresearch/menlo-sdk/blob/main/
   evict each other (LiveKit keys participants by identity).
 - **Trajectories need support.** `trajectory()`/`set_joints()` switch off the walking policy.
   Joint control ends with `damp()`, with the robot still supported.
-- **Errors:** robot/link errors subclass `MenloError` (`ConnectError`, `NotConnectedError`,
+- **Errors:** robot/link errors subclass `MenloError` (`ConnectError`, including
+  `CompatibilityError`; `NotConnectedError`,
   `LinkLostError`, `UnsupportedError`; `NotReadyError`: no live state, nothing sent,
   `.problems` with codes; `RobotFaultedError`, a `NotReadyError`: a wait saw a latched
   fault; `WaitTimeoutError`:

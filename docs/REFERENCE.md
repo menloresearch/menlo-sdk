@@ -28,7 +28,28 @@ Asimov Edge's arbiter beside the robot's other controllers and pass the same saf
 whichever connection mode they arrive on.
 
 Example: [connect.py](../examples/connect.py) builds the config for each of the three
-connection modes side by side.
+connection modes side by side. `connect()` returns the connected `Robot`; malformed or
+unsupported Robot OS facts raise `CompatibilityError` before the `with` block starts, while
+failure to acquire those facts raises `ConnectError`:
+
+```python
+from menlo.asimov import CompatibilityError, ConnectError, Robot
+
+try:
+    with Robot().connect() as robot:
+        ...
+except CompatibilityError as exc:
+    # The robot answered, but its model or Robot OS line is not supported.
+    # Updating the SDK or robot is appropriate; blindly retrying is not.
+    print(f"Incompatible robot: {exc}")
+except ConnectError as exc:
+    # The connection itself failed: robot, credentials, room or transport.
+    # Check the reported cause; a retry may make sense for a transient failure.
+    print(f"Could not connect: {exc}")
+```
+
+The narrower exception must come first because `CompatibilityError` is a `ConnectError`.
+Catch only `ConnectError` when one recovery path should handle every connection failure.
 
 ## Connection modes
 
@@ -540,6 +561,7 @@ Every robot or link error subclasses `MenloError`:
 ```text
 MenloError
 ├── ConnectError
+│   ├── CompatibilityError
 │   └── ProtocolMismatchError
 ├── NotConnectedError
 ├── LinkLostError
@@ -554,7 +576,9 @@ MenloError
 
 | Exception | When | Carries |
 |---|---|---|
-| `ConnectError` / `ProtocolMismatchError` | a missing field for the mode; no state within `timeout`; protocol version differs | |
+| `ConnectError` | a missing field for the mode; no state within `timeout`; the transport could not open | |
+| `CompatibilityError` | target facts were malformed, or the robot model or Robot OS line is unsupported; no control transport opened | |
+| `ProtocolMismatchError` | the first state uses a different wire protocol version | `.expected`, `.observed` |
 | `NotConnectedError` | a call before `connect()` or after `close()`; `get_state()` (and `damp()`) in a `require_state=False` session before the robot reported | |
 | `LinkLostError` | no state for `link_timeout` s; the session is over | |
 | `NotReadyError` | `stand()`, `balance()`, `set_velocity()`, `trajectory()` or `set_joints()` had no live state within `timeout` (`no_state`, `stale_state`; a `require_state=False` session waits for its first sample); nothing was sent | `.action`, `.preflight`, `.problems`, `.has(code)` |

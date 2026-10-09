@@ -14,6 +14,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reliable packets. A robot without the attribute gets every command as a packet, as before.
 
 ### Changed
+- Malformed or unsupported Robot OS facts raise `CompatibilityError`, a `ConnectError`
+  subclass, before control opens. Failures to acquire those facts remain `ConnectError`.
+  Applications can handle an unsupported robot without the SDK terminating their process.
+  This applies to UDP, hybrid, and LiveKit control.
+- `menlo setup` and `menlo robots add` record `CompatibilityError` as a failed connection
+  check, so the setup wizard can offer `Save anyway?` and the add command can show its
+  `--no-check` hint.
 - `LICENSE` carries the copyright line, Copyright 2026 Menlo Research Pte. Ltd.
 - CI no longer runs the integration job that needed access to Asimov Edge's source.
 - `examples/guard.py` is an example only: the motion examples no longer call it by default.

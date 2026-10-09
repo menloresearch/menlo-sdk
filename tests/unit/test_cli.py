@@ -17,12 +17,14 @@ from collections.abc import Callable
 import pytest
 
 from menlo.asimov import (
+    CompatibilityError,
     ConnectionConfig,
     Robot,
     RobotFaultedError,
     RobotStore,
     StoredRobot,
     UdpConfig,
+    _version,
 )
 from menlo.cli import _common, _drive, _robots, build_parser, main
 from tests.conftest import FakeEdge, route_manager_rooms_to
@@ -205,6 +207,79 @@ def test_a_silent_robot_fails_the_udp_check_with_what_to_fix(edge, monkeypatch, 
     assert len(RobotStore()) == 0
 
 
+def test_robots_add_reports_compatibility_error_as_a_failed_check(
+    edge, monkeypatch, at_edge, capsys
+):
+    """An unsupported UDP target must reach the normal add failure and --no-check hint."""
+    at_edge(edge)
+    monkeypatch.setattr(
+        _version,
+        "_fetch_version_document",
+        lambda *_args: b'{"robot_model":"asimov_1","robot_os_version":"0.3.0"}',
+    )
+
+    assert main(["robots", "add", "lab", "--mode", "udp", "--udp", "127.0.0.1"]) == 1
+
+    captured = capsys.readouterr()
+    assert "lab was not saved; --no-check saves it without checking" in captured.err
+    assert "udp: unsupported robot target asimov_1 Robot OS 0.3.0" in captured.out
+    assert len(RobotStore()) == 0
+
+
+def test_hybrid_add_continues_to_livekit_after_udp_compatibility_error(
+    edge, manager, monkeypatch, at_edge, capsys
+):
+    """A failed UDP preflight must not hide the hybrid configuration's LiveKit result."""
+    at_edge(edge)
+    route_manager_rooms_to(edge, monkeypatch)
+    monkeypatch.setattr(
+        _version,
+        "_fetch_version_document",
+        lambda *_args: b'{"robot_model":"asimov_1","robot_os_version":"0.3.0"}',
+    )
+    argv = [
+        "robots",
+        "add",
+        "lab",
+        "--mode",
+        "hybrid",
+        "--udp",
+        "127.0.0.1",
+        "--manager",
+        manager.url,
+        "--credential",
+        CRED,
+    ]
+
+    assert main(argv) == 1
+
+    captured = capsys.readouterr()
+    assert "udp: unsupported robot target asimov_1 Robot OS 0.3.0" in captured.out
+    assert "livekit: room joined" in captured.out
+    assert len(RobotStore()) == 0
+
+
+def test_livekit_check_reports_compatibility_error_as_failure(manager, monkeypatch):
+    """A LiveKit target rejection must remain one failed CLI check, not end the wizard."""
+    robot = StoredRobot(
+        "lab",
+        manager_url=manager.url,
+        credential=CRED,
+        mode="livekit",
+    )
+
+    def reject_target(*_args, **_kwargs):
+        raise CompatibilityError("unsupported robot target")
+
+    monkeypatch.setattr(Robot, "connect", reject_target)
+
+    assert _robots.check_livekit(robot, state=True) == _robots.Check(
+        "livekit",
+        "fail",
+        "unsupported robot target",
+    )
+
+
 # ── menlo setup ──────────────────────────────────────────────────────────────
 
 
@@ -261,6 +336,27 @@ def test_the_wizard_saves_nothing_when_a_check_fails_and_you_say_no(
     ask = Script("lab", "udp", "127.0.0.1", False)
     assert _robots.wizard(RobotStore(), ask) == 1
     assert ask.asked[-1] == "Save anyway?" and "Nothing saved" in capsys.readouterr().out
+    assert len(RobotStore()) == 0
+
+
+def test_the_wizard_offers_save_anyway_after_compatibility_error(
+    edge, monkeypatch, at_edge, capsys
+):
+    """An unsupported target must remain one failed check in the interactive wizard."""
+    at_edge(edge)
+    monkeypatch.setattr(
+        _version,
+        "_fetch_version_document",
+        lambda *_args: b'{"robot_model":"asimov_1","robot_os_version":"0.3.0"}',
+    )
+    ask = Script("lab", "udp", "127.0.0.1", False)
+
+    assert _robots.wizard(RobotStore(), ask) == 1
+
+    captured = capsys.readouterr()
+    assert ask.asked[-1] == "Save anyway?"
+    assert "udp: unsupported robot target asimov_1 Robot OS 0.3.0" in captured.out
+    assert "Nothing saved" in captured.out
     assert len(RobotStore()) == 0
 
 

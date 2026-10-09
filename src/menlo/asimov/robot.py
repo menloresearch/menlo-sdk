@@ -345,8 +345,9 @@ class Robot:
 
         UDP and hybrid query the local Edge ``GET /api/version`` from their UDP transport
         before opening its command/state socket, using ``UdpConfig.version_port`` and
-        ``version_timeout``. Unsupported models or major/minor lines raise
-        :class:`ConnectError` before control opens.
+        ``version_timeout``. An unavailable endpoint raises
+        :class:`~menlo.asimov.ConnectError`; malformed facts or an unsupported model or
+        major/minor line raise :class:`~menlo.asimov.CompatibilityError` before control opens.
         Pure LiveKit control joins identify Edge as the participant publishing the
         ``state`` data track and call its native ``edge.getSystemInfo`` RPC before commands
         can be sent. Read-only observe grants skip that control-only RPC and retain the

@@ -32,7 +32,7 @@ from typing import Any
 import pytest
 
 import menlo.asimov
-from menlo.asimov import Frame, UdpConfig, connection, store
+from menlo.asimov import Frame, UdpConfig, _version, connection, store
 from menlo.asimov.transport.livekit import HybridTransport, LiveKitTransport
 from tests.conftest import FakeEdge, FakeLiveKitClient, FakeManager
 
@@ -341,6 +341,41 @@ def test_connect_in_each_mode_reports_and_sends_nothing(run, fw_edge, rooms, man
     assert media is (mode != "udp")
     assert bool(rooms) is (mode != "udp")
     assert fw_edge.received == []
+
+
+def test_connect_example_handles_incompatible_robot_without_a_traceback(run, monkeypatch):
+    """An unsupported Robot OS leaves the example at its application error boundary.
+
+    Users see how to catch the narrower error before `ConnectError`, without exposing a
+    traceback or letting the SDK choose process termination.
+    """
+    monkeypatch.setattr(
+        _version,
+        "_fetch_version_document",
+        lambda *_args: b'{"robot_model":"asimov_1","robot_os_version":"0.3.0"}',
+    )
+
+    out = run(
+        "connect.py",
+        settings={"MODE": "udp", "ROBOT_ADDRESS": "127.0.0.1"},
+    )
+
+    assert "incompatible robot: unsupported robot target asimov_1 Robot OS 0.3.0" in out
+    assert "Traceback" not in out
+
+
+def test_connect_example_handles_other_connection_errors_without_a_traceback(run, monkeypatch):
+    """The broad branch handles failures that do not carry compatibility guidance."""
+
+    def fail_connect(*_args, **_kwargs):
+        raise menlo.asimov.ConnectError("robot unavailable")
+
+    monkeypatch.setattr(menlo.asimov.Robot, "connect", fail_connect)
+
+    out = run("connect.py", settings={"MODE": "udp", "ROBOT_ADDRESS": "127.0.0.1"})
+
+    assert "could not connect: robot unavailable" in out
+    assert "Traceback" not in out
 
 
 # ── state ────────────────────────────────────────────────────────────────────
