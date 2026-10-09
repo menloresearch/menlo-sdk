@@ -151,6 +151,7 @@ def test_balance_after_a_fault_damp_ends_a_raw_stream_sends_zero_and_raises_the_
 
 
 def test_damp_from_a_state_callback_sends_and_does_not_stall_the_state(edge, robot):
+    """An alert callback sends DAMP without blocking the reader or later state frames."""
     put_in(robot, edge, "move")
     returned: list[float] = []
 
@@ -165,7 +166,8 @@ def test_damp_from_a_state_callback_sends_and_does_not_stall_the_state(edge, rob
     a.id, a.severity = 3, 1  # a warning: nothing latches, the callback damps
     assert edge.wait_for(lambda _: bool(returned), 2.0)
     assert returned[0] < 0.5, "damp() in a callback returns once sent"
-    assert edge.wait_for(lambda _: "damp" in edge.modes(), 2.0)  # sent: the datagram follows
+    # UDP send completion does not mean the fake edge's receiver has consumed the packet.
+    assert edge.wait_for(lambda _: "damp" in edge.modes(), 2.0)
     seq = robot.get_state().sequence
     robot.wait_until(lambda s: s.sequence > seq + 5, timeout=2.0)  # state kept flowing
 

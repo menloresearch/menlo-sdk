@@ -45,6 +45,7 @@ pytestmark = pytest.mark.livekit
 #: A LiveKit join grant is scoped to ONE room, so every test here uses the same one: the
 #: room the two tokens were minted for. Override with MENLO_SDK_LIVEKIT_ROOM.
 ROOM = os.environ.get("MENLO_SDK_LIVEKIT_ROOM", "menlo-sdk-it")
+SYSTEM_INFO = '{"robot_os_version":"0.2.0","robot_model":"asimov_1"}'
 
 
 @pytest.fixture
@@ -87,6 +88,9 @@ def test_the_sdk_joins_a_real_room_and_its_bytes_come_back(livekit_url, token, e
     # The stand-in edge reads commands and publishes state the way the real edge does:
     # data packets in, a data track out. Both on the client's own loop thread.
     rtc = pytest.importorskip("livekit.rtc")
+    edge._room.local_participant.register_rpc_method(
+        "edge.getSystemInfo", lambda _request: SYSTEM_INFO
+    )
     edge._room.on(
         "data_received",
         lambda p: received.append(bytes(p.data)) if p.topic == COMMAND_TOPIC else None,
@@ -156,16 +160,47 @@ def test_the_speaker_publishes_a_real_audio_track(livekit_url, token):
         client.close()
 
 
-def test_a_room_with_no_video_track_is_honest_about_it(livekit_url, token):
+def test_a_room_with_no_video_track_is_honest_about_it(livekit_url, token, edge_token):
+    """System-info admission needs Edge's data track, but camera remains an observed capability."""
+    edge = _LiveKitClient(livekit_url, ROOM, token=edge_token)
+    edge.connect()
+    edge._room.local_participant.register_rpc_method(
+        "edge.getSystemInfo", lambda _request: SYSTEM_INFO
+    )
+    state_track = edge._await(
+        edge._room.local_participant.publish_data_track(name=STATE_TRACK), 5.0
+    )
     tx = LiveKitTransport(livekit_url, ROOM, token=token, media_timeout=1.0)
-    tx.open()
     try:
-        # Nothing in this suite ever publishes video, so a camera here would be invented.
-        assert "camera" not in tx.capabilities
-        assert "speaker" in tx.capabilities, "the SDK can always publish into a joined room"
-        assert tx.identity is not None, "the token names who we joined as"
+        tx.open()
+        try:
+            # Nothing in this suite ever publishes video, so a camera here would be invented.
+            assert "camera" not in tx.capabilities
+            assert state_track.is_published, "the stand-in Edge still owns its state track"
+            assert "speaker" in tx.capabilities, "the SDK can always publish into a joined room"
+            assert tx.identity is not None, "the token names who we joined as"
+        finally:
+            tx.close()
+    finally:
+        edge.close()
+
+
+def test_rpc_admission_failure_leaves_the_real_room(livekit_url, token, edge_token):
+    """A state publisher without the RPC method is visible, but cannot become control-ready."""
+    edge = _LiveKitClient(livekit_url, ROOM, token=edge_token)
+    edge.connect()
+    state_track = edge._await(
+        edge._room.local_participant.publish_data_track(name=STATE_TRACK), 5.0
+    )
+    tx = LiveKitTransport(livekit_url, ROOM, token=token, media_timeout=1.0)
+    try:
+        assert state_track.is_published
+        with pytest.raises(ConnectError, match="rejected LiveKit RPC"):
+            tx.open()
+        assert tx.identity is None
     finally:
         tx.close()
+        edge.close()
 
 
 def test_the_loop_thread_goes_away_with_close(livekit_url, token):

@@ -22,6 +22,7 @@ secret never leaves the manager.
 from __future__ import annotations
 
 import json
+import math
 import re
 import secrets
 import socket
@@ -37,7 +38,13 @@ from menlo.asimov._errors import ConnectError
 from menlo.asimov.transport._livekit_client import TokenProvider
 from menlo.asimov.transport.base import Transport
 from menlo.asimov.transport.livekit import MEDIA_TIMEOUT_S, HybridTransport, LiveKitTransport
-from menlo.asimov.transport.udp import COMMAND_PORT, STATE_PORT, UdpTransport
+from menlo.asimov.transport.udp import (
+    COMMAND_PORT,
+    STATE_PORT,
+    VERSION_PORT,
+    VERSION_TIMEOUT_S,
+    UdpTransport,
+)
 
 #: The connection modes a ``Robot`` can connect on: ``udp`` (control and state over UDP, no
 #: media), ``hybrid`` (control and state over UDP, camera and audio over LiveKit) and
@@ -78,6 +85,16 @@ class UdpConfig:
     #: Only accept state from this address; ``None`` accepts any (a robot behind NAT or in a
     #: container can send state from a different address than it listens on).
     state_source: str | None = None
+    #: Local Edge HTTP version endpoint; independent of the UDP command port.
+    version_port: int = VERSION_PORT
+    #: Finite HTTP request/response budget in seconds.
+    version_timeout: float = VERSION_TIMEOUT_S
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.version_port <= 65535:
+            raise ValueError("UdpConfig.version_port must be between 1 and 65535")
+        if not math.isfinite(self.version_timeout) or self.version_timeout <= 0:
+            raise ValueError("UdpConfig.version_timeout must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -345,15 +362,8 @@ class ConnectionConfig:
             raise ConnectError("this ConnectionConfig has no connection set; nothing to connect on")
         return "hybrid" if "hybrid" in modes else modes[0]
 
-    def transport_for(
-        self,
-        mode: ConnectMode,
-        *,
-        media_timeout: float = MEDIA_TIMEOUT_S,
-        connect_timeout: float = 10.0,
-    ) -> Transport:
-        """Build the transport for ``mode``. Nothing is opened; with a :class:`ManagerConfig`
-        the manager IS asked here, because the transport needs the room name up front."""
+    def validate_mode(self, mode: ConnectMode) -> None:
+        """Reject missing connection slots before either preflight or construction does I/O."""
         if mode not in MODES:
             raise ValueError(f"unknown mode {mode!r}; one of {', '.join(MODES)}")
         missing = [slot for slot in _SLOTS[mode] if getattr(self, slot) is None]
@@ -367,6 +377,19 @@ class ConnectionConfig:
                 f"{'s' if len(missing) > 1 else ''} of the ConnectionConfig; "
                 f"this one can connect on: {have}"
             )
+
+    def transport_for(
+        self,
+        mode: ConnectMode,
+        *,
+        media_timeout: float = MEDIA_TIMEOUT_S,
+        connect_timeout: float = 10.0,
+        system_info_timeout: float = 5.0,
+        allow_unsupported_target: bool = False,
+    ) -> Transport:
+        """Build the transport for ``mode``. Nothing is opened; with a :class:`ManagerConfig`
+        the manager IS asked here, because the transport needs the room name up front."""
+        self.validate_mode(mode)
         if mode == "udp":
             assert self.udp is not None
             return UdpTransport(
@@ -374,6 +397,9 @@ class ConnectionConfig:
                 command_port=self.udp.command_port,
                 state_bind=self.udp.state_bind,
                 state_source=self.udp.state_source,
+                version_port=self.udp.version_port,
+                version_timeout=self.udp.version_timeout,
+                allow_unsupported_target=allow_unsupported_target,
             )
         assert self.livekit is not None
         lk = self.livekit.resolve()
@@ -384,6 +410,8 @@ class ConnectionConfig:
                 token=lk.token,
                 media_timeout=media_timeout,
                 connect_timeout=connect_timeout,
+                system_info_timeout=system_info_timeout,
+                allow_unsupported_target=allow_unsupported_target,
             )
         assert self.udp is not None
         return HybridTransport(
@@ -394,6 +422,9 @@ class ConnectionConfig:
             command_port=self.udp.command_port,
             state_bind=self.udp.state_bind,
             state_source=self.udp.state_source,
+            version_port=self.udp.version_port,
+            version_timeout=self.udp.version_timeout,
+            allow_unsupported_target=allow_unsupported_target,
             media_timeout=media_timeout,
             connect_timeout=connect_timeout,
         )

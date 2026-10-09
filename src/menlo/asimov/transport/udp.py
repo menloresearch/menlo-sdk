@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import socket
 import threading
 
@@ -31,6 +32,7 @@ from menlo.asimov._command import Command
 from menlo.asimov._errors import ConnectError, LinkLostError, NotConnectedError, UnsupportedError
 from menlo.asimov._media import AudioChunk
 from menlo.asimov._state import TransportKind
+from menlo.asimov._version import check_target
 from menlo.asimov.transport._wire import _pb, encode_command, state_from_robot_state
 from menlo.asimov.transport.base import (
     AudioCallback,
@@ -46,8 +48,19 @@ log = logging.getLogger("menlo.asimov.transport.udp")
 COMMAND_PORT = 8850
 #: ``--udp-state-port`` default on Asimov Edge.
 STATE_PORT = 8851
+#: Edge's local HTTP system-information endpoint.
+VERSION_PORT = 3000
+#: Default request/response budget for the system-information endpoint.
+VERSION_TIMEOUT_S = 5.0
 
-__all__ = ["COMMAND_PORT", "STATE_PORT", "UdpTransport", "state_from_robot_state"]
+__all__ = [
+    "COMMAND_PORT",
+    "STATE_PORT",
+    "VERSION_PORT",
+    "VERSION_TIMEOUT_S",
+    "UdpTransport",
+    "state_from_robot_state",
+]
 
 
 class UdpTransport:
@@ -70,12 +83,22 @@ class UdpTransport:
         command_port: int = COMMAND_PORT,
         state_bind: tuple[str, int] = ("0.0.0.0", STATE_PORT),
         state_source: str | None = None,
+        version_port: int = VERSION_PORT,
+        version_timeout: float = VERSION_TIMEOUT_S,
+        allow_unsupported_target: bool = False,
     ) -> None:
+        if not 1 <= version_port <= 65535:
+            raise ValueError("version_port must be between 1 and 65535")
+        if not math.isfinite(version_timeout) or version_timeout <= 0:
+            raise ValueError("version_timeout must be finite and positive")
         self._host, self._port = host, int(command_port)
         self._state_source = state_source  # optional allowlist: the one address state may come from
         self._state_source_ip: str | None = None
         self._addr: tuple[str, int] | None = None  # resolved once, in open()
         self._bind = (state_bind[0], int(state_bind[1]))
+        self._version_port = int(version_port)
+        self._version_timeout = float(version_timeout)
+        self._allow_unsupported_target = allow_unsupported_target
         self.endpoint = f"{host}:{command_port}"
         self._sock: socket.socket | None = None
         self._reader: threading.Thread | None = None
@@ -91,6 +114,15 @@ class UdpTransport:
         if self._sock is not None:
             raise ConnectError("this UdpTransport is already open")  # never leak a socket+thread
         _pb()  # fail here, with the install hint, not in the reader thread
+        # The UDP transport owns its compatibility gate. That keeps Robot(config),
+        # Robot(UdpTransport(...)), and HybridTransport on the same path and ensures no
+        # command socket opens before Edge has identified a supported target.
+        check_target(
+            self._host,
+            self._version_port,
+            self._version_timeout,
+            allow_unsupported_target=self._allow_unsupported_target,
+        )
         # Resolve the robot's name ONCE. sendto() with a hostname re-resolves on every
         # datagram: ten mDNS lookups a second under the keepalive, each able to stall
         # damp()/balance() behind a slow resolver.

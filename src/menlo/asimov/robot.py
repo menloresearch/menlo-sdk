@@ -333,6 +333,7 @@ class Robot:
         media_timeout: float = MEDIA_TIMEOUT_S,
         connect_timeout: float = 10.0,
         allow_version_skew: bool = False,
+        allow_unsupported_target: bool = False,
         require_state: bool = True,
         persist: bool | None = None,
     ) -> Self:
@@ -341,6 +342,20 @@ class Robot:
         by this Robot's :class:`ConnectionConfig`. Left out, it is the config's ``mode`` (a
         saved robot's, or ``MENLO_MODE``), else the mode its connections imply: ``udp``
         alone is udp, ``livekit`` alone is livekit, both together is hybrid.
+
+        UDP and hybrid query the local Edge ``GET /api/version`` from their UDP transport
+        before opening its command/state socket, using ``UdpConfig.version_port`` and
+        ``version_timeout``. Unsupported models or major/minor lines raise
+        :class:`ConnectError` before control opens.
+        Pure LiveKit control joins identify Edge as the participant publishing the
+        ``state`` data track and call its native ``edge.getSystemInfo`` RPC before commands
+        can be sent. Read-only observe grants skip that control-only RPC and retain the
+        first-state protocol check.
+        Valid release, prerelease and development versions on supported lines are allowed.
+        ``allow_unsupported_target=True`` waives target support, never invalid facts or
+        HTTP/RPC failures. ``allow_version_skew=True`` waives only the wire protocol
+        mismatch. ``require_state=False`` does not skip this check. Pure LiveKit does not
+        query the LAN endpoint.
 
         Returns the robot once the first state sample has arrived and its protocol version
         matches, so ``with robot.connect("hybrid"):`` works. Raises :class:`ConnectError`
@@ -380,8 +395,21 @@ class Robot:
             )
         self._reserve_open("connected")
         try:
+            config.validate_mode(mode)
+            # Retire a closed session before target preflight. If the new robot is rejected,
+            # callers must not keep seeing the previous robot's state or capabilities.
+            with self._lock:
+                self._transport = None
+                self._info = None
+                self._derived_caps = frozenset()
+                self._subscribed = False
+            self._forget_state()
             tx = config.transport_for(
-                mode, media_timeout=media_timeout, connect_timeout=connect_timeout
+                mode,
+                media_timeout=media_timeout,
+                connect_timeout=connect_timeout,
+                system_info_timeout=timeout,
+                allow_unsupported_target=allow_unsupported_target,
             )
             with self._lock:
                 self._transport = tx
@@ -389,9 +417,25 @@ class Robot:
                 self._derived_caps = frozenset()  # the previous robot's battery is not this one's
             self._camera._rebind()
             self._microphone._rebind()
-            self._open(
-                timeout=timeout, allow_version_skew=allow_version_skew, require_state=require_state
-            )
+            try:
+                self._open(
+                    timeout=timeout,
+                    allow_version_skew=allow_version_skew,
+                    require_state=require_state,
+                )
+            except Exception:
+                # A config-backed Robot builds a fresh transport per connect(). If its
+                # own open-time preflight rejects the target, discard that unopened lane
+                # so the next connect constructs a clean retry rather than retaining a
+                # failed session behind Robot.transport.
+                tx.close()
+                with self._lock:
+                    if self._transport is tx:
+                        self._transport = None
+                        self._subscribed = False
+                        self._derived_caps = frozenset()
+                self._forget_state()
+                raise
         finally:
             self._opening = False
         if persist:
@@ -467,7 +511,20 @@ class Robot:
         # and state that arrives meanwhile must be handshaken (or dropped), not stored raw.
         self._late = not require_state
         self._accepting = True
-        self._tx.open()
+        try:
+            self._tx.open()
+        except Exception:
+            # Transport-bound Robot.open() may be retried on the same transport after a
+            # transient preflight failure. State can arrive while a LiveKit transport is
+            # still waiting for its target RPC, so rejection must also retire identity
+            # learned by that provisional handshake.
+            with self._lock:
+                self._accepting = False
+                self._info = None
+                self._handshake_error = None
+                self._derived_caps = frozenset()
+            self._forget_state()
+            raise
         # Verbs stay refused (NotConnectedError) until the handshake has passed: here, or
         # in _on_state when the session did not wait for the robot.
         if require_state:

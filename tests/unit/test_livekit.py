@@ -9,7 +9,9 @@ a machine where livekit is not installed.
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib.util
+import json
 import threading
 import time
 import wave
@@ -33,12 +35,130 @@ from menlo.asimov._command import Velocity
 from menlo.asimov._media import Clip
 from menlo.asimov.transport._livekit_client import (
     _LiveKitClient,
+    can_publish_data_from_token,
 )
 from menlo.asimov.transport._wire import COMMAND_TOPIC, STATE_TRACK, encode_command
-from menlo.asimov.transport.livekit import LiveKitTransport
+from menlo.asimov.transport.livekit import SYSTEM_INFO_RPC_METHOD, LiveKitTransport
 from tests.conftest import FakeLiveKitClient, make_livekit_robot, put_in
 
 # ── the wire contract ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("document", "override", "accepted"),
+    [
+        ('{"robot_os_version":"0.2.7","robot_model":"asimov_1"}', False, True),
+        ('{"robot_os_version":"9.8.7","robot_model":"future_robot"}', False, False),
+        ('{"robot_os_version":"9.8.7","robot_model":"future_robot"}', True, True),
+        ('{"robot_os_version":"not-a-version","robot_model":"asimov_1"}', True, False),
+    ],
+)
+def test_livekit_rpc_admits_only_valid_supported_target_facts(edge, document, override, accepted):
+    """The room is joined only to query Edge; no command may leave before target admission."""
+    client = FakeLiveKitClient(edge)
+    client.system_info_response = document
+    transport = LiveKitTransport(
+        "ws://fake",
+        "asimov-room",
+        token="t",
+        allow_unsupported_target=override,
+        client=client,
+    )
+
+    if accepted:
+        transport.open()
+        assert client.connected
+        transport.close()
+    else:
+        with pytest.raises(ConnectError):
+            transport.open()
+        assert not client.connected
+
+    assert client.rpc_calls == [("MENLO-TEST", SYSTEM_INFO_RPC_METHOD, "{}", 5.0)]
+    assert client.published == []
+
+
+def test_rejected_livekit_target_retires_identity_learned_while_rpc_was_pending(edge):
+    """State may arrive after room join but before target RPC rejection. That provisional
+    handshake must not remain visible as the identity of a robot we refused to open."""
+    client = FakeLiveKitClient(edge)
+    transport = LiveKitTransport("ws://fake", "asimov-room", token="t", client=client)
+    robot = Robot(transport)
+
+    def reject_after_state(
+        destination_identity: str,
+        method: str,
+        payload: str,
+        timeout: float,
+    ) -> str:
+        client.rpc_calls.append((destination_identity, method, payload, timeout))
+        deadline = time.monotonic() + 1.0
+        while robot._info is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert robot._info is not None, "the test must exercise identity learned before rejection"
+        return '{"robot_os_version":"9.0.0","robot_model":"unsupported"}'
+
+    client.perform_rpc = reject_after_state  # type: ignore[method-assign]
+
+    with pytest.raises(ConnectError, match="unsupported robot target"):
+        robot.open(timeout=1.0, require_state=False)
+
+    assert robot._info is None and robot._state is None
+    with pytest.raises(NotConnectedError, match="no state received"):
+        _ = robot.info
+
+
+def test_observe_grant_watches_state_without_attempting_control_rpc(edge):
+    """A read-only Manager grant can observe state even though it cannot send RPC data."""
+    client = FakeLiveKitClient(edge, can_publish_data=False)
+    robot = Robot(
+        LiveKitTransport("ws://fake", "asimov-room", token="t", client=client),
+    )
+    try:
+        robot.open(timeout=1.0)
+        assert robot.connected
+        assert client.rpc_calls == []
+        assert client.published == []
+    finally:
+        robot.close()
+
+
+@pytest.mark.parametrize(("value", "expected"), [(True, True), (False, False), ("false", None)])
+def test_livekit_token_reports_explicit_data_publication_grant(value, expected):
+    """The client distinguishes an observe token from control without treating claims as auth."""
+    claims = json.dumps({"sub": "sdk-test", "video": {"canPublishData": value}}).encode()
+    payload = base64.urlsafe_b64encode(claims).decode().rstrip("=")
+    assert can_publish_data_from_token(f"header.{payload}.signature") is expected
+
+
+def test_state_track_owner_is_the_rpc_destination_not_a_room_name_guess():
+    """A custom room still addresses the participant that actually publishes robot state."""
+    client = _LiveKitClient("ws://x", "shared-lab", token="t")
+    client.on_data_track(STATE_TRACK, lambda _payload, _timestamp: None)
+
+    class Track:
+        publisher_identity = "MENLO-CUSTOM-42"
+        info = type("Info", (), {"name": STATE_TRACK, "sid": "DTR_state"})()
+
+        def subscribe(self):
+            return _EmptyStream()
+
+    class _EmptyStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            pass
+
+    client._start_loop()
+    try:
+        client._on_data_track_published(Track())
+        assert client.wait_for_data_track_publisher(STATE_TRACK, 0.2) == "MENLO-CUSTOM-42"
+    finally:
+        client.close()
 
 
 def test_a_command_is_one_bare_RobotCommand_on_the_commands_topic(edge, livekit_robot):

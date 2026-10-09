@@ -9,6 +9,7 @@ robot. Nothing above the transport knows which is in use::
 
 The wire in the room, as Asimov Edge speaks it::
 
+    system info -> native RPC "edge.getSystemInfo" before a control grant sends commands
     commands  ->  data topic "commands"   one bare asimov.io.RobotCommand, reliable packets
     setpoints ->  data track "commands"   the SDK's own track: one bare RobotCommand per
                                           frame, lossy, for a non-zero velocity or a
@@ -29,6 +30,8 @@ and so does a session that may not publish a track.
 Commands land in Asimov Edge's arbiter beside the robot's other controllers, at the lowest
 priority, and pass the same safety layer. On ``livekit``, Asimov Edge stops a held velocity
 when the SDK sends zero or leaves the room.
+Read-only observe grants cannot publish command or RPC data, so they watch state/media and
+retain the first-state protocol check without attempting the control-only system-info RPC.
 
 Every ``livekit`` import lives in ``_livekit_client``, behind a lazy function; importing
 this module, and driving a robot on ``udp``, never loads it.
@@ -53,6 +56,7 @@ from menlo.asimov._command import Command
 from menlo.asimov._errors import ConnectError, NotConnectedError, UnsupportedError
 from menlo.asimov._media import AudioChunk, Frame
 from menlo.asimov._state import State, TransportKind
+from menlo.asimov._version import check_target_document
 from menlo.asimov.transport._livekit_client import LiveKitClient, TokenProvider, _LiveKitClient
 from menlo.asimov.transport._wire import (
     COMMAND_TOPIC,
@@ -71,7 +75,13 @@ from menlo.asimov.transport.base import (
     OutcomeCallback,
     StateCallback,
 )
-from menlo.asimov.transport.udp import COMMAND_PORT, STATE_PORT, UdpTransport
+from menlo.asimov.transport.udp import (
+    COMMAND_PORT,
+    STATE_PORT,
+    VERSION_PORT,
+    VERSION_TIMEOUT_S,
+    UdpTransport,
+)
 
 log = logging.getLogger("menlo.asimov.transport.livekit")
 
@@ -79,6 +89,8 @@ log = logging.getLogger("menlo.asimov.transport.livekit")
 #: transport carries. A capability is claimed from a track that ARRIVED, never from one a
 #: room might publish later, so this is the budget for the robot to bring its camera up.
 MEDIA_TIMEOUT_S = 3.0
+SYSTEM_INFO_RPC_METHOD = "edge.getSystemInfo"
+SYSTEM_INFO_TIMEOUT_S = 5.0
 
 
 class _MediaPlane:
@@ -181,6 +193,8 @@ class LiveKitTransport(_MediaPlane):
         token: TokenProvider,
         media_timeout: float = MEDIA_TIMEOUT_S,
         connect_timeout: float = 10.0,
+        system_info_timeout: float = SYSTEM_INFO_TIMEOUT_S,
+        allow_unsupported_target: bool = False,
         client: LiveKitClient | None = None,
     ) -> None:
         """``client`` is the seam the unit suite fakes; leave it ``None`` to talk to a real
@@ -189,6 +203,8 @@ class LiveKitTransport(_MediaPlane):
         #: The room this transport joins: the robot's, named by its serial.
         self.room, self._url = room, url
         self._lk_open = False
+        self._system_info_timeout = system_info_timeout
+        self._allow_unsupported_target = allow_unsupported_target
         self._seq = 0
         self._lock = threading.Lock()
         self._on_state: list[StateCallback] = []
@@ -208,9 +224,37 @@ class LiveKitTransport(_MediaPlane):
             raise ConnectError("this LiveKitTransport is already open")
         _pb()  # fail here, with the dependency install hint, not on the loop thread
         self._lk.connect()
-        self._lk_open = True
-        self.endpoint = self._describe()
-        self._await_media()
+        try:
+            if self._lk.can_publish_data is not False:
+                edge_identity = self._lk.wait_for_data_track_publisher(
+                    STATE_TRACK, self._system_info_timeout
+                )
+                document = self._lk.perform_rpc(
+                    edge_identity,
+                    SYSTEM_INFO_RPC_METHOD,
+                    "{}",
+                    self._system_info_timeout,
+                ).encode("utf-8")
+                check_target_document(
+                    document,
+                    f"LiveKit RPC {SYSTEM_INFO_RPC_METHOD!r} on {edge_identity!r}",
+                    allow_unsupported_target=self._allow_unsupported_target,
+                )
+            # Observe credentials are deliberately unable to publish data, so LiveKit RPC
+            # cannot leave the client. They open as read-only sessions and retain the
+            # existing first-RobotState protocol check; only control sessions need target
+            # compatibility before the SDK may send commands.
+            self._lk_open = True
+            self.endpoint = self._describe()
+            self._await_media()
+        except Exception:
+            # A joined room is not an admitted control session. If target facts are
+            # absent or rejected, leave before Robot can start its command keepalive.
+            self._lk_open = False
+            self._lk.close()
+            self.endpoint = self._describe()
+            self._refresh_capabilities()
+            raise
 
     def _describe(self) -> str:
         """The address, plus who we are in the room once we know: two SDK sessions in one
@@ -301,6 +345,9 @@ class HybridTransport(_MediaPlane):
         command_port: int = COMMAND_PORT,
         state_bind: tuple[str, int] = ("0.0.0.0", STATE_PORT),
         state_source: str | None = None,
+        version_port: int = VERSION_PORT,
+        version_timeout: float = VERSION_TIMEOUT_S,
+        allow_unsupported_target: bool = False,
         media_timeout: float = MEDIA_TIMEOUT_S,
         connect_timeout: float = 10.0,
         client: LiveKitClient | None = None,
@@ -308,7 +355,13 @@ class HybridTransport(_MediaPlane):
         """``client`` is the seam the unit suite fakes. No ``api_key``/``api_secret``, and
         no ``identity``: the token claims it; :attr:`identity` reads it back."""
         self._udp = UdpTransport(
-            host, command_port=command_port, state_bind=state_bind, state_source=state_source
+            host,
+            command_port=command_port,
+            state_bind=state_bind,
+            state_source=state_source,
+            version_port=version_port,
+            version_timeout=version_timeout,
+            allow_unsupported_target=allow_unsupported_target,
         )
         self.room, self._url = room, livekit_url
         self._base_capabilities = self._udp.capabilities

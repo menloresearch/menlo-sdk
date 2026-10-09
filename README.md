@@ -118,3 +118,49 @@ To report a vulnerability, see [SECURITY.md](https://github.com/menloresearch/me
 ## License
 
 Apache License 2.0. See [LICENSE](https://github.com/menloresearch/menlo-sdk/blob/main/LICENSE).
+
+## Robot compatibility before connection
+
+The UDP transport used by `Robot.connect("udp")` and `Robot.connect("hybrid")` reads
+`http://<UdpConfig.host>:3000/api/version` before opening its command/state socket.
+Explicit transport-bound `Robot(UdpTransport(...)).open()` follows the same path.
+`UdpConfig(version_port=..., version_timeout=...)` changes the local
+Edge HTTP port and socket timeout (default 5 seconds). Headers and body share
+one deadline; system DNS resolution is synchronous and cannot be interrupted by
+that deadline, and multiple resolved connection addresses can extend connection
+time. Use a numeric LAN address when resolver delays must be avoided. The policy
+lives in `menlo.asimov._version.SUPPORTED_TARGETS`, not a range inferred from the
+SDK package version; consult that table for supported models and release lines.
+
+The endpoint must return HTTP 200 and a JSON object containing `robot_model` and
+`robot_os_version`. Missing endpoints, network failures, redirects, invalid facts,
+and responses over 4096 bytes raise `ConnectError`; no environment HTTP proxy is
+used. After failure the closed Robot can retry. Older robots need the Edge version
+endpoint before using this SDK's LAN connection. Release and deploy the first
+endpoint-bearing Robot OS as a final `0.2.x` release before releasing the SDK
+that mandates preflight; the SDK supports the `asimov_1` `(0, 2)` line.
+
+Valid release, development and prerelease versions on supported major/minor lines
+are allowed, including `0.2.0.dev.202610061234.abcdef1`,
+`0.2.0.dev.202610061234.abcdef1.dirty.202610061235`, `0.2.0rc1`, and
+`0.2.0-dev.1`. `allow_unsupported_target=True` is a deliberate development
+override for valid unsupported models or major/minor lines. It does not waive
+HTTP or payload validation. `require_state=False` still runs this preflight.
+The first-state integer protocol check is independent: `allow_version_skew=True`
+waives only that wire mismatch, not target support; the target override does not
+waive a wire mismatch.
+
+The CLI uses the supported-target policy without a target override. Supported
+development builds connect normally; unsupported CLI targets and an absent version
+endpoint fail closed. There is no endpoint bypass.
+
+Pure LiveKit control connections do not query a LAN address. They join the room, identify
+Edge as the participant that publishes the `state` data track, and call Edge's native
+`edge.getSystemInfo` RPC before commands can be sent. LiveKit supplies
+destination routing, request correlation, response deadlines, and structured RPC
+errors; the response uses the same JSON facts and SDK policy as the HTTP adapter.
+Explicit transport-bound `Robot(LiveKitTransport(...)).open()` runs that RPC too.
+An `observe` credential cannot publish the data needed for RPC or commands, so it skips
+this control-only target check and retains the first-state protocol check while watching.
+The first-state protocol check remains independent. This client-side preflight is not
+authenticated Edge admission enforcement.

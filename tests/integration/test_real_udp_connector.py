@@ -34,7 +34,7 @@ def _free_port() -> int:
     return p
 
 
-def test_the_edge_admits_our_velocity_as_a_udp_source():
+def test_the_edge_admits_our_velocity_as_a_udp_source(version_endpoint):
     from edge.connectors.udp_connector import UdpConnector
     from edge.control_source import ControlSource
     from edge.topic_registry import TopicRegistry
@@ -53,7 +53,12 @@ def test_the_edge_admits_our_velocity_as_a_udp_source():
 
     async def main():
         await conn.start()
-        tx = UdpTransport("127.0.0.1", command_port=cmd_port, state_bind=("127.0.0.1", state_port))
+        tx = UdpTransport(
+            "127.0.0.1",
+            command_port=cmd_port,
+            state_bind=("127.0.0.1", state_port),
+            version_port=version_endpoint.port,
+        )
         tx.open()
         seq = tx.send(Velocity(vx=0.42))
         got = None
@@ -75,7 +80,7 @@ def test_the_edge_admits_our_velocity_as_a_udp_source():
     assert conn.connected is False  # stopped
 
 
-def test_the_edge_forwards_robot_state_to_our_bound_port():
+def test_the_edge_forwards_robot_state_to_our_bound_port(version_endpoint):
     from menlo.asimov._proto import load
 
     st_pb = load().state
@@ -97,7 +102,12 @@ def test_the_edge_forwards_robot_state_to_our_bound_port():
 
     async def main():
         await conn.start()
-        tx = UdpTransport("127.0.0.1", command_port=cmd_port, state_bind=("127.0.0.1", state_port))
+        tx = UdpTransport(
+            "127.0.0.1",
+            command_port=cmd_port,
+            state_bind=("127.0.0.1", state_port),
+            version_port=version_endpoint.port,
+        )
         tx.subscribe_state(seen.append)
         tx.open()
         msg = st_pb.RobotState(current_mode=1, protocol_version=1)

@@ -13,6 +13,7 @@ fakes this seam in forty lines and never needs livekit installed.
 
 The room convention Asimov Edge speaks:
 
+* native RPC ``edge.getSystemInfo`` -> installed target facts before a control grant starts
 * data topic ``commands``  -> one bare serialized ``asimov.io.RobotCommand`` per packet
 * data track ``commands``  -> the SDK's own track: one ``asimov.io.RobotCommand`` per frame,
   for streamed setpoints, when the robot's participant attribute says it reads it
@@ -34,6 +35,7 @@ import logging
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any, Protocol
 
 from menlo.asimov._errors import ConnectError, LinkLostError
@@ -69,23 +71,43 @@ def _rtc() -> Any:
     return rtc
 
 
-def identity_from_token(token: str) -> str | None:
-    """The identity a LiveKit access token claims, or ``None`` when it claims none.
+def _claims_from_token(token: str) -> dict[str, Any] | None:
+    """Decode the claims this client was handed for reporting and local flow selection.
 
-    The identity of a participant is a claim INSIDE the JWT (``sub``); a client cannot
-    choose it, and a client-side "identity" argument would be silently ignored by the
-    server. So the SDK does not take one: it reads back what the token says, and reports
-    that. Decoded, never verified: this is the SDK telling the truth about the token it
-    was handed, not a security check. The server is the authority.
+    This deliberately does not verify the JWT. LiveKit remains the authority that accepts
+    the token and enforces its grants; the SDK uses the decoded claims only to describe the
+    joined identity and avoid attempting an RPC a read-only token cannot send.
     """
     try:
         payload = token.split(".")[1]
         raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
         claims = json.loads(raw)
-        sub = claims.get("sub") if isinstance(claims, dict) else None
     except (IndexError, ValueError, binascii.Error, UnicodeDecodeError):
         return None
+    return claims if isinstance(claims, dict) else None
+
+
+def identity_from_token(token: str) -> str | None:
+    """The identity a LiveKit access token claims, or ``None`` when it claims none.
+
+    Decoded, never verified: this is the SDK reporting the token it was handed, not making
+    an authorization decision. The LiveKit server remains the authority.
+    """
+    claims = _claims_from_token(token)
+    sub = claims.get("sub") if claims is not None else None
     return str(sub) if isinstance(sub, str) and sub else None
+
+
+def can_publish_data_from_token(token: str) -> bool | None:
+    """Return the token's explicit ``video.canPublishData`` grant when present.
+
+    ``None`` means the token did not expose a usable claim. Callers must then let the
+    server decide instead of treating an unverified or unfamiliar token as read-only.
+    """
+    claims = _claims_from_token(token)
+    video = claims.get("video") if claims is not None else None
+    value = video.get("canPublishData") if isinstance(video, dict) else None
+    return value if isinstance(value, bool) else None
 
 
 class LiveKitClient(Protocol):
@@ -106,6 +128,10 @@ class LiveKitClient(Protocol):
     def identity(self) -> str | None:
         """Who this client joined the room AS, read out of the token it presented.
         ``None`` before a join, and when the token claims no identity."""
+
+    @property
+    def can_publish_data(self) -> bool | None:
+        """The token's explicit data-publication grant, or ``None`` when unavailable."""
 
     def connect(self) -> None:
         """Join the room. ``ConnectError`` on failure."""
@@ -131,6 +157,18 @@ class LiveKitClient(Protocol):
     def publisher_attributes(self, track: str) -> dict[str, str]:
         """The participant attributes of whoever publishes the remote data track called
         ``track``; empty while nobody does."""
+
+    def wait_for_data_track_publisher(self, name: str, timeout: float) -> str:
+        """Wait for ``name`` and return the identity that published it."""
+
+    def perform_rpc(
+        self,
+        destination_identity: str,
+        method: str,
+        payload: str,
+        timeout: float,
+    ) -> str:
+        """Call one native LiveKit RPC method and return its string payload."""
 
     def publish_audio(self, chunk: AudioChunk) -> None:
         """One block of PCM onto the SDK's own audio track, publishing the track on first
@@ -169,6 +207,7 @@ class _LiveKitClient:
         self._room_name = room
         self._token = token
         self._identity: str | None = None
+        self._can_publish_data: bool | None = None
         self._connect_timeout = connect_timeout
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -191,6 +230,7 @@ class _LiveKitClient:
         self._local_tracks: dict[str, Any] = {}
         self._local_pending: set[str] = set()
         self._local_refused: set[str] = set()
+        self._data_track_publishers: dict[str, tuple[str, str]] = {}  # name -> (sid, identity)
         self._video_cbs: list[FrameCallback] = []
         self._audio_cbs: list[AudioCallback] = []
         self._track_cbs: list[TracksCallback] = []
@@ -209,6 +249,10 @@ class _LiveKitClient:
     def identity(self) -> str | None:
         """Who this client joined AS, from the token's ``sub``. ``None`` before a join."""
         return self._identity
+
+    @property
+    def can_publish_data(self) -> bool | None:
+        return self._can_publish_data
 
     @property
     def endpoint(self) -> str:
@@ -247,6 +291,7 @@ class _LiveKitClient:
         rtc = _rtc()  # fail here, with the install hint, not on the loop thread
         token = self._resolve_token()
         self._identity = identity_from_token(token)
+        self._can_publish_data = can_publish_data_from_token(token)
         self._start_loop()
         try:
             self._await(self._join(rtc, token), self._connect_timeout)
@@ -271,6 +316,8 @@ class _LiveKitClient:
             self._loop, self._thread = None, None
             self._send_error = None
             self._identity = None
+            self._can_publish_data = None
+            self._forget_tracks()
             self._set_tracks(set())  # the same "gone" the other path reports
 
             async def leave_then_stop() -> None:
@@ -289,6 +336,8 @@ class _LiveKitClient:
         self._source_format = None
         self._send_error = None
         self._identity = None
+        self._can_publish_data = None
+        self._forget_tracks()
         self._set_tracks(set())
 
     def wait_for_tracks(self, timeout: float) -> frozenset[str]:
@@ -300,6 +349,17 @@ class _LiveKitClient:
         with self._cv:
             self._cv.wait_for(lambda: "camera" in self._tracks, timeout)
             return frozenset(self._tracks)
+
+    def wait_for_data_track_publisher(self, name: str, timeout: float) -> str:
+        """Identify Edge from the data track it already owns, without guessing a serial."""
+        with self._cv:
+            found = self._cv.wait_for(lambda: name in self._data_track_publishers, timeout)
+            if not found:
+                raise ConnectError(
+                    f"the LiveKit room {self.endpoint} did not publish its {name!r} data track; "
+                    "Edge must publish that track before the SDK can address its system-info RPC"
+                )
+            return self._data_track_publishers[name][1]
 
     # ── out ──────────────────────────────────────────────────────────────────
     def publish_data(self, payload: bytes, *, topic: str) -> None:
@@ -363,6 +423,47 @@ class _LiveKitClient:
                 return {}
             attributes = self._attributes[identity] = dict(participant.attributes)
         return dict(attributes)
+
+    def perform_rpc(
+        self,
+        destination_identity: str,
+        method: str,
+        payload: str,
+        timeout: float,
+    ) -> str:
+        """Let LiveKit own request IDs, destination routing, deadlines and RPC errors."""
+        room = self._room
+        if room is None or not self._connected:
+            raise LinkLostError(f"the LiveKit room {self.endpoint} is not joined")
+        rtc = _rtc()
+        try:
+            return str(
+                self._await(
+                    room.local_participant.perform_rpc(
+                        destination_identity=destination_identity,
+                        method=method,
+                        payload=payload,
+                        response_timeout=timeout,
+                        max_round_trip_latency=timeout,
+                    ),
+                    timeout + 1.0,
+                )
+            )
+        except rtc.RpcError as exc:
+            raise ConnectError(
+                f"Edge rejected LiveKit RPC {method!r} in {self.endpoint} "
+                f"(code {exc.code}): {exc.message}"
+            ) from exc
+        except FutureTimeoutError as exc:
+            raise ConnectError(
+                f"LiveKit RPC {method!r} to {destination_identity!r} in {self.endpoint} "
+                f"did not complete within {timeout:g}s"
+            ) from exc
+        except (OSError, RuntimeError) as exc:
+            raise ConnectError(
+                f"could not call LiveKit RPC {method!r} on {destination_identity!r} "
+                f"in {self.endpoint}: {exc}"
+            ) from exc
 
     def _note_publish(self, future: Future[Any]) -> None:
         with contextlib.suppress(Exception):
@@ -487,11 +588,17 @@ class _LiveKitClient:
         self._local_tracks.clear()
         self._local_pending.clear()
         self._local_refused.clear()
+        self._clear_data_track_publishers()
 
     def _on_attributes_changed(self, _changed: Any, participant: Any) -> None:
         identity = getattr(participant, "identity", "")
         if identity in self._attributes:
             self._attributes[identity] = dict(participant.attributes)
+
+    def _clear_data_track_publishers(self) -> None:
+        with self._cv:
+            self._data_track_publishers.clear()
+            self._cv.notify_all()
 
     def _on_track_subscribed(self, track: Any, *_: Any) -> None:
         rtc = _rtc()
@@ -515,11 +622,15 @@ class _LiveKitClient:
             return  # not a track anyone here asked for
         sid = getattr(track.info, "sid", name)
         self._on_data_track_unpublished(sid)  # a re-publish replaces its reader
-        identity = getattr(track, "publisher_identity", "") or ""
+        identity = str(getattr(track, "publisher_identity", "") or "")
         self._remote_tracks[sid] = (name, identity)
         # A re-published track is a publisher that may have restarted as something else:
         # its attributes are read again, not remembered.
         self._attributes.pop(identity, None)
+        if identity:
+            with self._cv:
+                self._data_track_publishers[name] = (sid, identity)
+                self._cv.notify_all()
         loop = self._loop
         if loop is None:  # pragma: no cover - closed under us
             return
@@ -533,6 +644,11 @@ class _LiveKitClient:
         reader = self._data_track_readers.pop(sid, None)
         if reader is not None:
             reader.cancel()
+        with self._cv:
+            for name, (publisher_sid, _identity) in tuple(self._data_track_publishers.items()):
+                if publisher_sid == sid:
+                    del self._data_track_publishers[name]
+            self._cv.notify_all()
 
     async def _pump_data_track(self, track: Any, name: str) -> None:
         stream = track.subscribe()

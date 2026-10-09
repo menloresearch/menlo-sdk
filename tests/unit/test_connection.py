@@ -68,6 +68,8 @@ def test_each_lane_config_has_only_its_own_fields():
         "command_port",
         "state_bind",
         "state_source",
+        "version_port",
+        "version_timeout",
     }
     assert set(LiveKitConfig.__dataclass_fields__) == {"url", "room", "token"}
     assert set(ManagerConfig.__dataclass_fields__) == {"url", "credential", "label", "timeout"}
@@ -227,6 +229,7 @@ class _FakeLanes(ConnectionConfig):
                 "127.0.0.1",
                 command_port=edge.command_port,
                 state_bind=("127.0.0.1", edge.state_port),
+                version_port=edge.version.port,
             ),
         )
         object.__setattr__(
@@ -235,13 +238,28 @@ class _FakeLanes(ConnectionConfig):
         object.__setattr__(self, "_edge", edge)
         object.__setattr__(self, "clients", [])
 
-    def transport_for(self, mode, *, media_timeout=3.0, connect_timeout=10.0):
+    def transport_for(
+        self,
+        mode,
+        *,
+        media_timeout=3.0,
+        connect_timeout=10.0,
+        system_info_timeout=5.0,
+        allow_unsupported_target=False,
+    ):
         if mode == "udp":
             return super().transport_for("udp")
         client = FakeLiveKitClient(self._edge, carry_state=(mode == "livekit"))
         self.clients.append(client)
         if mode == "livekit":
-            return LiveKitTransport("ws://fake", "asimov-room", token="t", client=client)
+            return LiveKitTransport(
+                "ws://fake",
+                "asimov-room",
+                token="t",
+                system_info_timeout=system_info_timeout,
+                allow_unsupported_target=allow_unsupported_target,
+                client=client,
+            )
         return HybridTransport(
             "127.0.0.1",
             livekit_url="ws://fake",
@@ -249,6 +267,7 @@ class _FakeLanes(ConnectionConfig):
             token="t",
             command_port=self._edge.command_port,
             state_bind=("127.0.0.1", self._edge.state_port),
+            version_port=self._edge.version.port,
             client=client,
         )
 

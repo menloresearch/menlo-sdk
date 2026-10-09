@@ -9,11 +9,12 @@ import socket
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from menlo.asimov import Applied, LinkLostError, Refused, Robot
+from menlo.asimov import Applied, ConnectError, LinkLostError, Refused, Robot
 from menlo.asimov.transport._livekit_client import identity_from_token
 from menlo.asimov.transport.livekit import HybridTransport, LiveKitTransport
 from menlo.asimov.transport.udp import UdpTransport
@@ -75,6 +76,7 @@ class FakeEdge:
 
         pb = load()  # same bindings the SDK uses, whichever source it resolved to
         self._cmd_pb, self._common_pb, self._st_pb = pb.command, pb.common, pb.state
+        self._version: FakeVersionEndpoint | None = None
         self.command_port = _free_port()
         self.state_port = _free_port()
         self.received: list = []  # decoded RobotCommand protos, in arrival order
@@ -240,7 +242,16 @@ class FakeEdge:
             time.sleep(0.01)
         return False
 
+    @property
+    def version(self) -> FakeVersionEndpoint:
+        """Start real HTTP only for tests that explicitly need version preflight."""
+        if self._version is None:
+            self._version = FakeVersionEndpoint()
+        return self._version
+
     def close(self) -> None:
+        if self._version is not None:
+            self._version.close()
         self._stop.set()
         self._rx.join(timeout=1.0)
         self._tx.join(timeout=1.0)
@@ -299,7 +310,10 @@ class SeamUdpTransport(UdpTransport):
 @pytest.fixture
 def robot(edge):
     tx = SeamUdpTransport(
-        "127.0.0.1", command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port)
+        "127.0.0.1",
+        command_port=edge.command_port,
+        state_bind=("127.0.0.1", edge.state_port),
+        version_port=edge.version.port,
     )
     r = Robot(tx)
     r.open(timeout=3.0)
@@ -333,6 +347,7 @@ class FakeLiveKitClient:
         token: str = "fake-token",
         command_track: bool = False,
         refuse_track: bool = False,
+        can_publish_data: bool | None = True,
     ) -> None:
         self._edge = edge
         self.command_track = command_track
@@ -344,9 +359,13 @@ class FakeLiveKitClient:
         self._token = token
         self.tracks: frozenset[str] = frozenset()
         self.identity: str | None = None  # read out of the token at connect, as the real one does
+        self.can_publish_data = can_publish_data
         self.connected = False
         self.played: list = []  # AudioChunks handed to the speaker track
         self.published: list[tuple[str, bytes]] = []  # (topic, payload)
+        self.rpc_calls: list[tuple[str, str, str, float]] = []
+        self.system_info_response = '{"robot_os_version":"0.2.0","robot_model":"asimov_1"}'
+        self.state_publisher_identity = "MENLO-TEST"
         self._data_track_cbs: dict[str, list] = {}
         self._video_cbs: list = []
         self._audio_cbs: list = []
@@ -412,6 +431,23 @@ class FakeLiveKitClient:
         if not (self.connected and self._carry_state and track == "state"):
             return {}
         return {"asimov.commands_track": "1"} if self.command_track else {}
+
+    def wait_for_data_track_publisher(self, name: str, timeout: float) -> str:
+        if name != "state" or not self.state_publisher_identity:
+            raise ConnectError(f"the fake room did not publish {name!r} within {timeout:g}s")
+        return self.state_publisher_identity
+
+    def perform_rpc(
+        self,
+        destination_identity: str,
+        method: str,
+        payload: str,
+        timeout: float,
+    ) -> str:
+        if not self.connected:
+            raise LinkLostError("the fake room is not joined")
+        self.rpc_calls.append((destination_identity, method, payload, timeout))
+        return self.system_info_response
 
     def publish_audio(self, chunk) -> None:
         if not self.connected:
@@ -487,6 +523,7 @@ def make_hybrid_robot(edge: FakeEdge, **kw) -> tuple[FakeLiveKitClient, Robot]:
         token="test-token",
         command_port=edge.command_port,
         state_bind=("127.0.0.1", edge.state_port),
+        version_port=edge.version.port,
         client=client,
     )
     return client, Robot(tx)
@@ -514,7 +551,10 @@ def any_robot(request, edge):
     is not done: every promise below is asserted three times."""
     if request.param == "udp":
         tx = SeamUdpTransport(
-            "127.0.0.1", command_port=edge.command_port, state_bind=("127.0.0.1", edge.state_port)
+            "127.0.0.1",
+            command_port=edge.command_port,
+            state_bind=("127.0.0.1", edge.state_port),
+            version_port=edge.version.port,
         )
         r: Robot = Robot(tx)
     else:
@@ -626,3 +666,86 @@ def live_host() -> str:
     if not host:
         pytest.skip("MENLO_SDK_LIVE_HOST not set: no live robot to drive")
     return host
+
+
+class FakeVersionEndpoint:
+    """Loopback Edge facts endpoint; mutable replies exercise real HTTP validation."""
+
+    def __init__(self) -> None:
+        self.body = json.dumps({"robot_model": "asimov_1", "robot_os_version": "0.2.0"}).encode()
+        self.status = 200
+        self.delay = 0.0
+        self.requests: list[str] = []
+        self._idle = threading.Event()
+        self._idle.set()
+        endpoint = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                # A timed-out request must finish with its admitted reply, not a retry's facts.
+                endpoint._idle.clear()
+                body, status, delay = endpoint.body, endpoint.status, endpoint.delay
+                endpoint.requests.append(self.path)
+                try:
+                    time.sleep(delay)
+                    with suppress(BrokenPipeError, ConnectionResetError):
+                        self.send_response(status)
+                        self.send_header("Content-Length", str(len(body)))
+                        self.send_header("Location", "http://wrong-robot.invalid/api/version")
+                        self.end_headers()
+                        self.wfile.write(body)
+                finally:
+                    endpoint._idle.set()
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_port
+        self.thread = threading.Thread(
+            target=lambda: self.server.serve_forever(poll_interval=0.01), daemon=True
+        )
+        self.thread.start()
+
+    def wait_idle(self, timeout: float = 3.0) -> bool:
+        """Wait for an admitted response to finish before reconfiguring a retry."""
+        return self._idle.wait(timeout)
+
+    def close(self) -> None:
+        if self.thread.is_alive():
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join(timeout=2.0)
+
+
+@pytest.fixture
+def version_endpoint():
+    """A supported Robot OS facts endpoint for transport integration tests."""
+    endpoint = FakeVersionEndpoint()
+    yield endpoint
+    endpoint.close()
+
+
+@pytest.fixture(autouse=True)
+def version_document_fetch(monkeypatch, request):
+    """Legacy tests receive supported facts at the version-document network seam.
+
+    Production parsing and compatibility policy remain active. Dedicated version tests
+    restore the real fetcher and exercise its loopback HTTP boundary.
+    """
+    from menlo.asimov import _version
+
+    real_fetch = _version._fetch_version_document
+    if any(request.node.get_closest_marker(m) for m in ("integration", "live", "livekit")):
+        return real_fetch
+
+    def supported_target(
+        _host: str,
+        _port: int,
+        _timeout: float,
+        _endpoint: str,
+    ) -> bytes:
+        return b'{"robot_model":"asimov_1","robot_os_version":"0.2.0"}'
+
+    monkeypatch.setattr(_version, "_fetch_version_document", supported_target)
+    return real_fetch
